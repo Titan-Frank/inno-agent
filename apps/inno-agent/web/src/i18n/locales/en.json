@@ -645,6 +645,11 @@
 		"newFileHere": "New File Here",
 		"newFolderHere": "New Folder Here",
 		"confirmDelete": "Delete?",
+		"multiSelect": "Select multiple files",
+		"exitMultiSelect": "Exit multi-select",
+		"selectedCount": "Selected {{count}} files",
+		"fileSelectionOnly": "Select files (folders cannot be selected)",
+		"deleteSelected": "Delete selected files",
 		"uploadSkill": "Upload skill package (.zip/.md) to .skills",
 		"dropToUpload": "Drop files to upload"
 	},
