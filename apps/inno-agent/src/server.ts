@@ -4355,6 +4355,12 @@ const server = createServer(async (req, res) => {
 				return;
 			}
 			streamRegistry.requestCancel(state);
+			// Resolve a parked ask_user_question before aborting: session.abort()
+			// alone cannot wake the agent loop while it awaits the question
+			// promise, so the turn (and its queue slot) would stay stuck until
+			// the 30-minute question timeout. unbindTurn is idempotent — the
+			// onFinish unbind becomes a no-op once the binding is cleared here.
+			questionBridge.unbindTurn({ sessionId: state.sessionId, turnId: state.turnId, reason: "cancelled" });
 			if (state.status === "running") await abortPromptForTurnToken(state.turnId);
 			json(res, 202, { status: state.status, cancelRequested: true });
 			return;
