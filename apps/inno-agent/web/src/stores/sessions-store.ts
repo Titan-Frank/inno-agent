@@ -16,6 +16,7 @@ import {
 import { getSessionWorkspace } from "../api/workspaces.js";
 import { getChatStatus } from "../api/chat.js";
 import { chatStore } from "./chat-store.js";
+import type { PendingQuestion } from "../types/chat.js";
 import { workspaceStore } from "./workspace-store.js";
 import { workspacesStore } from "./workspaces-store.js";
 import { terminalStore } from "./terminal-store.js";
@@ -39,6 +40,10 @@ export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 	preselectedWorkspaceId: string | null = null;
 	private _openRequestId = 0;
 	private _messageCache = new Map<string, Awaited<ReturnType<typeof getSession>>["messages"]>();
+	/** Caches an unanswered question card across session switches so it can be
+	 *  restored instantly when switching back (the backend replay/persistence
+	 *  reconciles it afterwards). Keyed by session id. */
+	private _pendingQuestionCache = new Map<string, PendingQuestion>();
 	private _backgroundRunningSessions = new Set<string>();
 
 	/**
@@ -137,6 +142,14 @@ export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 			} else {
 				this._messageCache.delete(prevSessionId);
 			}
+			// Preserve an unanswered question card so it can be restored on
+			// return. This applies to streaming sessions (live card) and to
+			// restored-but-unanswered cards alike.
+			if (chatStore.pendingQuestion) {
+				this._pendingQuestionCache.set(prevSessionId, chatStore.pendingQuestion);
+			} else {
+				this._pendingQuestionCache.delete(prevSessionId);
+			}
 		}
 
 		this.currentSessionId = id;
@@ -186,7 +199,25 @@ export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 
 			this._backgroundRunningSessions.delete(id);
 			if (chatStatus.stream && ["queued", "running"].includes(chatStatus.stream.status)) {
+				// The turn is live: its question event (if any) replays through the
+				// resumed stream, so no manual card restore is needed here.
 				void chatStore.resumeStream(id, chatStatus.stream);
+			} else {
+				// No live turn (e.g. after a full restart): restore the card from
+				// the local switch cache first, falling back to the server-persisted
+				// record.
+				const cached = this._pendingQuestionCache.get(id);
+				if (cached) {
+					chatStore.restorePendingQuestion(cached);
+				} else if (session.pendingQuestion) {
+					chatStore.restorePendingQuestion({
+						questionId: session.pendingQuestion.questionId,
+						params: session.pendingQuestion.params as PendingQuestion["params"],
+						sessionId: session.pendingQuestion.sessionId,
+						turnId: session.pendingQuestion.turnId,
+						restored: true,
+					});
+				}
 			}
 		} catch (error) {
 			if (requestId !== this._openRequestId) return;
@@ -337,6 +368,7 @@ export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 	async deleteSession(id: string): Promise<void> {
 		const result = await deleteSession(id);
 		this._messageCache.delete(id);
+		this._pendingQuestionCache.delete(id);
 		this._backgroundRunningSessions.delete(id);
 		this.sessions = this.sessions.filter((session) => session.id !== id);
 		if (this.currentSessionId === id) {

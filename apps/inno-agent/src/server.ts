@@ -53,7 +53,7 @@ import type { LearnerProfile, LearningGoal, KnowledgeState, Misconception, Learn
 import { randomUUID } from "node:crypto";
 import { logger } from "./logger.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
-import { questionBridge, type QuestionBridgeResult } from "./agent/question-bridge.js";
+import { questionBridge, type PersistedQuestion, type QuestionBridgeResult } from "./agent/question-bridge.js";
 import { streamRegistry, type SessionStreamState, type StreamPersistence } from "./chat/stream-registry.js";
 import { DEFAULT_WORKSPACE_ID, TEMP_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
 import { listPresets, listRemotePresets, ensurePresetCached, instantiatePreset } from "./presets/preset-store.js";
@@ -2089,6 +2089,29 @@ function sessionArchiveMetadataPath(): string {
 	return join(dataDir, "sessions", "archives.json");
 }
 
+// --- Pending question persistence (survives process restart) ---
+function sessionQuestionMetadataPath(): string {
+	return join(dataDir, "sessions", "questions.json");
+}
+
+type SessionQuestionMetadata = Record<string, PersistedQuestion>;
+
+/** In-memory cache of questions.json — read once, updated on every write.
+ *  Avoids a synchronous readFileSync on every session-detail request. */
+let _questionMetadataCache: SessionQuestionMetadata | null = null;
+
+function readSessionQuestionMetadata(): SessionQuestionMetadata {
+	if (_questionMetadataCache === null) {
+		_questionMetadataCache = readJson<SessionQuestionMetadata>(sessionQuestionMetadataPath(), {});
+	}
+	return _questionMetadataCache;
+}
+
+function writeSessionQuestionMetadata(meta: SessionQuestionMetadata): void {
+	_questionMetadataCache = meta;
+	writeJson(sessionQuestionMetadataPath(), meta);
+}
+
 function readSessionChannelMetadata(): SessionChannelMetadata {
 	return readJson<SessionChannelMetadata>(sessionChannelMetadataPath(), {});
 }
@@ -2906,6 +2929,10 @@ const server = createServer(async (req, res) => {
 				messages: parsed.messages,
 				messageCount: parsed.messages.length,
 				sessionRevision: sessionRevision(sessionPath),
+				// Attach any persisted pending question so the frontend can restore
+				// the card after a full process restart (the in-memory turn and its
+				// event replay are gone by then).
+				pendingQuestion: readSessionQuestionMetadata()[basename(sessionPath)] ?? undefined,
 			});
 			return;
 		}
@@ -3064,6 +3091,11 @@ const server = createServer(async (req, res) => {
 				if (archiveMeta[sessionId]) {
 					delete archiveMeta[sessionId];
 					writeJson(sessionArchiveMetadataPath(), archiveMeta);
+				}
+				const questionMeta = readSessionQuestionMetadata();
+				if (questionMeta[sessionId]) {
+					delete questionMeta[sessionId];
+					writeSessionQuestionMetadata(questionMeta);
 				}
 				workspaceRegistry.unbindSession(sessionId);
 				if (shouldDropTempWorkspace) {
@@ -4358,6 +4390,20 @@ const server = createServer(async (req, res) => {
 				return;
 			}
 			const status = questionBridge.respond({ sessionId, turnId, questionId, result });
+			if (status === "not_found") {
+				// The live turn is gone (process restarted, or the turn ended while
+				// the card was parked). If a persisted card matches, consume it and
+				// tell the client to resubmit the answer as a fresh chat turn — the
+				// agent then picks the answer up from the session history.
+				const questionMeta = readSessionQuestionMetadata();
+				const persistedEntry = Object.entries(questionMeta).find(([, q]) => q.questionId === questionId);
+				if (persistedEntry) {
+					delete questionMeta[persistedEntry[0]];
+					writeSessionQuestionMetadata(questionMeta);
+					json(res, 200, { accepted: true, expired: true, sessionId: persistedEntry[0] });
+					return;
+				}
+			}
 			json(res, status === "accepted" ? 200 : status === "scope_mismatch" || status === "already_resolved" ? 409 : 404, { accepted: status === "accepted" });
 			return;
 		}
@@ -4826,6 +4872,23 @@ function bindTerminalWs(ws: WebSocket, terminalId: string): void {
 // Start listening immediately — /health and static files work right away.
 // All other endpoints call ensureBootstrapped() lazily on first request.
 // ---------------------------------------------------------------------------
+
+// Inject persistence callbacks into questionBridge so pending question cards
+// survive a full process restart.
+questionBridge.setPersistence({
+	save: (sessionId, question) => {
+		const meta = readSessionQuestionMetadata();
+		meta[sessionId] = question;
+		writeSessionQuestionMetadata(meta);
+	},
+	remove: (sessionId) => {
+		const meta = readSessionQuestionMetadata();
+		if (sessionId in meta) {
+			delete meta[sessionId];
+			writeSessionQuestionMetadata(meta);
+		}
+	},
+});
 
 server.listen(port, () => {
 	console.log(`[inno-server] listening on http://localhost:${port}`);
