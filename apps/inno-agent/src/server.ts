@@ -600,6 +600,9 @@ function buildSafeSettings() {
 				baseUrl: config.ocrApi.baseUrl,
 			}
 			: undefined,
+		tavily: config.tavily
+			? { apiKey: maskSecret(config.tavily.apiKey) }
+			: undefined,
 		contentHub: config.contentHub
 			? { ...config.contentHub, token: maskSecret(config.contentHub.token) }
 			: undefined,
@@ -4230,6 +4233,27 @@ const server = createServer(async (req, res) => {
 					model: model || undefined,
 					baseUrl: baseUrl || undefined,
 				};
+			}
+			config = saveConfig(paths.configPath, config);
+			syncConfig(config);
+			json(res, 200, buildSafeSettings());
+			return;
+		}
+
+		// --- Tavily settings (web_search tool API key) ---
+		if (method === "PUT" && url === "/api/settings/tavily") {
+			const body = (await readBody(req)) as Record<string, unknown>;
+			if (typeof body.apiKey !== "string") {
+				json(res, 400, { error: "Missing apiKey (string)" });
+				return;
+			}
+			const incoming = body.apiKey.trim();
+			// A masked value (e.g. "****abcd") means "keep the existing key".
+			const apiKey = incoming.startsWith("****") ? (config.tavily?.apiKey ?? "") : incoming;
+			if (!apiKey) {
+				config.tavily = undefined;
+			} else {
+				config.tavily = { apiKey };
 			}
 			config = saveConfig(paths.configPath, config);
 			syncConfig(config);

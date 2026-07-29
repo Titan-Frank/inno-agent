@@ -412,6 +412,13 @@
 			"saved": "已保存",
 			"clear": "清除"
 		},
+		"tavily": {
+			"title": "联网搜索 (Tavily)",
+			"desc": "为 agent 提供联网检索能力。需在 tavily.com 获取 API Key（形如 tvly-…）。未配置时 web_search 工具不可用。",
+			"placeholder": "tvly-…",
+			"saved": "已保存",
+			"clear": "清除"
+		},
 		"form": {
 			"providerId": "提供方 ID",
 			"baseUrl": "Base URL",
