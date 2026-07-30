@@ -11,6 +11,7 @@ import type {
 	WikiPageType,
 	WikiGraphNode,
 	WikiGraphEdge,
+	WikiGraphCommunities,
 } from "../types/wiki.js";
 
 export type NotebookView = "graph" | "page";
@@ -23,6 +24,7 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 	pages: WikiPageSummary[] = [];
 	nodes: WikiGraphNode[] = [];
 	edges: WikiGraphEdge[] = [];
+	communities: WikiGraphCommunities | null = null;
 	currentPage: { path: string; content: string } | null = null;
 	isLoadingPages = false;
 	isLoadingGraph = false;
@@ -90,9 +92,11 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 			const data = await getWikiGraph();
 			this.nodes = data.nodes;
 			this.edges = data.edges;
+			this.communities = data.communities ?? null;
 		} catch {
 			this.nodes = [];
 			this.edges = [];
+			this.communities = null;
 		} finally {
 			this.isLoadingGraph = false;
 			this.emit("change", undefined);
