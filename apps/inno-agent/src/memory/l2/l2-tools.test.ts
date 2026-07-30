@@ -13,6 +13,7 @@ vi.mock("./document-parser.js", async (importOriginal) => {
 
 import type { L2Memory } from "./l2-memory.js";
 import { createL2Tools } from "./l2-tools.js";
+import { runL2Lint } from "./l2-lint.js";
 import { upsertManifest, readManifest } from "./manifest-store.js";
 import { writeText } from "../../storage/file-store.js";
 
@@ -81,6 +82,20 @@ describe("l2_archive", () => {
 		const linkedPage = entry.wikiPages.find((pagePath) => pagePath.includes("尾部概念"));
 		expect(linkedPage).toBeDefined();
 		expect(readFileSync(join(root, linkedPage!), "utf8")).toContain(entry.id);
+	});
+
+	it("downgrades excess wikilinks instead of persisting broken links", async () => {
+		const root = makeTempDir();
+		const titles = Array.from({ length: 22 }, (_, index) => `概念${index + 1}`);
+		await archive(root, titles.map((title) => `[[${title}]]`).join("、"));
+
+		const entry = readManifest(root)[0];
+		const sourcePage = readFileSync(join(root, entry.wikiPages[0]), "utf8");
+		expect(entry.wikiPages).toHaveLength(21);
+		expect(sourcePage).toContain("[[概念20]]");
+		expect(sourcePage).toContain("概念21");
+		expect(sourcePage).not.toContain("[[概念21]]");
+		expect(runL2Lint(root).findings.filter((finding) => finding.code === "dangling_link")).toEqual([]);
 	});
 
 	it("resumes an incomplete manifest record instead of duplicating the source", async () => {

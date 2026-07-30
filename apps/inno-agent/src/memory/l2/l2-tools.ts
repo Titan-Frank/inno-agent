@@ -192,8 +192,10 @@ export function createL2Tools(
 						summaryBody,
 						ctx.model,
 						ctx.modelRegistry,
-						extractedContent,
 					);
+					if (linkMaintenance.sourcePageBody !== summaryBody) {
+						createSourcePage(l2DataDir, entry, linkMaintenance.sourcePageBody, extractedPath);
+					}
 					entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
 					entry.status = "indexed";
 					entry.updatedAt = new Date().toISOString();

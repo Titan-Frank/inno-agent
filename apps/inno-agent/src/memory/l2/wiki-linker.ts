@@ -10,6 +10,7 @@ import { ensureDir, readText, writeText } from "../../storage/file-store.js";
 import type { ManifestEntry, WikiPageType, WikiPageFrontmatter } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter } from "./wiki-maintainer.js";
 import { splitSemanticChunks } from "./semantic-chunker.js";
+import { buildAliasIndex, normalizeWikiLink } from "./wiki-links.js";
 import { logger } from "../../logger.js";
 
 type LinkablePageType = Extract<WikiPageType, "entity" | "concept">;
@@ -27,6 +28,8 @@ export interface WikiLinkMaintenanceResult {
 	/** Pages where a contradiction with the new source was recorded. */
 	contested: string[];
 	pages: string[];
+	/** Source summary after unresolved wikilinks have been downgraded to text. */
+	sourcePageBody: string;
 }
 
 const LINK_MAINTAIN_PROMPT = `你是一个学习 Wiki 知识库维护助手。
@@ -52,6 +55,9 @@ const LINK_MAINTAIN_PROMPT = `你是一个学习 Wiki 知识库维护助手。
 
 const MAX_LINK_PROMPT_LENGTH = 30000;
 const MAX_LINK_MODEL_CHUNKS = 12;
+const MAX_LINKED_ITEMS = 20;
+const MAX_RELATED_ITEMS = 5;
+const MAX_EXISTING_PAGE_TITLES = 200;
 
 function slugifyTitle(title: string): string {
 	const slug = title
@@ -100,11 +106,33 @@ function looksLikeEntity(title: string): boolean {
 }
 
 function fallbackItems(content: string): LinkedItem[] {
-	return extractWikiLinks(content).slice(0, 20).map((title) => ({
+	return extractWikiLinks(content).slice(0, MAX_LINKED_ITEMS).map((title) => ({
 		title,
 		type: looksLikeEntity(title) ? "entity" : "concept",
 		description: "由 L2 自动从资料摘要中的双链识别，待进一步完善。",
 	}));
+}
+
+/**
+ * The source summary is the authority for which wikilinks must become pages.
+ * LLM extraction may improve their types/descriptions, but it cannot silently
+ * omit a link that is already present in the persisted summary.
+ */
+function reconcileSummaryItems(summary: string, extracted: LinkedItem[]): LinkedItem[] {
+	const explicitTitles = extractWikiLinks(summary).slice(0, MAX_LINKED_ITEMS);
+	if (explicitTitles.length === 0) return extracted.slice(0, MAX_LINKED_ITEMS);
+
+	const extractedByTitle = new Map(extracted.map((item) => [normalizeWikiLink(item.title), item]));
+	return explicitTitles.map((title) => {
+		const item = extractedByTitle.get(normalizeWikiLink(title));
+		return item
+			? { ...item, title }
+			: {
+					title,
+					type: looksLikeEntity(title) ? "entity" : "concept",
+					description: "由 L2 自动从资料摘要中的双链识别，待进一步完善。",
+				};
+	});
 }
 
 function parseLinkedItemsJson(text: string): LinkedItem[] {
@@ -215,7 +243,7 @@ async function extractLinkedItemsAcrossChunks(
 			if (seen.has(key)) continue;
 			seen.add(key);
 			items.push(item);
-			if (items.length >= 20) return items;
+			if (items.length >= MAX_LINKED_ITEMS) return items;
 		}
 	}
 	return items;
@@ -242,9 +270,66 @@ function findExistingPage(l2DataDir: string, item: LinkedItem): string {
 		const content = readText(join(l2DataDir, relativePath));
 		const { frontmatter } = parseFrontmatter(content);
 		const title = frontmatter?.title || basename(file, extname(file));
-		if (title === item.title) return relativePath;
+		if (normalizeWikiLink(title) === normalizeWikiLink(item.title)) return relativePath;
 	}
 	return slugPath;
+}
+
+interface WikiPageReference {
+	title: string;
+	type: LinkablePageType;
+	path: string;
+}
+
+function readWikiPageReferences(l2DataDir: string): WikiPageReference[] {
+	const pages: WikiPageReference[] = [];
+	for (const type of ["entity", "concept"] as const) {
+		const dir = join(l2DataDir, "wiki", pageDirForType(type));
+		if (!existsSync(dir)) continue;
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".md")) continue;
+			const path = relativePagePath(type, file);
+			const { frontmatter } = parseFrontmatter(readText(join(l2DataDir, path)));
+			pages.push({ title: frontmatter?.title || basename(file, extname(file)), type, path });
+		}
+	}
+	return pages.sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
+}
+
+function alignItemsWithExistingPages(items: LinkedItem[], existingPages: WikiPageReference[]): LinkedItem[] {
+	const existingByTitle = new Map<string, WikiPageReference | null>();
+	for (const page of existingPages) {
+		const key = normalizeWikiLink(page.title);
+		if (existingByTitle.has(key)) existingByTitle.set(key, null);
+		else existingByTitle.set(key, page);
+	}
+	return items.map((item) => {
+		const existing = existingByTitle.get(normalizeWikiLink(item.title));
+		return existing ? { ...item, title: existing.title, type: existing.type } : item;
+	});
+}
+
+function readAllWikiPageAliases(l2DataDir: string): { title: string; path: string }[] {
+	const pages: { title: string; path: string }[] = [];
+	for (const dirName of ["sources", "entities", "concepts", "analysis"] as const) {
+		const dir = join(l2DataDir, "wiki", dirName);
+		if (!existsSync(dir)) continue;
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".md")) continue;
+			const path = join("wiki", dirName, file);
+			const { frontmatter } = parseFrontmatter(readText(join(l2DataDir, path)));
+			pages.push({ title: frontmatter?.title || basename(file, extname(file)), path });
+		}
+	}
+	return pages;
+}
+
+function downgradeUnresolvedWikilinks(l2DataDir: string, body: string): string {
+	const alias = buildAliasIndex(readAllWikiPageAliases(l2DataDir));
+	return body.replace(/\[\[([^\]]+)\]\]/g, (full, inner: string) => {
+		const [target, display] = inner.split("|", 2).map((part) => part.trim());
+		return alias.resolve(target) ? full : display || target;
+	});
 }
 
 function mergeTags(...tagGroups: string[][]): string[] {
@@ -261,7 +346,17 @@ function mergeTags(...tagGroups: string[][]): string[] {
 	return tags.slice(0, 12);
 }
 
-function buildNewPage(item: LinkedItem, entry: ManifestEntry, sourcePagePath: string): string {
+function relatedSection(relatedTitles: string[]): string {
+	if (relatedTitles.length === 0) return "";
+	return `\n## 相关概念\n\n${relatedTitles.map((title) => `- [[${title}]]`).join("\n")}\n`;
+}
+
+function buildNewPage(
+	item: LinkedItem,
+	entry: ManifestEntry,
+	sourcePagePath: string,
+	relatedTitles: string[] = [],
+): string {
 	const today = new Date().toISOString().slice(0, 10);
 	const frontmatter = serializeFrontmatter({
 		title: item.title,
@@ -280,11 +375,31 @@ function buildNewPage(item: LinkedItem, entry: ManifestEntry, sourcePagePath: st
 ## 定义
 
 ${item.description}
+${relatedSection(relatedTitles)}
 
 ## 相关资料
 
 - [[${entry.title}]] — \`${sourcePagePath}\`
 `;
+}
+
+function addRelatedLinks(content: string, relatedTitles: string[]): string | null {
+	const missing = relatedTitles.filter((title) => !content.includes(`[[${title}]]`));
+	if (missing.length === 0) return null;
+	const bullets = missing.map((title) => `- [[${title}]]`).join("\n");
+	const header = "\n## 相关概念";
+	const sectionStart = content.indexOf(header);
+	if (sectionStart >= 0) {
+		const bodyStart = sectionStart + header.length;
+		const nextSection = content.slice(bodyStart).search(/\n## /);
+		const insertAt = nextSection >= 0 ? bodyStart + nextSection : content.length;
+		return `${content.slice(0, insertAt).trimEnd()}\n${bullets}${content.slice(insertAt)}`;
+	}
+	const sourceSection = content.indexOf("\n## 相关资料");
+	if (sourceSection >= 0) {
+		return `${content.slice(0, sourceSection).trimEnd()}\n\n## 相关概念\n\n${bullets}\n${content.slice(sourceSection)}`;
+	}
+	return `${content.trimEnd()}\n\n## 相关概念\n\n${bullets}\n`;
 }
 
 function referenceBullet(entry: ManifestEntry, sourcePagePath: string): string {
@@ -369,9 +484,9 @@ function upsertLinkedPage(
 /**
  * Maintain entity/concept pages after a source page is created.
  *
- * The source page keeps the original summary. This function creates or updates
- * linked entity/concept pages, then returns their paths so the manifest and
- * index can include them in the same archive transaction.
+ * The source page keeps the original summary text. This function creates or
+ * updates linked entity/concept pages, downgrades only links that cannot be
+ * materialized, then returns the page paths and closed summary body.
  *
  * With a model available this runs two-stage CoT: (1) extract candidates and
  * read their existing page definitions, (2) plan create/update with merged
@@ -385,19 +500,28 @@ export async function maintainLinkedWikiPages(
 	sourcePageBody: string,
 	model?: Model<any>,
 	modelRegistry?: ModelRegistry,
-	sourceContent?: string,
 ): Promise<WikiLinkMaintenanceResult> {
-	const result: WikiLinkMaintenanceResult = { created: [], updated: [], unchanged: [], contested: [], pages: [] };
-	const extractionContent = sourceContent && sourceContent.length > MAX_LINK_PROMPT_LENGTH ? sourceContent : sourcePageBody;
-	const items = await extractLinkedItemsAcrossChunks(model, modelRegistry, entry.title, extractionContent);
+	const result: WikiLinkMaintenanceResult = {
+		created: [],
+		updated: [],
+		unchanged: [],
+		contested: [],
+		pages: [],
+		sourcePageBody,
+	};
+	const existingPages = readWikiPageReferences(l2DataDir);
+	const extracted = await extractLinkedItemsAcrossChunks(model, modelRegistry, entry.title, sourcePageBody);
+	const items = alignItemsWithExistingPages(reconcileSummaryItems(sourcePageBody, extracted), existingPages);
 
 	// Stage 1: read existing definitions for all candidates, build plan.
 	const candidates = items.map((it) => ({
 		title: it.title,
 		type: it.type,
+		description: it.description,
 		existingDefinition: readExistingDefinition(l2DataDir, it),
 	}));
-	const plan = await planLinkedItems(model, modelRegistry, entry.title, sourcePageBody, candidates);
+	const rawPlan = await planLinkedItems(model, modelRegistry, entry.title, sourcePageBody, candidates, existingPages);
+	const plan = rawPlan ? reconcilePlanItems(rawPlan, candidates, existingPages) : null;
 
 	if (plan) {
 		// Stage 2: write/merge according to plan.
@@ -416,6 +540,7 @@ export async function maintainLinkedWikiPages(
 		}
 	}
 	result.pages = [...new Set(result.pages)];
+	result.sourcePageBody = downgradeUnresolvedWikilinks(l2DataDir, sourcePageBody);
 	return result;
 }
 
@@ -429,6 +554,7 @@ interface PlanItem {
 	action: "create" | "update";
 	definition: string;
 	contradiction?: string;
+	relatedTitles: string[];
 }
 
 const STAGE1_PLAN_PROMPT = `你是学习 Wiki 知识库的维护规划助手。已知一份新资料的摘要，以及知识库中若干实体/概念页面的现有定义。请为每个条目规划如何维护。
@@ -438,6 +564,8 @@ const STAGE1_PLAN_PROMPT = `你是学习 Wiki 知识库的维护规划助手。�
 - action=update：已有此条目。请把新资料的信息与现有定义**融合**，写出更完整、准确、无重复的 definition（融合后的完整定义，而不是仅追加）。
 - 若新资料与现有定义存在**事实冲突/矛盾**，将 contradiction 设为一句话冲突说明；否则设为 null。
 - definition 聚焦"是什么"，不要写入学习者个人状态、目标或偏好。
+- relatedTitles 列出 0-5 个确实相关的页面标题，只能从候选条目或“现有知识页”中选择。
+- 优先连接同一机制的上下位概念、组成关系、依赖关系，以及新资料与现有 Wiki 的明确联系；不要仅因标签相似而连接。
 - 最多处理 20 个条目。
 
 资料标题：{title}
@@ -450,8 +578,11 @@ const STAGE1_PLAN_PROMPT = `你是学习 Wiki 知识库的维护规划助手。�
 候选条目（existingDefinition 为空表示知识库暂无该条目）：
 {candidates}
 
+现有知识页（可用于 relatedTitles）：
+{existingPages}
+
 只返回 JSON，不要代码块：
-{"items":[{"title":"条目名","type":"concept","action":"update","definition":"融合后的完整定义","contradiction":null}]}`;
+{"items":[{"title":"条目名","type":"concept","action":"update","definition":"融合后的完整定义","contradiction":null,"relatedTitles":["相关页面"]}]}`;
 
 function parsePlanItems(text: string): PlanItem[] {
 	const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
@@ -483,9 +614,57 @@ function parsePlanItems(text: string): PlanItem[] {
 			definition,
 			contradiction:
 				typeof rec.contradiction === "string" && rec.contradiction.trim() ? rec.contradiction.trim() : undefined,
+			relatedTitles: Array.isArray(rec.relatedTitles)
+				? rec.relatedTitles
+						.filter((value): value is string => typeof value === "string")
+						.map(cleanTitle)
+						.filter(isUsefulTitle)
+						.slice(0, MAX_RELATED_ITEMS)
+				: [],
 		});
 	}
 	return planItems;
+}
+
+interface PlanCandidate {
+	title: string;
+	type: LinkablePageType;
+	description: string;
+	existingDefinition?: string;
+}
+
+function reconcilePlanItems(
+	plan: PlanItem[],
+	candidates: PlanCandidate[],
+	existingPages: WikiPageReference[],
+): PlanItem[] {
+	const planByTitle = new Map(plan.map((item) => [normalizeWikiLink(item.title), item]));
+	const allowed = new Map<string, string | null>();
+	for (const page of existingPages) {
+		const key = normalizeWikiLink(page.title);
+		if (allowed.has(key)) allowed.set(key, null);
+		else if (!allowed.has(key)) allowed.set(key, page.title);
+	}
+	for (const candidate of candidates) allowed.set(normalizeWikiLink(candidate.title), candidate.title);
+
+	return candidates.map((candidate) => {
+		const proposed = planByTitle.get(normalizeWikiLink(candidate.title));
+		const relatedTitles: string[] = [];
+		for (const title of proposed?.relatedTitles ?? []) {
+			const canonical = allowed.get(normalizeWikiLink(title));
+			if (!canonical || normalizeWikiLink(canonical) === normalizeWikiLink(candidate.title)) continue;
+			if (!relatedTitles.includes(canonical)) relatedTitles.push(canonical);
+			if (relatedTitles.length >= MAX_RELATED_ITEMS) break;
+		}
+		return {
+			title: candidate.title,
+			type: candidate.type,
+			action: candidate.existingDefinition ? "update" : "create",
+			definition: proposed?.definition || candidate.existingDefinition || candidate.description,
+			contradiction: proposed?.contradiction,
+			relatedTitles,
+		};
+	});
 }
 
 function readExistingDefinition(l2DataDir: string, item: LinkedItem): string | undefined {
@@ -506,7 +685,8 @@ async function planLinkedItems(
 	modelRegistry: ModelRegistry | undefined,
 	title: string,
 	summary: string,
-	candidates: { title: string; type: LinkablePageType; existingDefinition?: string }[],
+	candidates: PlanCandidate[],
+	existingPages: WikiPageReference[],
 ): Promise<PlanItem[] | null> {
 	if (!model || !modelRegistry || candidates.length === 0) return null;
 	const candidateJson = JSON.stringify(
@@ -521,7 +701,11 @@ async function planLinkedItems(
 	const prompt = STAGE1_PLAN_PROMPT
 		.replace("{title}", title)
 		.replace("{summary}", truncatedSummary)
-		.replace("{candidates}", candidateJson);
+		.replace("{candidates}", candidateJson)
+		.replace(
+			"{existingPages}",
+			JSON.stringify(existingPages.slice(0, MAX_EXISTING_PAGE_TITLES).map((page) => ({ title: page.title, type: page.type }))),
+		);
 	try {
 		const auth = await modelRegistry.getApiKeyAndHeaders(model);
 		if (!auth.ok || !auth.apiKey) return null;
@@ -598,6 +782,8 @@ function mergeIntoExistingPage(
 		const replaced = replaceDefinitionSection(next, item.definition);
 		if (replaced !== next) { next = replaced; changed = true; }
 	}
+	const withRelated = addRelatedLinks(next, item.relatedTitles);
+	if (withRelated) { next = withRelated; changed = true; }
 	const withRef = addReferenceIfMissing(next, entry, sourcePagePath);
 	if (withRef) { next = withRef; changed = true; }
 	if (item.contradiction) {
@@ -618,7 +804,7 @@ function upsertPlannedPage(
 	const absPath = join(l2DataDir, relativePath);
 	ensureDir(join(l2DataDir, "wiki", pageDirForType(item.type)));
 	if (!existsSync(absPath)) {
-		writeText(absPath, buildNewPage(linked, entry, sourcePagePath));
+		writeText(absPath, buildNewPage(linked, entry, sourcePagePath, item.relatedTitles));
 		return { path: relativePath, status: "created", contested: false };
 	}
 	const merged = mergeIntoExistingPage(readText(absPath), item, entry, sourcePagePath);

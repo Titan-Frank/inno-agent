@@ -73,7 +73,7 @@ function renderDeterministic(stats: WikiGraphStats): string {
 		}
 		if (maintenance.missing.length > 0) {
 			const links = [...new Set(maintenance.missing.map((m) => m.link))];
-			lines.push(`- 断链 ${links.length} 处（引用了不存在的页面，建议建页或修链接）：${links.slice(0, 8).map((l) => `[[${l}]]`).join("、")}`);
+			lines.push(`- 断链 ${links.length} 处（引用了不存在的页面，建议建页或修链接）：${links.slice(0, 8).map((l) => `\`${l.replace(/`/g, "")}\``).join("、")}`);
 		}
 		if (maintenance.orphans.length > 0) {
 			lines.push(`- 孤立页 ${maintenance.orphans.length} 个（无任何双链，建议补充关联）：${maintenance.orphans.slice(0, 8).map((p) => `[[${basename(p)}]]`).join("、")}`);
