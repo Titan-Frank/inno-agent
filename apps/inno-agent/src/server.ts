@@ -1803,7 +1803,7 @@ interface SessionSummary {
 	hasTopic?: boolean;
 }
 
-type SessionTopicMetadata = Record<string, { topic: string; updatedAt: string; generated?: boolean }>;
+type SessionTopicMetadata = Record<string, { topic: string; updatedAt: string; generated?: boolean; upgraded?: boolean }>;
 
 /**
  * Serialize a parsed session (summary + merged messages) into a review-friendly
@@ -1907,9 +1907,9 @@ function readSessionTopicMetadata(): SessionTopicMetadata {
 	return readJson<SessionTopicMetadata>(sessionTopicMetadataPath(), {});
 }
 
-function writeSessionTopic(id: string, topic: string, generated = false): void {
+function writeSessionTopic(id: string, topic: string, generated = false, extra?: { upgraded?: boolean }): void {
 	const metadata = readSessionTopicMetadata();
-	metadata[id] = { topic, generated, updatedAt: new Date().toISOString() };
+	metadata[id] = { topic, generated, updatedAt: new Date().toISOString(), ...(extra?.upgraded ? { upgraded: true } : {}) };
 	writeJson(sessionTopicMetadataPath(), metadata);
 }
 
@@ -2207,32 +2207,73 @@ function cleanGeneratedTopic(raw: string): string {
 		.slice(0, 32);
 }
 
+/** Strip machine-injected prefixes (e.g. the image-upload hint prepended to
+ *  user prompts) so titles reflect the user's actual words. */
+function stripInjectedPrefix(content: string): string {
+	return content
+		.replace(/^\[用户本轮上传了 \d+ 张图片，已保存到工作区：[\s\S]*?\]\s*/, "")
+		.trim();
+}
+
 function fallbackTopicFromMessages(messages: SessionMessageSummary[], summary: SessionSummary): string {
-	const source = messages.find((message) => message.role === "user")?.content || summary.preview || summary.name;
+	const source = stripInjectedPrefix(messages.find((message) => message.role === "user")?.content || "") || summary.preview || summary.name;
 	const cleaned = source.replace(/\s+/g, " ").trim();
 	return cleaned ? (cleaned.length > 28 ? `${cleaned.slice(0, 28)}...` : cleaned) : "New conversation";
 }
 
-async function generateSessionTopic(summary: SessionSummary, messages: SessionMessageSummary[]): Promise<string> {
-	const excerpt = messages
-		.slice(0, 4)
-		.map((message) => `${message.role === "user" ? "用户" : "助手"}: ${message.content.replace(/\s+/g, " ").trim()}`)
+/** Build the dialogue excerpt for topic generation: first 2 + last 4 usable
+ *  messages (the opening states the goal, the tail captures where the
+ *  conversation actually went), consecutive duplicates dropped (scheduler
+ *  nudges repeat), machine prefixes stripped, ~2400 chars. */
+function buildTopicExcerpt(messages: SessionMessageSummary[]): string {
+	const usable = messages
+		.map((message) => ({
+			role: message.role,
+			content: stripInjectedPrefix(message.content).replace(/\s+/g, " ").trim(),
+		}))
+		.filter((message) => message.content)
+		.filter((message, index, all) => index === 0 || message.content !== all[index - 1].content);
+	const picked = usable.length <= 6 ? usable : [...usable.slice(0, 2), ...usable.slice(-4)];
+	return picked
+		.map((message) => `${message.role === "user" ? "用户" : "助手"}: ${message.content}`)
 		.join("\n")
-		.slice(0, 800);
+		.slice(0, 2400);
+}
+
+async function generateSessionTopic(summary: SessionSummary, messages: SessionMessageSummary[]): Promise<string> {
+	const excerpt = buildTopicExcerpt(messages);
 
 	if (!excerpt) return fallbackTopicFromMessages(messages, summary);
 
-	const prompt = `请根据下面的对话内容生成一个简短中文话题标题。
+	const prompt = `请用一句简短的中文短语概括下面学习对话中用户的学习目标或任务。
 要求：
 - 只输出标题本身，不要解释
-- 8 到 16 个中文字符左右
+- 8 到 16 个中文字符
+- 聚焦用户想学的内容或要做的任务，忽略寒暄、客套话和系统提示
 - 不要使用引号、句号或冒号
 
+示例一：
 对话：
-${excerpt}`;
+用户: 你好
+助手: 你好！今天想学点什么？
+用户: 我一直搞不清贝叶斯定理，能举个生活中的例子讲讲吗
+标题：贝叶斯定理入门
+
+示例二：
+对话：
+用户: 帮我把这份教案改成 45 分钟公开课的版本
+助手: 好的，我先看看教案的结构……
+标题：教案改编公开课版
+
+对话：
+${excerpt}
+标题：`;
 
 	try {
-		const generated = cleanGeneratedTopic(await completePromptOnce(prompt, 64));
+		// Reasoning models burn tokens on a thinking block before any visible
+		// text — a tiny maxTokens (e.g. 64) gets fully consumed by thinking and
+		// yields an empty title. 1024 leaves ample room for both.
+		const generated = cleanGeneratedTopic(await completePromptOnce(prompt, 1024));
 		return generated || fallbackTopicFromMessages(messages, summary);
 	} catch (err) {
 		return fallbackTopicFromMessages(messages, summary);
@@ -2242,13 +2283,22 @@ ${excerpt}`;
 /**
  * Auto-generate a topic for a session if it doesn't already have one.
  * Runs asynchronously — fire and forget.
+ *
+ * Two passes, both guarded by `_pendingAutoTopics`:
+ * 1. First pass: no topic recorded yet and ≥2 messages (the first exchange).
+ * 2. Upgrade pass: the existing topic is auto-generated (never a manual
+ *    rename), hasn't been upgraded yet, and the conversation has grown to
+ *    TOPIC_UPGRADE_MESSAGE_THRESHOLD messages — the first-pass title was
+ *    based on a single exchange and is often vague, so re-roll it once with
+ *    richer context.
  */
 const _pendingAutoTopics = new Set<string>();
+const TOPIC_UPGRADE_MESSAGE_THRESHOLD = 6;
 
 function maybeAutoGenerateTopic(sessionId: string): void {
 	if (!sessionId || _pendingAutoTopics.has(sessionId)) return;
-	const topicMeta = readSessionTopicMetadata();
-	if (topicMeta[sessionId]) return; // already has a topic
+	const existing = readSessionTopicMetadata()[sessionId];
+	if (existing && (!existing.generated || existing.upgraded)) return;
 
 	const sessionPath = sessionFileFromId(join(dataDir, "sessions"), sessionId);
 	if (!sessionPath || !existsSync(sessionPath)) return;
@@ -2258,9 +2308,10 @@ function maybeAutoGenerateTopic(sessionId: string): void {
 		try {
 			const parsed = parseSessionFile(sessionPath);
 			if (!parsed || parsed.messages.length < 2) return;
+			if (existing && parsed.messages.length < TOPIC_UPGRADE_MESSAGE_THRESHOLD) return;
 			const topic = await generateSessionTopic(parsed.summary, parsed.messages);
-			writeSessionTopic(sessionId, topic, true);
-			logger.info(`[auto-topic] ${sessionId} → ${topic}`);
+			writeSessionTopic(sessionId, topic, true, existing ? { upgraded: true } : undefined);
+			logger.info(`[auto-topic] ${sessionId} → ${topic}${existing ? " (upgraded)" : ""}`);
 		} catch (err) {
 			logger.warn({ err }, `auto-topic generation failed for ${sessionId}`);
 		} finally {
@@ -2983,7 +3034,7 @@ const server = createServer(async (req, res) => {
 				return;
 			}
 			const topic = await generateSessionTopic(parsed.summary, parsed.messages);
-			writeSessionTopic(basename(sessionPath), topic, true);
+			writeSessionTopic(basename(sessionPath), topic, true, { upgraded: true });
 			const summary = withRecordedTopic(
 				withRecordedChannels(parsed.summary, readSessionChannelMetadata()),
 				readSessionTopicMetadata(),
