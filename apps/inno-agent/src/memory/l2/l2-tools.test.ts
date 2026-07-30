@@ -61,4 +61,15 @@ describe("l2_archive", () => {
 		expect(readManifest(root)).toHaveLength(1);
 		expect(duplicate.details).toMatchObject({ duplicate: true });
 	});
+
+	it("discovers a linked concept near the end of a long source without a model", async () => {
+		const root = makeTempDir();
+		const content = `${"前置内容。\n\n".repeat(6_000)}末尾定义 [[尾部概念]]。`;
+		await archive(root, content);
+
+		const entry = readManifest(root)[0];
+		const linkedPage = entry.wikiPages.find((pagePath) => pagePath.includes("尾部概念"));
+		expect(linkedPage).toBeDefined();
+		expect(readFileSync(join(root, linkedPage!), "utf8")).toContain(entry.id);
+	});
 });

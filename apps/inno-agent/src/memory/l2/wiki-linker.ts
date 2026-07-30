@@ -9,6 +9,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
 import type { ManifestEntry, WikiPageType, WikiPageFrontmatter } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter } from "./wiki-maintainer.js";
+import { splitSemanticChunks } from "./semantic-chunker.js";
 import { logger } from "../../logger.js";
 
 type LinkablePageType = Extract<WikiPageType, "entity" | "concept">;
@@ -50,6 +51,7 @@ const LINK_MAINTAIN_PROMPT = `你是一个学习 Wiki 知识库维护助手。
 {"items":[{"title":"条目名","type":"concept","description":"一句话定义或说明"}]}`;
 
 const MAX_LINK_PROMPT_LENGTH = 30000;
+const MAX_LINK_MODEL_CHUNKS = 12;
 
 function slugifyTitle(title: string): string {
 	const slug = title
@@ -180,6 +182,43 @@ async function extractLinkedItems(
 		logger.warn({ err }, "LLM wiki link extraction failed, using fallback");
 		return fallback;
 	}
+}
+
+function linkedItemKey(item: LinkedItem): string {
+	return `${item.type}:${cleanTitle(item.title).toLowerCase()}`;
+}
+
+async function extractLinkedItemsAcrossChunks(
+	model: Model<any> | undefined,
+	modelRegistry: ModelRegistry | undefined,
+	title: string,
+	content: string,
+): Promise<LinkedItem[]> {
+	if (content.length <= MAX_LINK_PROMPT_LENGTH) {
+		return extractLinkedItems(model, modelRegistry, title, content);
+	}
+
+	const chunks = splitSemanticChunks(content, { targetChars: 24_000, overlapChars: 400 });
+	if (chunks.length > MAX_LINK_MODEL_CHUNKS) return fallbackItems(content);
+
+	const items: LinkedItem[] = [];
+	const seen = new Set<string>();
+	for (let index = 0; index < chunks.length; index += 1) {
+		const chunkItems = await extractLinkedItems(
+			model,
+			modelRegistry,
+			`${title}（第 ${index + 1}/${chunks.length} 部分）`,
+			chunks[index],
+		);
+		for (const item of chunkItems) {
+			const key = linkedItemKey(item);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			items.push(item);
+			if (items.length >= 20) return items;
+		}
+	}
+	return items;
 }
 
 function pageDirForType(type: LinkablePageType): string {
@@ -346,9 +385,11 @@ export async function maintainLinkedWikiPages(
 	sourcePageBody: string,
 	model?: Model<any>,
 	modelRegistry?: ModelRegistry,
+	sourceContent?: string,
 ): Promise<WikiLinkMaintenanceResult> {
 	const result: WikiLinkMaintenanceResult = { created: [], updated: [], unchanged: [], contested: [], pages: [] };
-	const items = await extractLinkedItems(model, modelRegistry, entry.title, sourcePageBody);
+	const extractionContent = sourceContent && sourceContent.length > MAX_LINK_PROMPT_LENGTH ? sourceContent : sourcePageBody;
+	const items = await extractLinkedItemsAcrossChunks(model, modelRegistry, entry.title, extractionContent);
 
 	// Stage 1: read existing definitions for all candidates, build plan.
 	const candidates = items.map((it) => ({

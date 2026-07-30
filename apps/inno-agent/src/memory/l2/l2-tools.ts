@@ -171,13 +171,14 @@ export function createL2Tools(
 			}
 			const wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
 			const linkMaintenance = await maintainLinkedWikiPages(
-				l2DataDir,
-				entry,
-				wikiPagePath,
-				summaryBody,
-				ctx.model,
-				ctx.modelRegistry,
-			);
+					l2DataDir,
+					entry,
+					wikiPagePath,
+					summaryBody,
+					ctx.model,
+					ctx.modelRegistry,
+					extractedContent,
+				);
 			entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
 			entry.status = "indexed";
 
