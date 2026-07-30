@@ -455,7 +455,7 @@ export function GraphView() {
 	const displayNode = hoveredNode ?? selectedNode;
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col">
+		<div className="relative flex h-full min-h-0 flex-col overflow-hidden">
 			<div className="@container flex w-full min-w-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
 				<button className="inline-flex items-center gap-1 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-1 hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]" onClick={fit} title={t("notebook.graph.fit")}>
 					<Scan size={14} />
@@ -529,7 +529,7 @@ export function GraphView() {
 					) : null}
 				</div>
 			</div>
-			<div ref={containerRef} className="relative min-h-0 flex-1 bg-[var(--inno-workspace-bg,#fafafa)]">
+			<div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-[var(--inno-workspace-bg,#fafafa)]">
 				{displayNode ? (
 					<div className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-1.5 text-xs">
 						<span
