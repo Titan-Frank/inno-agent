@@ -31,11 +31,15 @@ import { logger } from "../../logger.js";
  * short-circuit to a disabled notice without touching the knowledge base.
  * `l2Memory` keeps the retrieval index in sync; defaults to the per-dir
  * singleton so callers that don't pass one still get index maintenance.
+ * `getActiveWorkspaceDir` resolves relative file paths for the current
+ * session; server callers must keep this dynamic because sessions can switch
+ * workspaces without recreating the extension.
  */
 export function createL2Tools(
 	l2DataDir: string,
 	isEnabled?: () => boolean,
 	l2Memory: L2Memory = getL2Memory(l2DataDir),
+	getActiveWorkspaceDir?: () => string,
 ): ToolDefinition[] {
 	const l2DisabledResult = () => ({
 		content: [{ type: "text" as const, text: "L2 Wiki 知识库已在设置中关闭，当前不归档也不检索知识库内容。" }],
@@ -81,7 +85,7 @@ export function createL2Tools(
 
 			if (isFileType && params.filePath) {
 				// File-based: parse with LiteParse
-				const workspaceDir = process.env.INNO_WORKSPACE_DIR || process.cwd();
+				const workspaceDir = getActiveWorkspaceDir?.() || process.env.INNO_WORKSPACE_DIR || process.cwd();
 				resolvedFilePath = isAbsolute(params.filePath)
 					? params.filePath
 					: resolve(workspaceDir, params.filePath);

@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const parseDocumentMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./document-parser.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./document-parser.js")>();
+	return { ...actual, parseDocument: parseDocumentMock };
+});
 
 import type { L2Memory } from "./l2-memory.js";
 import { createL2Tools } from "./l2-tools.js";
@@ -37,6 +44,7 @@ async function archive(root: string, content: string) {
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	parseDocumentMock.mockReset();
 });
 
 describe("l2_archive", () => {
@@ -101,5 +109,41 @@ describe("l2_archive", () => {
 		const entries = readManifest(root);
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({ id: "l2src_resume1", rawPath, extractedPath, status: "indexed" });
+	});
+
+	it("resolves relative files against the active session workspace", async () => {
+		const root = makeTempDir();
+		const fallbackWorkspace = makeTempDir();
+		const activeWorkspace = makeTempDir();
+		const sourceDir = join(activeWorkspace, "sources");
+		const sourcePath = join(sourceDir, "lesson.pdf");
+		mkdirSync(sourceDir, { recursive: true });
+		writeFileSync(sourcePath, "%PDF-active-workspace");
+		parseDocumentMock.mockResolvedValue({
+			text: "当前会话工作区中的完整资料",
+			pageCount: 1,
+			pages: [{ pageNumber: 1, text: "当前会话工作区中的完整资料" }],
+		});
+
+		const previousWorkspace = process.env.INNO_WORKSPACE_DIR;
+		process.env.INNO_WORKSPACE_DIR = fallbackWorkspace;
+		try {
+			const tool = createL2Tools(root, undefined, fakeMemory(root), () => activeWorkspace)[0];
+			await (tool.execute as (...args: any[]) => Promise<any>)(
+				"call-file",
+				{ title: "会话资料", filePath: "sources/lesson.pdf", sourceType: "pdf" },
+				undefined,
+				undefined,
+				{ model: undefined, modelRegistry: undefined },
+			);
+		} finally {
+			if (previousWorkspace === undefined) delete process.env.INNO_WORKSPACE_DIR;
+			else process.env.INNO_WORKSPACE_DIR = previousWorkspace;
+		}
+
+		expect(parseDocumentMock).toHaveBeenCalledWith(sourcePath);
+		const entry = readManifest(root)[0];
+		expect(readFileSync(join(root, entry.rawPath), "utf8")).toBe("%PDF-active-workspace");
+		expect(readFileSync(join(root, entry.extractedPath!), "utf8")).toContain("当前会话工作区中的完整资料");
 	});
 });
