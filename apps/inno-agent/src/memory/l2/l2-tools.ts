@@ -22,6 +22,7 @@ import { fileExists, readText } from "../../storage/file-store.js";
 import { parseDocument, DocumentParseError } from "./document-parser.js";
 import { getL2Memory, type L2Memory } from "./l2-memory.js";
 import { regenerateOverview } from "./overview.js";
+import { formatL2LintReport, runL2Lint } from "./l2-lint.js";
 import { logger } from "../../logger.js";
 
 /**
@@ -283,5 +284,21 @@ export function createL2Tools(
 		},
 	});
 
-	return [archiveTool, queryTool];
+	// ---- Tool 3: l2_lint ----
+	const lintTool = defineTool({
+		name: "l2_lint",
+		label: "检查 L2 Wiki",
+		description: "只读检查 L2 Wiki 的 frontmatter、双链、来源追溯、manifest 和 index 一致性。不会修改或自动修复文件。",
+		parameters: Type.Object({}),
+		async execute() {
+			if (isEnabled && !isEnabled()) return l2DisabledResult();
+			const report = runL2Lint(l2DataDir);
+			return {
+				content: [{ type: "text" as const, text: formatL2LintReport(report) }],
+				details: { disabled: false, ...report },
+			};
+		},
+	});
+
+	return [archiveTool, queryTool, lintTool];
 }
