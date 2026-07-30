@@ -15,7 +15,7 @@ import {
 	ensureL2Directories,
 	readMaintenanceContext,
 } from "./wiki-maintainer.js";
-import { queryWikiHybrid } from "./wiki-query.js";
+import { queryWikiHybridDetailed } from "./wiki-query.js";
 import { summarizeContent } from "./summarizer.js";
 import { maintainLinkedWikiPages } from "./wiki-linker.js";
 import { fileExists, readText } from "../../storage/file-store.js";
@@ -275,11 +275,11 @@ export function createL2Tools(
 			if (isEnabled && !isEnabled()) return l2DisabledResult();
 			ensureL2Directories(l2DataDir);
 			const query = params.query ?? "";
-			const result = await queryWikiHybrid(l2Memory, query);
+			const result = await queryWikiHybridDetailed(l2Memory, query);
 			appendLog(l2DataDir, "query", query, "- L2 query executed through l2_query.");
 			return {
-				content: [{ type: "text" as const, text: result }],
-				details: {},
+				content: [{ type: "text" as const, text: result.text }],
+				details: { disabled: false, mode: result.mode, hits: result.hits },
 			};
 		},
 	});

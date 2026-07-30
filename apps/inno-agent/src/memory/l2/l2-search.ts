@@ -35,6 +35,7 @@ export interface L2SearchResult {
 	path: string;
 	title: string;
 	type: string;
+	sourceIds: string[];
 	score: number;
 	via: L2SearchSignal[];
 }
@@ -140,6 +141,7 @@ export async function searchL2(
 				path,
 				title: p?.title ?? pageStem(path),
 				type: p?.type ?? "",
+				sourceIds: p?.sourceIds ?? [],
 				score,
 				via: [...(via.get(path) ?? [])],
 			};
