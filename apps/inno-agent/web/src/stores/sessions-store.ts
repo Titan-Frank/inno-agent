@@ -27,6 +27,9 @@ interface SessionsStoreEvents {
 
 export type HistoryMode = "push" | "replace" | "none";
 
+/** Backoff for refreshUntilTopic (~62s total, covering slow topic models). */
+const TOPIC_REFRESH_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000] as const;
+
 export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 	sessions: SessionMeta[] = [];
 	currentSessionId: string | null = null;
@@ -121,6 +124,24 @@ export class SessionsStoreImpl extends EventEmitter<SessionsStoreEvents> {
 			this.emit("change", undefined);
 		} catch {
 			// ignore — keep previous list
+		}
+	}
+
+	/**
+	 * Refresh the sidebar until the session's auto-generated topic lands.
+	 *
+	 * Topic generation is fire-and-forget on the server (an extra LLM call
+	 * after the turn's `done` event), so the refresh that runs at turn end
+	 * usually sees the untitled fallback name. Poll with bounded backoff and
+	 * stop as soon as `hasTopic` flips (or the session disappears).
+	 */
+	async refreshUntilTopic(sessionId: string): Promise<void> {
+		await this.refresh();
+		for (const delayMs of TOPIC_REFRESH_DELAYS_MS) {
+			const entry = this.sessions.find((session) => session.id === sessionId);
+			if (!entry || entry.hasTopic) return;
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+			await this.refresh();
 		}
 	}
 

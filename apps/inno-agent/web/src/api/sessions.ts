@@ -14,6 +14,8 @@ export interface SessionMeta {
 	/** Immutable birthplace of the session (web/cli/feishu/wechat/scheduler). */
 	origin?: SessionChannel;
 	archived?: boolean;
+	/** True once a topic (manual or auto-generated) has been recorded server-side. */
+	hasTopic?: boolean;
 }
 
 export interface PendingQuestionData {

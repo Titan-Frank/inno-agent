@@ -405,7 +405,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.wikiInvalidated = false;
 		this.emit("change", undefined);
 		if (shouldRefreshWiki) void notebookStore.loadAll();
-		void import("./sessions-store.js").then((module) => module.sessionsStore.refresh());
+		void import("./sessions-store.js").then((module) => module.sessionsStore.refreshUntilTopic(owner.sessionId));
 	}
 
 	private _handleStreamEvent(event: ChatStreamEvent, owner: ActiveStreamOwner) {

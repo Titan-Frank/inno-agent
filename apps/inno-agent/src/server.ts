@@ -1799,6 +1799,8 @@ interface SessionSummary {
 	channels: SessionChannel[];
 	/** Immutable birthplace of the session (web/cli/feishu/wechat/scheduler). */
 	origin?: SessionChannel;
+	/** True once a topic (manual or auto-generated) has been recorded. */
+	hasTopic?: boolean;
 }
 
 type SessionTopicMetadata = Record<string, { topic: string; updatedAt: string; generated?: boolean }>;
@@ -2173,7 +2175,9 @@ function withRecordedChannels(summary: SessionSummary, metadata: SessionChannelM
 
 function withRecordedTopic(summary: SessionSummary, metadata: SessionTopicMetadata): SessionSummary {
 	const topic = metadata[summary.id]?.topic?.trim();
-	return topic ? { ...summary, name: topic } : summary;
+	// hasTopic lets clients distinguish "no topic recorded yet" (auto-topic may
+	// still be generating) from a fallback preview name, without guessing.
+	return topic ? { ...summary, name: topic, hasTopic: true } : { ...summary, hasTopic: false };
 }
 
 /**
