@@ -68,8 +68,8 @@ function buildCommunitySeedPositions(nodes: WikiGraphNode[]): Map<string, { x: n
 	const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
 	orderedGroups.forEach(([, group], groupIndex) => {
-		const centerX = (groupIndex % columns) * 520;
-		const centerY = Math.floor(groupIndex / columns) * 420;
+		const centerX = (groupIndex % columns) * 420;
+		const centerY = Math.floor(groupIndex / columns) * 340;
 		group.sort((a, b) => a.id.localeCompare(b.id)).forEach((node, nodeIndex) => {
 			const radius = nodeIndex === 0 ? 0 : 34 + Math.sqrt(nodeIndex) * 19;
 			const angle = nodeIndex * goldenAngle;
@@ -128,6 +128,7 @@ function buildElements(nodes: WikiGraphNode[], edges: WikiGraphEdge[]): ElementD
 		const sameCommunity = e.type === "link"
 			&& nodeCommunities.get(e.source) === nodeCommunities.get(e.target);
 		const baseOpacity = e.type === "tag" ? 0.1 : 0.04 + Math.pow(normalizedWeight, 1.4) * 0.56;
+		const communityEdgeOpacity = sameCommunity ? baseOpacity : Math.max(0.035, baseOpacity * 0.6);
 		const endpoints = e.type === "link" ? [e.source, e.target].sort() : [e.source, e.target];
 		els.push({
 			data: {
@@ -139,7 +140,9 @@ function buildElements(nodes: WikiGraphNode[], edges: WikiGraphEdge[]): ElementD
 				normalizedWeight,
 				sameCommunity,
 				edgeWidth: e.type === "tag" ? 0.5 : 0.3 + Math.pow(normalizedWeight, 1.3) * 3.2,
-				edgeOpacity: sameCommunity ? baseOpacity : Math.max(0.02, baseOpacity * 0.35),
+				edgeOpacity: communityEdgeOpacity,
+				communityEdgeOpacity,
+				typeEdgeOpacity: baseOpacity,
 			},
 		});
 	}
@@ -158,6 +161,37 @@ function makeCommunityLayoutOptions(): cytoscape.LayoutOptions {
 		}),
 		padding: 32,
 	} as unknown as cytoscape.LayoutOptions;
+}
+
+function makeRelationshipLayoutOptions(): cytoscape.LayoutOptions {
+	return {
+		name: "cose",
+		fit: false,
+		animate: "end",
+		animationDuration: 500,
+		randomize: true,
+		nodeRepulsion: () => 9_000,
+		idealEdgeLength: (edge: cytoscape.EdgeSingular) =>
+			125 - Number(edge.data("normalizedWeight") ?? 0) * 55,
+		edgeElasticity: () => 100,
+		gravity: 0.25,
+		numIter: 1_200,
+		initialTemp: 200,
+		coolingFactor: 0.95,
+		minTemp: 1,
+		padding: 32,
+	} as unknown as cytoscape.LayoutOptions;
+}
+
+function createLayout(cy: Core, mode: GraphColorMode): cytoscape.Layouts {
+	if (mode === "community") {
+		cy.nodes(":visible").forEach((node) => {
+			node.position({ x: Number(node.data("seedX")), y: Number(node.data("seedY")) });
+		});
+	}
+	return cy.elements(":visible").layout(
+		mode === "community" ? makeCommunityLayoutOptions() : makeRelationshipLayoutOptions(),
+	);
 }
 
 export function GraphView() {
@@ -322,7 +356,15 @@ export function GraphView() {
 			cy.nodes().forEach((node) => {
 				node.data("color", node.data(colorMode === "community" ? "communityColor" : "typeColor"));
 			});
+			cy.edges().forEach((edge) => {
+				edge.data("edgeOpacity", edge.data(colorMode === "community" ? "communityEdgeOpacity" : "typeEdgeOpacity"));
+			});
 		});
+		layoutRef.current?.stop();
+		const layout = createLayout(cy, colorMode);
+		layoutRef.current = layout;
+		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
+		layout.run();
 	}, [colorMode, elements]);
 
 	// React to selection from outside (e.g. clicking the list)
@@ -375,11 +417,11 @@ export function GraphView() {
 			});
 		});
 		layoutRef.current?.stop();
-		const layout = cy.elements(":visible").layout(makeCommunityLayoutOptions());
+		const layout = createLayout(cy, colorMode);
 		layoutRef.current = layout;
 		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
 		layout.run();
-	}, [visibleCategories, elements]);
+	}, [visibleCategories, elements]); // colorMode changes are handled by the mode effect above
 
 	function fit() {
 		cyRef.current?.fit(undefined, 32);
@@ -389,10 +431,7 @@ export function GraphView() {
 		const cy = cyRef.current;
 		if (!cy) return;
 		layoutRef.current?.stop();
-		cy.nodes(":visible").forEach((node) => {
-			node.position({ x: Number(node.data("seedX")), y: Number(node.data("seedY")) });
-		});
-		const layout = cy.elements(":visible").layout(makeCommunityLayoutOptions());
+		const layout = createLayout(cy, colorMode);
 		layoutRef.current = layout;
 		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
 		layout.run();
