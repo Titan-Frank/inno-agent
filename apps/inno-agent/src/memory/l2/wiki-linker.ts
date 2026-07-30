@@ -19,6 +19,7 @@ interface LinkedItem {
 	title: string;
 	type: LinkablePageType;
 	description: string;
+	tags: string[];
 }
 
 export interface WikiLinkMaintenanceResult {
@@ -41,6 +42,7 @@ const LINK_MAINTAIN_PROMPT = `你是一个学习 Wiki 知识库维护助手。
 - concept: 技术概念、理论、方法、能力、机制、模式、问题类型。
 - 不要抽取过泛的词，例如"方法"、"系统"、"内容"。
 - 优先使用资料中已有的 [[双链]] 条目。
+- tags 只写 0-3 个属于该条目本身的主题标签，不要复制整篇资料的标签。
 - 最多返回 20 个条目。
 
 资料标题：{title}
@@ -51,12 +53,13 @@ const LINK_MAINTAIN_PROMPT = `你是一个学习 Wiki 知识库维护助手。
 ---
 
 只返回 JSON，不要代码块：
-{"items":[{"title":"条目名","type":"concept","description":"一句话定义或说明"}]}`;
+{"items":[{"title":"条目名","type":"concept","description":"一句话定义或说明","tags":["主题标签"]}]}`;
 
 const MAX_LINK_PROMPT_LENGTH = 30000;
 const MAX_LINK_MODEL_CHUNKS = 12;
 const MAX_LINKED_ITEMS = 20;
 const MAX_RELATED_ITEMS = 5;
+const MAX_ITEM_TAGS = 3;
 const MAX_EXISTING_PAGE_TITLES = 200;
 
 function slugifyTitle(title: string): string {
@@ -75,6 +78,10 @@ function cleanTitle(title: string): string {
 		.trim()
 		.replace(/^#+\s*/, "")
 		.replace(/\s+/g, " ");
+}
+
+function cleanTag(tag: string): string {
+	return tag.trim().replace(/^#+/, "").replace(/\s+/g, "-").slice(0, 40);
 }
 
 function extractWikiLinks(content: string): string[] {
@@ -110,6 +117,7 @@ function fallbackItems(content: string): LinkedItem[] {
 		title,
 		type: looksLikeEntity(title) ? "entity" : "concept",
 		description: "由 L2 自动从资料摘要中的双链识别，待进一步完善。",
+		tags: [],
 	}));
 }
 
@@ -131,6 +139,7 @@ function reconcileSummaryItems(summary: string, extracted: LinkedItem[]): Linked
 					title,
 					type: looksLikeEntity(title) ? "entity" : "concept",
 					description: "由 L2 自动从资料摘要中的双链识别，待进一步完善。",
+					tags: [],
 				};
 	});
 }
@@ -159,6 +168,13 @@ function parseLinkedItemsJson(text: string): LinkedItem[] {
 				typeof record.description === "string" && record.description.trim()
 					? record.description.trim()
 					: "由 L2 自动识别，待进一步完善。",
+			tags: Array.isArray(record.tags)
+				? record.tags
+						.filter((value): value is string => typeof value === "string")
+						.map(cleanTag)
+						.filter(Boolean)
+						.slice(0, MAX_ITEM_TAGS)
+				: [],
 		});
 	}
 	return items;
@@ -362,7 +378,7 @@ function buildNewPage(
 		title: item.title,
 		created: today,
 		type: item.type,
-		tags: mergeTags([item.type], entry.tags),
+		tags: mergeTags([item.type], item.tags),
 		sources: [sourcePagePath],
 		source_ids: [entry.id],
 		updated: today,
@@ -518,6 +534,7 @@ export async function maintainLinkedWikiPages(
 		title: it.title,
 		type: it.type,
 		description: it.description,
+		tags: it.tags,
 		existingDefinition: readExistingDefinition(l2DataDir, it),
 	}));
 	const rawPlan = await planLinkedItems(model, modelRegistry, entry.title, sourcePageBody, candidates, existingPages);
@@ -553,6 +570,7 @@ interface PlanItem {
 	type: LinkablePageType;
 	action: "create" | "update";
 	definition: string;
+	tags: string[];
 	contradiction?: string;
 	relatedTitles: string[];
 }
@@ -612,6 +630,7 @@ function parsePlanItems(text: string): PlanItem[] {
 			type,
 			action: rec.action === "update" ? "update" : "create",
 			definition,
+			tags: [],
 			contradiction:
 				typeof rec.contradiction === "string" && rec.contradiction.trim() ? rec.contradiction.trim() : undefined,
 			relatedTitles: Array.isArray(rec.relatedTitles)
@@ -630,6 +649,7 @@ interface PlanCandidate {
 	title: string;
 	type: LinkablePageType;
 	description: string;
+	tags: string[];
 	existingDefinition?: string;
 }
 
@@ -661,6 +681,7 @@ function reconcilePlanItems(
 			type: candidate.type,
 			action: candidate.existingDefinition ? "update" : "create",
 			definition: proposed?.definition || candidate.existingDefinition || candidate.description,
+			tags: candidate.tags,
 			contradiction: proposed?.contradiction,
 			relatedTitles,
 		};
@@ -693,6 +714,7 @@ async function planLinkedItems(
 		candidates.map((c) => ({
 			title: c.title,
 			type: c.type,
+			tags: c.tags,
 			existingDefinition: c.existingDefinition ? c.existingDefinition.slice(0, 600) : "",
 		})),
 	);
@@ -799,7 +821,7 @@ function upsertPlannedPage(
 	entry: ManifestEntry,
 	sourcePagePath: string,
 ): { path: string; status: "created" | "updated" | "unchanged"; contested: boolean } {
-	const linked: LinkedItem = { title: item.title, type: item.type, description: item.definition };
+	const linked: LinkedItem = { title: item.title, type: item.type, description: item.definition, tags: item.tags };
 	const relativePath = findExistingPage(l2DataDir, linked);
 	const absPath = join(l2DataDir, relativePath);
 	ensureDir(join(l2DataDir, "wiki", pageDirForType(item.type)));

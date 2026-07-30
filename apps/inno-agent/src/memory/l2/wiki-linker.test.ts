@@ -11,7 +11,7 @@ import { writeText } from "../../storage/file-store.js";
 import type { ManifestEntry } from "./types.js";
 import { buildWikiGraph } from "./wiki-graph.js";
 import { maintainLinkedWikiPages } from "./wiki-linker.js";
-import { createSourcePage, ensureL2Directories, serializeFrontmatter } from "./wiki-maintainer.js";
+import { createSourcePage, ensureL2Directories, parseFrontmatter, serializeFrontmatter } from "./wiki-maintainer.js";
 
 const tempDirs: string[] = [];
 
@@ -73,7 +73,7 @@ describe("L2 wiki link maintenance", () => {
 			.mockResolvedValueOnce(
 				modelResponse(JSON.stringify({
 					items: [
-						{ title: "Alpha", type: "concept", description: "Alpha 定义" },
+						{ title: "Alpha", type: "concept", description: "Alpha 定义", tags: ["alpha topic", "mechanism", "durable", "ignored"] },
 						{ title: "Beta", type: "concept", description: "Beta 定义" },
 					],
 				})),
@@ -112,10 +112,17 @@ describe("L2 wiki link maintenance", () => {
 		expect(alpha).toContain("[[Beta]]");
 		expect(alpha).toContain("[[Existing Knowledge]]");
 		expect(alpha).not.toContain("Hallucinated Page");
+		expect(parseFrontmatter(alpha).frontmatter?.tags).toEqual(["concept", "alpha-topic", "mechanism", "durable"]);
+		expect(parseFrontmatter(alpha).frontmatter?.tags).not.toContain("test");
 
 		const graph = buildWikiGraph(root);
 		expect(graph.maintenance.missing).toEqual([]);
-		expect(graph.edges).toContainEqual({ source: alphaPath, target: betaPath, type: "link" });
+		expect(graph.edges).toContainEqual(expect.objectContaining({
+			source: alphaPath,
+			target: betaPath,
+			type: "link",
+			weight: expect.any(Number),
+		}));
 	});
 
 	it("reuses an existing page type when extraction classifies a shared title differently", async () => {
