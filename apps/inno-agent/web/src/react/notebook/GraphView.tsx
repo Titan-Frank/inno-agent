@@ -153,8 +153,7 @@ function makeCommunityLayoutOptions(): cytoscape.LayoutOptions {
 	return {
 		name: "preset",
 		fit: false,
-		animate: true,
-		animationDuration: 450,
+		animate: false,
 		positions: (node: cytoscape.NodeSingular) => ({
 			x: Number(node.data("seedX")),
 			y: Number(node.data("seedY")),
@@ -163,13 +162,13 @@ function makeCommunityLayoutOptions(): cytoscape.LayoutOptions {
 	} as unknown as cytoscape.LayoutOptions;
 }
 
-function makeRelationshipLayoutOptions(): cytoscape.LayoutOptions {
+function makeRelationshipLayoutOptions(randomize = true, animationDuration = 500): cytoscape.LayoutOptions {
 	return {
 		name: "cose",
 		fit: false,
 		animate: "end",
-		animationDuration: 500,
-		randomize: true,
+		animationDuration,
+		randomize,
 		nodeRepulsion: () => 9_000,
 		idealEdgeLength: (edge: cytoscape.EdgeSingular) =>
 			125 - Number(edge.data("normalizedWeight") ?? 0) * 55,
@@ -209,12 +208,14 @@ export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const cyRef = useRef<Core | null>(null);
 	const layoutRef = useRef<cytoscape.Layouts | null>(null);
+	const colorModeRef = useRef<GraphColorMode>("community");
 
 	const [visibleCategories, setVisibleCategories] = useState<Set<NodeCategory>>(
 		() => new Set(DEFAULT_VISIBLE),
 	);
 	const [colorMode, setColorMode] = useState<GraphColorMode>("community");
 	const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+	colorModeRef.current = colorMode;
 
 	const toggleCategory = useCallback((category: NodeCategory) => {
 		setVisibleCategories((prev) => {
@@ -307,11 +308,6 @@ export function GraphView() {
 			],
 		});
 
-		const layout = cy.layout(makeCommunityLayoutOptions());
-		layoutRef.current = layout;
-		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
-		layout.run();
-
 		cy.on("tap", "node", (evt) => {
 			const id = evt.target.id() as string;
 			const node = state.nodes.find((n) => n.id === id);
@@ -339,6 +335,19 @@ export function GraphView() {
 			setHoveredNodeId(null);
 			cy.elements().removeClass("dim").removeClass("hl");
 		});
+		cy.on("grab", "node", () => {
+			layoutRef.current?.stop();
+		});
+		cy.on("free", "node", (evt) => {
+			if (colorModeRef.current !== "type") return;
+			const draggedNode = evt.target as cytoscape.NodeSingular;
+			draggedNode.lock();
+			layoutRef.current?.stop();
+			const layout = cy.elements(":visible").layout(makeRelationshipLayoutOptions(false, 300));
+			layoutRef.current = layout;
+			layout.one("layoutstop", () => draggedNode.unlock());
+			layout.run();
+		});
 
 		cyRef.current = cy;
 		return () => {
@@ -349,6 +358,8 @@ export function GraphView() {
 		};
 	}, [elements]); // eslint-disable-line react-hooks/exhaustive-deps
 
+	// Keep presentation and layout changes in one effect. Separate mode and
+	// visibility effects would both start a layout when the graph mounts.
 	useEffect(() => {
 		const cy = cyRef.current;
 		if (!cy) return;
@@ -359,13 +370,22 @@ export function GraphView() {
 			cy.edges().forEach((edge) => {
 				edge.data("edgeOpacity", edge.data(colorMode === "community" ? "communityEdgeOpacity" : "typeEdgeOpacity"));
 			});
+			cy.nodes().forEach((node) => {
+				const type = (node.data("type") as NodeCategory) ?? "entity";
+				node.toggleClass("hidden", !visibleCategories.has(type));
+			});
+			cy.edges().forEach((edge) => {
+				const sourceHidden = edge.source().hasClass("hidden");
+				const targetHidden = edge.target().hasClass("hidden");
+				edge.toggleClass("hidden", sourceHidden || targetHidden);
+			});
 		});
 		layoutRef.current?.stop();
 		const layout = createLayout(cy, colorMode);
 		layoutRef.current = layout;
 		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
 		layout.run();
-	}, [colorMode, elements]);
+	}, [colorMode, elements, visibleCategories]);
 
 	// React to selection from outside (e.g. clicking the list)
 	useEffect(() => {
@@ -396,32 +416,6 @@ export function GraphView() {
 		});
 		cy.edges(":visible").addClass("dim");
 	}, [state.searchQuery, state.highlight]);
-
-	// Apply category visibility, then restart layout so it recomputes against the
-	// new node set (otherwise hidden nodes still contribute to forces visually).
-	useEffect(() => {
-		const cy = cyRef.current;
-		if (!cy) return;
-		const visible = visibleCategories;
-		cy.batch(() => {
-			cy.nodes().forEach((n) => {
-				const type = (n.data("type") as NodeCategory) ?? "entity";
-				if (visible.has(type)) n.removeClass("hidden");
-				else n.addClass("hidden");
-			});
-			cy.edges().forEach((e) => {
-				const src = e.source();
-				const tgt = e.target();
-				if (src.hasClass("hidden") || tgt.hasClass("hidden")) e.addClass("hidden");
-				else e.removeClass("hidden");
-			});
-		});
-		layoutRef.current?.stop();
-		const layout = createLayout(cy, colorMode);
-		layoutRef.current = layout;
-		layout.one("layoutstop", () => cy.fit(cy.elements(":visible"), 32));
-		layout.run();
-	}, [visibleCategories, elements]); // colorMode changes are handled by the mode effect above
 
 	function fit() {
 		cyRef.current?.fit(undefined, 32);
