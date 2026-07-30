@@ -7,7 +7,7 @@ import { join, isAbsolute, resolve } from "node:path";
 import type { ManifestEntry, RawSourceType } from "./types.js";
 import { saveRaw, saveRawFile } from "./raw-store.js";
 import { convertToExtracted } from "./source-converter.js";
-import { appendManifest, readManifest, findManifestByHash } from "./manifest-store.js";
+import { upsertManifest, readManifest, findManifestByHash } from "./manifest-store.js";
 import {
 	createSourcePage,
 	rebuildIndex,
@@ -18,7 +18,7 @@ import {
 import { queryWikiHybrid } from "./wiki-query.js";
 import { summarizeContent } from "./summarizer.js";
 import { maintainLinkedWikiPages } from "./wiki-linker.js";
-import { readText } from "../../storage/file-store.js";
+import { fileExists, readText } from "../../storage/file-store.js";
 import { parseDocument, DocumentParseError } from "./document-parser.js";
 import { getL2Memory, type L2Memory } from "./l2-memory.js";
 import { regenerateOverview } from "./overview.js";
@@ -110,11 +110,10 @@ export function createL2Tools(
 
 			const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
 
-			// Dedup: check if same content already archived
-			if (!params.force) {
-				const existing = findManifestByHash(l2DataDir, contentHash);
-				if (existing) {
-					return {
+				// Completed content is a duplicate. Incomplete records resume below.
+				const existing = !params.force ? findManifestByHash(l2DataDir, contentHash) : undefined;
+				if (existing?.status === "indexed") {
+						return {
 						content: [
 							{
 								type: "text" as const,
@@ -129,22 +128,29 @@ export function createL2Tools(
 						details: { id: existing.id, duplicate: true },
 					};
 				}
-			}
 
-			const rawPath = resolvedFilePath
-				? saveRawFile(l2DataDir, params.title, resolvedFilePath, sourceType)
-				: saveRaw(l2DataDir, params.title, content, sourceType, params.url);
+				const existingRawPath = existing?.rawPath && fileExists(join(l2DataDir, existing.rawPath))
+					? existing.rawPath
+					: undefined;
+				const rawPath = existingRawPath ?? (resolvedFilePath
+					? saveRawFile(l2DataDir, params.title, resolvedFilePath, sourceType)
+					: saveRaw(l2DataDir, params.title, content, sourceType, params.url));
 
-			const id = `l2src_${randomUUID().slice(0, 8)}`;
-			const tags = params.tags ?? [];
+				const id = existing?.id ?? `l2src_${randomUUID().slice(0, 8)}`;
+				const tags = params.tags ?? [];
 
-			// Convert to extracted markdown
-			const extractedPath = convertToExtracted(l2DataDir, params.title, content, sourceType);
+				// Convert to extracted markdown
+				const existingExtractedPath = existing?.extractedPath && fileExists(join(l2DataDir, existing.extractedPath))
+					? existing.extractedPath
+					: undefined;
+				const extractedPath = existingExtractedPath
+					?? convertToExtracted(l2DataDir, params.title, content, sourceType);
 
-			// Build manifest entry
-			const inferredOrigin = sourceType === "conversation" ? "conversation" : "user_upload";
-			const entry: ManifestEntry = {
-				id,
+				// Persist the recoverable source record before model/page work begins.
+				const inferredOrigin = sourceType === "conversation" ? "conversation" : "user_upload";
+				const entry: ManifestEntry = {
+					...existing,
+					id,
 				title: params.title,
 				sourceType,
 				rawPath,
@@ -158,49 +164,58 @@ export function createL2Tools(
 					...(params.url && { url: params.url }),
 					...(params.sessionId && { sessionId: params.sessionId }),
 				},
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			};
+					createdAt: existing?.createdAt ?? new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+				};
+				upsertManifest(l2DataDir, entry);
 
-			// Create wiki source page (with LLM summary)
-			const extractedContent = readText(join(l2DataDir, extractedPath));
-			let summaryBody = `## 摘要\n\n${extractedContent}`;
-			if (ctx.model) {
-				const summary = await summarizeContent(ctx.model, ctx.modelRegistry, params.title, extractedContent);
-				if (summary) summaryBody = summary;
-			}
-			const wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
-			const linkMaintenance = await maintainLinkedWikiPages(
-					l2DataDir,
-					entry,
-					wikiPagePath,
-					summaryBody,
-					ctx.model,
-					ctx.modelRegistry,
-					extractedContent,
-				);
-			entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
-			entry.status = "indexed";
+				let wikiPagePath = "";
+				let linkMaintenance: Awaited<ReturnType<typeof maintainLinkedWikiPages>>;
+				try {
+					// Create wiki source page (with LLM summary)
+					const extractedContent = readText(join(l2DataDir, extractedPath));
+					let summaryBody = `## 摘要\n\n${extractedContent}`;
+					if (ctx.model) {
+						const summary = await summarizeContent(ctx.model, ctx.modelRegistry, params.title, extractedContent);
+						if (summary) summaryBody = summary;
+					}
+					wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
+					linkMaintenance = await maintainLinkedWikiPages(
+						l2DataDir,
+						entry,
+						wikiPagePath,
+						summaryBody,
+						ctx.model,
+						ctx.modelRegistry,
+						extractedContent,
+					);
+					entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
+					entry.status = "indexed";
+					entry.updatedAt = new Date().toISOString();
+					upsertManifest(l2DataDir, entry);
 
-			// Write manifest
-			appendManifest(l2DataDir, entry);
+					// Rebuild index
+					const allEntries = readManifest(l2DataDir);
+					rebuildIndex(l2DataDir, allEntries);
 
-			// Rebuild index
-			const allEntries = readManifest(l2DataDir);
-			rebuildIndex(l2DataDir, allEntries);
+					// Keep the retrieval index in sync with the touched pages.
+					for (const wikiPath of entry.wikiPages) {
+						await l2Memory.indexPageByPath(wikiPath);
+					}
 
-			// Keep the retrieval index in sync with the touched pages.
-			for (const wikiPath of entry.wikiPages) {
-				await l2Memory.indexPageByPath(wikiPath);
-			}
-
-			// Regenerate the knowledge-base overview (best-effort; never fails archive).
-			try {
-				const overviewPath = await regenerateOverview(l2DataDir, ctx.model, ctx.modelRegistry);
-				if (overviewPath) await l2Memory.indexPageByPath(overviewPath);
-			} catch (err) {
-				logger.warn({ err }, "l2_archive: overview regeneration failed");
-			}
+					// Regenerate the knowledge-base overview (best-effort; never fails archive).
+					try {
+						const overviewPath = await regenerateOverview(l2DataDir, ctx.model, ctx.modelRegistry);
+						if (overviewPath) await l2Memory.indexPageByPath(overviewPath);
+					} catch (err) {
+						logger.warn({ err }, "l2_archive: overview regeneration failed");
+					}
+				} catch (err) {
+					entry.status = "error";
+					entry.updatedAt = new Date().toISOString();
+					upsertManifest(l2DataDir, entry);
+					throw err;
+				}
 
 			// Append log
 			appendLog(

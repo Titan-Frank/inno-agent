@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { L2Memory } from "./l2-memory.js";
 import { createL2Tools } from "./l2-tools.js";
-import { readManifest } from "./manifest-store.js";
+import { upsertManifest, readManifest } from "./manifest-store.js";
+import { writeText } from "../../storage/file-store.js";
 
 const tempDirs: string[] = [];
 
@@ -71,5 +73,33 @@ describe("l2_archive", () => {
 		const linkedPage = entry.wikiPages.find((pagePath) => pagePath.includes("尾部概念"));
 		expect(linkedPage).toBeDefined();
 		expect(readFileSync(join(root, linkedPage!), "utf8")).toContain(entry.id);
+	});
+
+	it("resumes an incomplete manifest record instead of duplicating the source", async () => {
+		const root = makeTempDir();
+		const content = "可恢复的资料";
+		const rawPath = "raw/uploads/existing.md";
+		const extractedPath = "extracted/existing.md";
+		writeText(join(root, rawPath), content);
+		writeText(join(root, extractedPath), content);
+		upsertManifest(root, {
+			id: "l2src_resume1",
+			title: "学习资料",
+			sourceType: "markdown",
+			rawPath,
+			extractedPath,
+			wikiPages: [],
+			tags: ["test"],
+			contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16),
+			status: "error",
+			source: { origin: "user_upload" },
+			createdAt: "2026-07-30T00:00:00.000Z",
+			updatedAt: "2026-07-30T00:00:00.000Z",
+		});
+
+		await archive(root, content);
+		const entries = readManifest(root);
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({ id: "l2src_resume1", rawPath, extractedPath, status: "indexed" });
 	});
 });

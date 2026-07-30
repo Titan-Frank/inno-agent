@@ -12,6 +12,16 @@ export function appendManifest(l2DataDir: string, entry: ManifestEntry): void {
 	appendJsonl(getManifestPath(l2DataDir), entry);
 }
 
+/** Insert a manifest entry or atomically replace the existing record with the same id. */
+export function upsertManifest(l2DataDir: string, entry: ManifestEntry): void {
+	const entries = readManifest(l2DataDir);
+	const index = entries.findIndex((candidate) => candidate.id === entry.id);
+	if (index >= 0) entries[index] = entry;
+	else entries.push(entry);
+	const lines = entries.map((candidate) => JSON.stringify(candidate)).join("\n");
+	writeText(getManifestPath(l2DataDir), lines ? `${lines}\n` : "");
+}
+
 export function readManifest(l2DataDir: string): ManifestEntry[] {
 	return readJsonl<ManifestEntry>(getManifestPath(l2DataDir));
 }
