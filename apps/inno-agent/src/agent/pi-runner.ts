@@ -438,6 +438,18 @@ export function isNativeImageCapabilityError(message: string | undefined): boole
 		!/format|mime|base64|decode|dimension|resolution|too large|file size/.test(normalized);
 }
 
+/**
+ * HTTP 413-style rejections. Reverse proxies (e.g. nginx in front of a
+ * provider) answer an oversized base64 image request with a bare
+ * "413 Request Entity Too Large" page that never mentions images, so
+ * isNativeImagePayloadError cannot catch it. Only treat this as an image
+ * payload error when the turn actually carried native images.
+ */
+export function isOversizedPayloadError(message: string | undefined): boolean {
+	if (!message) return false;
+	return /^\s*413\b|\brequest entity too large\b|\bpayload too large\b|\bcontent too large\b/i.test(message);
+}
+
 function eventErrorMessage(event: AgentSessionEvent): string | undefined {
 	if (event.type === "message_update" && event.assistantMessageEvent.type === "error") {
 		return event.assistantMessageEvent.error.errorMessage;
@@ -492,7 +504,9 @@ async function promptWithNativeImageFallback(
 	const errorMessage = thrownError instanceof Error
 		? thrownError.message
 		: lastAssistantError(session);
-	if (!isNativeImagePayloadError(errorMessage)) {
+	const payloadRejected = isNativeImagePayloadError(errorMessage) ||
+		(nativeImages?.length ? isOversizedPayloadError(errorMessage) : false);
+	if (!payloadRejected) {
 		if (thrownError) throw thrownError;
 		return;
 	}
@@ -803,6 +817,9 @@ export async function runPrompt(prompt: string, images?: ImageContent[]): Promis
 				streamError = ev.error.errorMessage || `LLM API error (stopReason: ${ev.error.stopReason})`;
 				logger.error({ errorMessage: streamError, stopReason: ev.error.stopReason, elapsedMs: Date.now() - promptStartTime }, "LLM API stream error in runPrompt");
 			}
+		} else if (event.type === "message_end") {
+			const terminalError = eventErrorMessage(event);
+			if (terminalError) streamError = terminalError;
 		} else if (event.type === "auto_retry_start") {
 			obsLogger.warn({
 				event: "auto_retry_start",
@@ -975,6 +992,14 @@ export function runPromptStreaming(
 			if (!nativeAttemptRejected || retryingWithoutNativeImages) {
 				onEvent(event);
 			}
+			// The PI SDK converts provider failures into a terminal assistant
+			// message (message_end, stopReason "error") instead of throwing —
+			// capture it so the outcome reflects the failure. A rejected native
+			// attempt also lands here but is cleared by the fallback callback.
+			if (event.type === "message_end") {
+				const terminalError = eventErrorMessage(event);
+				if (terminalError) streamError = terminalError;
+			}
 			if (event.type === "message_update") {
 				const ev = event.assistantMessageEvent;
 				if (ev.type === "text_delta") {
@@ -1070,6 +1095,12 @@ export function runPromptStreamingInSession(
 					}
 					if (!nativeAttemptRejected || retryingWithoutNativeImages) {
 						onEvent(event);
+					}
+					// See runPromptStreaming: terminal provider failures arrive as
+					// message_end with stopReason "error", not as thrown errors.
+					if (event.type === "message_end") {
+						const terminalError = eventErrorMessage(event);
+						if (terminalError) streamError = terminalError;
 					}
 					if (event.type === "message_update") {
 						const ev = event.assistantMessageEvent;
