@@ -525,9 +525,11 @@ function mimeTypeToExtension(mimeType: string): string {
 }
 
 /**
- * Prepend a path-hint block to the user prompt when inline images were
- * persisted, so the agent knows which files to pass to `ocr_image` /
- * `parse_document` when the model can't natively see images.
+ * Build the fallback prompt variant carrying the saved-image path hint, so
+ * the agent knows which files to pass to `ocr_image` / `parse_document`.
+ * Only sent when the model can't natively see images (text-only model or a
+ * rejected native payload) — vision-capable turns receive the raw prompt so
+ * they aren't steered toward `ocr_image`.
  */
 function prependImagePathsHint(prompt: string, imagePaths: string[]): string {
 	if (imagePaths.length === 0) return prompt;
@@ -4410,19 +4412,22 @@ const server = createServer(async (req, res) => {
 			const imageWorkspaceId = workspaceRegistry.getSessionWorkspaceId(imageSessionId);
 			const imageWorkspaceRoot = workspaceRegistry.resolveWorkspaceDir(imageWorkspaceId) ?? paths.workspaceDir;
 			const imagePaths = persistInlineImages(images, imageWorkspaceRoot);
-			const promptWithHint = prependImagePathsHint(prompt, imagePaths);
+			// Sent only when the images can't reach the model natively (text-only
+			// model or provider rejection); vision turns get the raw prompt so
+			// they aren't steered toward ocr_image.
+			const imageFallbackPrompt = prependImagePathsHint(prompt, imagePaths);
 			// Use atomic switch+prompt when a specific session is requested.
 			let output: string;
 			try {
 				if (requestedSessionId) {
 					const sessionPath = sessionFileFromId(join(dataDir, "sessions"), requestedSessionId);
 					if (sessionPath && existsSync(sessionPath)) {
-						output = await runPromptInSession(sessionPath, promptWithHint, images.length ? images : undefined);
+						output = await runPromptInSession(sessionPath, prompt, images.length ? images : undefined, imageFallbackPrompt);
 					} else {
-						output = await runPromptSerialized(promptWithHint, images.length ? images : undefined);
+						output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt);
 					}
 				} else {
-					output = await runPromptSerialized(promptWithHint, images.length ? images : undefined);
+					output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt);
 				}
 			} catch (err) {
 				logger.error({ err, sessionId: requestedSessionId }, "Non-streaming chat LLM call failed");
@@ -4585,7 +4590,10 @@ const server = createServer(async (req, res) => {
 			// Persist inline images to the workspace so file-path tools (ocr_image,
 			// parse_document) can read them when the chat model can't see images.
 			const imagePaths = persistInlineImages(images, streamWorkspaceRoot);
-			const promptWithHint = prependImagePathsHint(prompt, imagePaths);
+			// Sent only when the images can't reach the model natively (text-only
+			// model or provider rejection); vision turns get the raw prompt so
+			// they aren't steered toward ocr_image.
+			const imageFallbackPrompt = prependImagePathsHint(prompt, imagePaths);
 			const imageArgs = images.length ? images : undefined;
 			const baseline = readSessionBaseline(targetSessionPath);
 			let state: SessionStreamState;
@@ -4725,7 +4733,7 @@ const server = createServer(async (req, res) => {
 
 			promptStartTime = Date.now();
 			try {
-				await runPromptStreamingInSession(targetSessionPath, promptWithHint, onEvent, imageArgs, {
+				await runPromptStreamingInSession(targetSessionPath, prompt, onEvent, imageArgs, {
 					token: state.turnId,
 					shouldStart: () => !state.cancelRequested,
 					isCancellationRequested: () => state.cancelRequested,
@@ -4794,7 +4802,7 @@ const server = createServer(async (req, res) => {
 							}
 						}
 					},
-				}, streamWorkspaceRoot);
+				}, streamWorkspaceRoot, imageFallbackPrompt);
 			} catch (err) {
 				logger.error({ err, sessionId: state.sessionId, turnId: state.turnId }, "SSE chat turn failed");
 			} finally {

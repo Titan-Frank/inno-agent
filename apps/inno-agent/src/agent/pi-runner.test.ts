@@ -3,6 +3,7 @@ import {
 	finalizePromptRun,
 	isNativeImageCapabilityError,
 	isNativeImagePayloadError,
+	isOversizedPayloadError,
 	nativeImageModelKey,
 	type PromptRunLifecycle,
 	type PromptRunOutcome,
@@ -43,6 +44,7 @@ describe("native image fallback classification", () => {
 		"unknown variant 'image_url', expected 'text'",
 		"This model does not support image input",
 		"Vision content is unsupported by this endpoint",
+		"400 Model only support text input Request id: 0217855120827721",
 	])("recognizes provider capability rejection: %s", (message) => {
 		expect(isNativeImagePayloadError(message)).toBe(true);
 		expect(isNativeImageCapabilityError(message)).toBe(true);
@@ -74,5 +76,27 @@ describe("native image fallback classification", () => {
 			model: { provider: "custom", baseUrl: "https://two.example/v1", id: "vision" },
 		} as never);
 		expect(first).not.toBe(second);
+	});
+});
+
+describe("oversized payload classification", () => {
+	it.each([
+		"413 <html><head><title>413 Request Entity Too Large</title></head></html>",
+		"413 Request Entity Too Large",
+		"request entity too large",
+		"Payload Too Large",
+	])("recognizes a proxy-level oversized rejection: %s", (message) => {
+		expect(isOversizedPayloadError(message)).toBe(true);
+		// Never a capability rejection: the model may still accept smaller images.
+		expect(isNativeImageCapabilityError(message)).toBe(false);
+	});
+
+	it.each([
+		"401 unauthorized",
+		"rate limit exceeded",
+		"unknown variant 'image_url', expected 'text'",
+		undefined,
+	])("ignores unrelated errors: %s", (message) => {
+		expect(isOversizedPayloadError(message)).toBe(false);
 	});
 });

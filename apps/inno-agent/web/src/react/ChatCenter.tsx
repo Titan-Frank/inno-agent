@@ -33,6 +33,99 @@ const PASTE_COLLAPSE_CHARS = 2000;
 const LONG_ASSISTANT_CHARS = 6000;
 const LONG_ASSISTANT_LINES = 140;
 
+// Inline chat images are sent to the provider as base64 inside the JSON body.
+// Full-resolution photos (3–10 MB, +33% once base64-encoded) blow past the
+// body-size limit of reverse proxies in front of providers (nginx defaults to
+// 1 MB) and come back as HTTP 413, silently demoting the turn to the OCR
+// fallback. Downscale/re-encode before sending so native vision turns
+// actually reach the model. The target is deliberately well under 1 MB:
+// base64 inflates ~4/3 and the body also carries the system prompt and
+// conversation history.
+const INLINE_IMAGE_MAX_DIMENSION = 1280;
+const INLINE_IMAGE_TARGET_BYTES = 380 * 1024;
+const INLINE_IMAGE_MAX_BYTES = 500 * 1024;
+
+type PreparedInlineImage = InlineImage & { name: string; previewUrl: string };
+
+function rawInlineImage(file: File, dataUrl: string): PreparedInlineImage {
+	const commaIdx = dataUrl.indexOf(",");
+	const header = dataUrl.slice(0, commaIdx);
+	return {
+		data: dataUrl.slice(commaIdx + 1),
+		mimeType: header.match(/:(.*?);/)?.[1] ?? file.type,
+		name: file.name || "image",
+		previewUrl: dataUrl,
+	};
+}
+
+/** Binary size estimate of a base64 data URL payload. */
+function dataUrlBytes(dataUrl: string): number {
+	return Math.floor((dataUrl.length - dataUrl.indexOf(",") - 1) * 3 / 4);
+}
+
+/**
+ * Re-encode as JPEG, shrinking quality first and then dimensions until the
+ * payload fits INLINE_IMAGE_TARGET_BYTES. Returns the smallest result even
+ * when the target can't be reached.
+ */
+function downscaleToFit(img: HTMLImageElement): string | undefined {
+	const canvas = document.createElement("canvas");
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return undefined;
+	let scale = Math.min(1, INLINE_IMAGE_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+	let quality = 0.8;
+	let best: string | undefined;
+	for (let attempt = 0; attempt < 5; attempt++) {
+		canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+		canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+		// Flatten alpha onto white — JPEG has no transparency.
+		ctx.fillStyle = "#ffffff";
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+		const outUrl = canvas.toDataURL("image/jpeg", quality);
+		if (!best || outUrl.length < best.length) best = outUrl;
+		if (dataUrlBytes(outUrl) <= INLINE_IMAGE_TARGET_BYTES) break;
+		if (quality > 0.5) {
+			quality -= 0.15;
+		} else {
+			scale *= 0.75;
+			quality = 0.7;
+		}
+	}
+	return best;
+}
+
+async function prepareInlineImage(file: File): Promise<PreparedInlineImage> {
+	const dataUrl = await new Promise<string>((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(reader.result as string);
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+	const passthrough = () => rawInlineImage(file, dataUrl);
+	if (file.size <= INLINE_IMAGE_MAX_BYTES) return passthrough();
+	try {
+		const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+			// `Image` the DOM constructor is shadowed by the lucide icon import.
+			const el = document.createElement("img");
+			el.onload = () => resolve(el);
+			el.onerror = () => reject(new Error("image decode failed"));
+			el.src = dataUrl;
+		});
+		const outUrl = downscaleToFit(img);
+		// Keep the original if re-encoding failed or produced a larger payload.
+		if (!outUrl || outUrl.length >= dataUrl.length) return passthrough();
+		return {
+			data: outUrl.slice(outUrl.indexOf(",") + 1),
+			mimeType: "image/jpeg",
+			name: file.name || "image",
+			previewUrl: outUrl,
+		};
+	} catch {
+		return passthrough();
+	}
+}
+
 interface PendingUpload {
 	fileName: string;
 	path: string;
@@ -764,16 +857,9 @@ export function ChatCenter() {
 
 	const addImageFiles = useCallback((files: File[]) => {
 		files.forEach((file) => {
-			const reader = new FileReader();
-			reader.onload = () => {
-				const dataUrl = reader.result as string;
-				const commaIdx = dataUrl.indexOf(",");
-				const header = dataUrl.slice(0, commaIdx);
-				const data = dataUrl.slice(commaIdx + 1);
-				const mimeType = header.match(/:(.*?);/)?.[1] ?? file.type;
-				setInlineImages((prev) => [...prev, { data, mimeType, name: file.name || "image", previewUrl: dataUrl }]);
-			};
-			reader.readAsDataURL(file);
+			void prepareInlineImage(file).then((prepared) => {
+				setInlineImages((prev) => [...prev, prepared]);
+			});
 		});
 	}, []);
 
