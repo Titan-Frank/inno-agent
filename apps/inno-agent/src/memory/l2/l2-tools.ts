@@ -25,6 +25,24 @@ import { regenerateOverview } from "./overview.js";
 import { formatL2LintReport, runL2Lint } from "./l2-lint.js";
 import { logger } from "../../logger.js";
 
+// PI may dispatch several archive tool calls from one turn concurrently.
+const archiveQueueTails = new Map<string, Promise<void>>();
+
+function enqueueArchive<T>(l2DataDir: string, task: () => Promise<T>): Promise<T> {
+	const queueKey = resolve(l2DataDir);
+	const previous = archiveQueueTails.get(queueKey) ?? Promise.resolve();
+	const run = previous.then(task, task);
+	const tail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	archiveQueueTails.set(queueKey, tail);
+
+	return run.finally(() => {
+		if (archiveQueueTails.get(queueKey) === tail) archiveQueueTails.delete(queueKey);
+	});
+}
+
 /**
  * Create L2 Wiki memory tools for the Inno Agent.
  * When `isEnabled` is provided and returns false, the archive/query tools
@@ -73,6 +91,7 @@ export function createL2Tools(
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (isEnabled && !isEnabled()) return l2DisabledResult();
+			return enqueueArchive(l2DataDir, async () => {
 			ensureL2Directories(l2DataDir);
 			const maintenanceContext = readMaintenanceContext(l2DataDir);
 
@@ -257,6 +276,7 @@ export function createL2Tools(
 				],
 				details: { id, rawPath, wikiPagePath, linkedPages: linkMaintenance.pages },
 			};
+			});
 		},
 	});
 

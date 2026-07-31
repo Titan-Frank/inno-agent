@@ -43,6 +43,31 @@ async function archive(root: string, content: string) {
 	);
 }
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+async function archiveFile(
+	tool: ReturnType<typeof createL2Tools>[number],
+	callId: string,
+	title: string,
+	filePath: string,
+) {
+	return (tool.execute as (...args: any[]) => Promise<any>)(
+		callId,
+		{ title, filePath, sourceType: "pdf", tags: ["test"] },
+		undefined,
+		undefined,
+		{ model: undefined, modelRegistry: undefined },
+	);
+}
+
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	parseDocumentMock.mockReset();
@@ -160,5 +185,104 @@ describe("l2_archive", () => {
 		const entry = readManifest(root)[0];
 		expect(readFileSync(join(root, entry.rawPath), "utf8")).toBe("%PDF-active-workspace");
 		expect(readFileSync(join(root, entry.extractedPath!), "utf8")).toContain("当前会话工作区中的完整资料");
+	});
+
+	it("serializes concurrent archives that target the same L2 directory", async () => {
+		const root = makeTempDir();
+		const firstFile = join(makeTempDir(), "first.pdf");
+		const secondFile = join(makeTempDir(), "second.pdf");
+		writeFileSync(firstFile, "%PDF-first");
+		writeFileSync(secondFile, "%PDF-second");
+		const firstParse = deferred<{ text: string; pageCount: number; pages: Array<{ pageNumber: number; text: string }> }>();
+		parseDocumentMock
+			.mockImplementationOnce(() => firstParse.promise)
+			.mockResolvedValueOnce({
+				text: "第二篇资料",
+				pageCount: 1,
+				pages: [{ pageNumber: 1, text: "第二篇资料" }],
+			});
+
+		const firstTool = createL2Tools(root, undefined, fakeMemory(root))[0];
+		const secondTool = createL2Tools(root, undefined, fakeMemory(root))[0];
+		const firstArchive = archiveFile(firstTool, "call-first", "第一篇", firstFile);
+		await vi.waitFor(() => expect(parseDocumentMock).toHaveBeenCalledTimes(1));
+
+		const secondArchive = archiveFile(secondTool, "call-second", "第二篇", secondFile);
+		await Promise.resolve();
+		expect(parseDocumentMock).toHaveBeenCalledTimes(1);
+
+		firstParse.resolve({
+			text: "第一篇资料",
+			pageCount: 1,
+			pages: [{ pageNumber: 1, text: "第一篇资料" }],
+		});
+		await Promise.all([firstArchive, secondArchive]);
+
+		expect(parseDocumentMock.mock.calls.map(([filePath]) => filePath)).toEqual([firstFile, secondFile]);
+		expect(readManifest(root).map((entry) => entry.title)).toEqual(["第一篇", "第二篇"]);
+	});
+
+	it("continues the archive queue after an earlier archive fails", async () => {
+		const root = makeTempDir();
+		const firstIndex = deferred<void>();
+		const memory = fakeMemory(root);
+		vi.mocked(memory.indexPageByPath)
+			.mockImplementationOnce(() => firstIndex.promise)
+			.mockResolvedValue(undefined);
+		const firstTool = createL2Tools(root, undefined, memory)[0];
+		const secondTool = createL2Tools(root, undefined, memory)[0];
+
+		const firstArchive = (firstTool.execute as (...args: any[]) => Promise<any>)(
+			"call-first",
+			{ title: "失败资料", content: "第一篇正文", sourceType: "markdown" },
+			undefined,
+			undefined,
+			{ model: undefined, modelRegistry: undefined },
+		);
+		await vi.waitFor(() => expect(memory.indexPageByPath).toHaveBeenCalledTimes(1));
+		const secondArchive = (secondTool.execute as (...args: any[]) => Promise<any>)(
+			"call-second",
+			{ title: "后续资料", content: "第二篇正文", sourceType: "markdown" },
+			undefined,
+			undefined,
+			{ model: undefined, modelRegistry: undefined },
+		);
+		await Promise.resolve();
+		expect(readManifest(root)).toHaveLength(1);
+
+		firstIndex.reject(new Error("index failed"));
+		await expect(firstArchive).rejects.toThrow("index failed");
+		await expect(secondArchive).resolves.toMatchObject({ details: { wikiPagePath: expect.any(String) } });
+		expect(readManifest(root).find((entry) => entry.title === "后续资料")?.status).toBe("indexed");
+	});
+
+	it("does not serialize archives that target different L2 directories", async () => {
+		const firstRoot = makeTempDir();
+		const secondRoot = makeTempDir();
+		const firstFile = join(makeTempDir(), "first.pdf");
+		const secondFile = join(makeTempDir(), "second.pdf");
+		writeFileSync(firstFile, "%PDF-first");
+		writeFileSync(secondFile, "%PDF-second");
+		const firstParse = deferred<{ text: string; pageCount: number; pages: Array<{ pageNumber: number; text: string }> }>();
+		parseDocumentMock
+			.mockImplementationOnce(() => firstParse.promise)
+			.mockResolvedValueOnce({
+				text: "第二个知识库的资料",
+				pageCount: 1,
+				pages: [{ pageNumber: 1, text: "第二个知识库的资料" }],
+			});
+
+		const firstArchive = archiveFile(createL2Tools(firstRoot, undefined, fakeMemory(firstRoot))[0], "call-first", "第一篇", firstFile);
+		await vi.waitFor(() => expect(parseDocumentMock).toHaveBeenCalledTimes(1));
+		const secondArchive = archiveFile(createL2Tools(secondRoot, undefined, fakeMemory(secondRoot))[0], "call-second", "第二篇", secondFile);
+		await vi.waitFor(() => expect(parseDocumentMock).toHaveBeenCalledTimes(2));
+		await secondArchive;
+
+		firstParse.resolve({
+			text: "第一个知识库的资料",
+			pageCount: 1,
+			pages: [{ pageNumber: 1, text: "第一个知识库的资料" }],
+		});
+		await firstArchive;
 	});
 });
