@@ -376,6 +376,36 @@ function modelAllowsNativeImages(session: AgentSession): boolean {
 
 type AgentMessages = AgentSession["agent"]["state"]["messages"];
 
+function isImageBlock(item: unknown): boolean {
+	return Boolean(
+		item && typeof item === "object" &&
+		["image", "image_url"].includes(String((item as { type?: unknown }).type)),
+	);
+}
+
+function messageHasImageBlock(message: unknown): boolean {
+	const content = (message as { content?: unknown }).content;
+	return Array.isArray(content) && content.some(isImageBlock);
+}
+
+/** Index of the last user message (the current turn), or -1. */
+function lastUserMessageIndex(messages: AgentMessages): number {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		if (messages[index].role === "user") return index;
+	}
+	return -1;
+}
+
+/**
+ * Image blocks anywhere in the context except the current turn's user
+ * message. History images are re-sent with every request, so they are what
+ * makes follow-up turns 413 even when the current turn carries no image.
+ */
+function hasHistoryImageBlocks(messages: AgentMessages): boolean {
+	const currentTurn = lastUserMessageIndex(messages);
+	return messages.some((message, index) => index !== currentTurn && messageHasImageBlock(message));
+}
+
 const NATIVE_IMAGE_OMITTED_NOTICE = [
 	"[当前 Provider 无法接收图片内容，因此这张图片没有发送给模型。",
 	"你并没有看到图片；不要猜测或声称已经看到。",
@@ -384,19 +414,44 @@ const NATIVE_IMAGE_OMITTED_NOTICE = [
 	"如果 OCR 无法提供足够信息，请明确说明限制。]",
 ].join("");
 
+const HISTORY_IMAGE_OMITTED_NOTICE = [
+	"[较早轮次的图片已从本次请求的上下文中移除（请求体过大）。",
+	"你当前只能看到本轮新发送的图片；不要声称看到了被移除的历史图片。]",
+].join("");
+
 function withoutNativeImageBlocks(messages: AgentMessages): AgentMessages {
 	return messages.map((message) => {
 		const content = (message as { content?: unknown }).content;
 		if (!Array.isArray(content)) return message;
-		const filtered = content.filter((item) =>
-			!(item && typeof item === "object" &&
-				["image", "image_url"].includes(String((item as { type?: unknown }).type))));
+		const filtered = content.filter((item) => !isImageBlock(item));
 		if (filtered.length === content.length) return message;
 		return {
 			...message,
 			content: filtered.length > 0
 				? [...filtered, { type: "text", text: NATIVE_IMAGE_OMITTED_NOTICE }]
 				: [{ type: "text", text: NATIVE_IMAGE_OMITTED_NOTICE }],
+		};
+	}) as AgentMessages;
+}
+
+/**
+ * Strip image blocks from history only, keeping the current turn's images.
+ * Used for the first retry after an oversized-body (413) rejection so a
+ * vision turn keeps its own images while the accumulated history shrinks.
+ */
+function withoutHistoryImageBlocks(messages: AgentMessages): AgentMessages {
+	const currentTurn = lastUserMessageIndex(messages);
+	return messages.map((message, index) => {
+		if (index === currentTurn) return message;
+		const content = (message as { content?: unknown }).content;
+		if (!Array.isArray(content)) return message;
+		const filtered = content.filter((item) => !isImageBlock(item));
+		if (filtered.length === content.length) return message;
+		return {
+			...message,
+			content: filtered.length > 0
+				? [...filtered, { type: "text", text: HISTORY_IMAGE_OMITTED_NOTICE }]
+				: [{ type: "text", text: HISTORY_IMAGE_OMITTED_NOTICE }],
 		};
 	}) as AgentMessages;
 }
@@ -419,9 +474,35 @@ async function promptWithoutNativeImages(
 	}
 }
 
+/**
+ * Send the prompt with the current turn's images but history image blocks
+ * stripped — the first retry after an oversized-body (413) rejection.
+ */
+async function promptWithTrimmedHistoryImages(
+	session: AgentSession,
+	prompt: string,
+	nativeImages: ImageContent[] | undefined,
+): Promise<void> {
+	const originalTransform = session.agent.transformContext;
+	session.agent.transformContext = async (messages, signal) => {
+		const transformed = originalTransform
+			? await originalTransform(messages, signal)
+			: messages;
+		return withoutHistoryImageBlocks(transformed);
+	};
+	try {
+		await session.prompt(prompt, nativeImages?.length ? { images: nativeImages } : undefined);
+	} finally {
+		session.agent.transformContext = originalTransform;
+	}
+}
+
 export function isNativeImagePayloadError(message: string | undefined): boolean {
 	if (!message) return false;
 	const normalized = message.toLowerCase();
+	// Text-only deployments that answer image requests with a plain
+	// "model only support(s) text input" 400 — no image keyword at all.
+	if (/only supports? text( |-)?input/.test(normalized)) return true;
 	const mentionsImagePayload = /image_url|image message|image input|image content|vision/.test(normalized);
 	const rejectsPayload = /unknown variant|expected [`'"]?text|unsupported|not support|does not support|invalid|malformed|decode failed|too large/.test(normalized);
 	return mentionsImagePayload && rejectsPayload;
@@ -430,6 +511,7 @@ export function isNativeImagePayloadError(message: string | undefined): boolean 
 export function isNativeImageCapabilityError(message: string | undefined): boolean {
 	if (!message) return false;
 	const normalized = message.toLowerCase();
+	if (/only supports? text( |-)?input/.test(normalized)) return true;
 	if (/unknown variant.{0,80}image_url|image_url.{0,80}unknown variant/.test(normalized)) return true;
 	if (/expected [`'"]?text.{0,80}(?:image|vision)|(?:image|vision).{0,80}expected [`'"]?text/.test(normalized)) {
 		return true;
@@ -482,15 +564,42 @@ function restoreSessionBeforeFailedPrompt(session: AgentSession, previousLeafId:
 	session.agent.state.messages = session.sessionManager.buildSessionContext().messages;
 }
 
+/**
+ * Callbacks for the tiered native-image retry. `onRetry` fires before the
+ * history-trimming retry (the turn keeps its images, so it is NOT a fallback
+ * to OCR); `onFallback` fires before the final OCR-friendly retry.
+ */
+export interface NativeImageRetryCallbacks {
+	onRetry?: () => void;
+	onFallback: (errorMessage: string) => void;
+}
+
+/**
+ * Run a prompt with native images, degrading gracefully when the
+ * model/provider cannot accept them:
+ *
+ *  1. Native attempt (current turn's images + full history).
+ *  2. On an oversized-body rejection (413) with images anywhere in the
+ *     context: retry with history image blocks stripped but the current
+ *     turn's images kept. History images are re-sent with every request, so
+ *     they are what 413s follow-up turns even when the current turn is
+ *     small or carries no image at all.
+ *  3. On a payload rejection (or a second 413): restore the session and
+ *     retry with all image blocks stripped, using `fallbackPrompt` — the
+ *     variant of `prompt` carrying the saved-image path hint for
+ *     `ocr_image`. Vision-capable turns never see that hint, so they are not
+ *     steered toward `ocr_image`.
+ */
 async function promptWithNativeImageFallback(
 	session: AgentSession,
 	prompt: string,
 	nativeImages: ImageContent[] | undefined,
-	onFallback: (errorMessage: string) => void,
+	callbacks: NativeImageRetryCallbacks,
+	fallbackPrompt?: string,
 ): Promise<void> {
 	const allowsNativeImages = modelAllowsNativeImages(session);
 	if (!allowsNativeImages) {
-		await promptWithoutNativeImages(session, prompt);
+		await promptWithoutNativeImages(session, fallbackPrompt ?? prompt);
 		return;
 	}
 
@@ -501,11 +610,42 @@ async function promptWithNativeImageFallback(
 	} catch (error) {
 		thrownError = error;
 	}
-	const errorMessage = thrownError instanceof Error
+	let errorMessage = thrownError instanceof Error
 		? thrownError.message
 		: lastAssistantError(session);
+
+	// Tier 2: oversized body with images in history — trim history images and
+	// retry while keeping the current turn's images.
+	if (
+		errorMessage &&
+		isOversizedPayloadError(errorMessage) &&
+		hasHistoryImageBlocks(session.messages)
+	) {
+		logger.warn(
+			{
+				provider: session.model?.provider,
+				model: session.model?.id,
+				errorMessage,
+			},
+			"request body too large; retrying the turn with history images stripped from context",
+		);
+		restoreSessionBeforeFailedPrompt(session, previousLeafId);
+		callbacks.onRetry?.();
+		thrownError = undefined;
+		try {
+			await promptWithTrimmedHistoryImages(session, prompt, nativeImages);
+		} catch (error) {
+			thrownError = error;
+		}
+		errorMessage = thrownError instanceof Error
+			? thrownError.message
+			: lastAssistantError(session);
+		if (!errorMessage) return;
+	}
+
+	const contextHasImages = Boolean(nativeImages?.length) || hasHistoryImageBlocks(session.messages);
 	const payloadRejected = isNativeImagePayloadError(errorMessage) ||
-		(nativeImages?.length ? isOversizedPayloadError(errorMessage) : false);
+		(contextHasImages && isOversizedPayloadError(errorMessage));
 	if (!payloadRejected) {
 		if (thrownError) throw thrownError;
 		return;
@@ -523,8 +663,8 @@ async function promptWithNativeImageFallback(
 		"provider rejected native image payload; retrying the turn with workspace OCR fallback",
 	);
 	restoreSessionBeforeFailedPrompt(session, previousLeafId);
-	onFallback(errorMessage ?? "Provider rejected the native image payload.");
-	await promptWithoutNativeImages(session, prompt);
+	callbacks.onFallback(errorMessage ?? "Provider rejected the native image payload.");
+	await promptWithoutNativeImages(session, fallbackPrompt ?? prompt);
 }
 
 /**
@@ -796,8 +936,10 @@ export function getLoadedSkills() {
 /**
  * Run a prompt through the session and collect the full text response.
  * Optionally pass images (base64 encoded) for multimodal input.
+ * `imageFallbackPrompt` is sent instead of `prompt` when the images cannot go
+ * to the model natively (text-only model or provider rejection).
  */
-export async function runPrompt(prompt: string, images?: ImageContent[]): Promise<string> {
+export async function runPrompt(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
 	const session = getSession();
 
 	let output = "";
@@ -849,10 +991,14 @@ export async function runPrompt(prompt: string, images?: ImageContent[]): Promis
 
 	try {
 		const nativeImages = nativeImagesForSession(session, images);
-		await promptWithNativeImageFallback(session, prompt, nativeImages, () => {
+		const resetAttempt = () => {
 			output = "";
 			streamError = undefined;
-		});
+		};
+		await promptWithNativeImageFallback(session, prompt, nativeImages, {
+			onRetry: resetAttempt,
+			onFallback: resetAttempt,
+		}, imageFallbackPrompt);
 	} finally {
 		unsubscribe();
 		obsUnsub();
@@ -873,8 +1019,8 @@ export async function runPrompt(prompt: string, images?: ImageContent[]): Promis
  * Run a prompt with serialized access (only one prompt at a time).
  * All concurrent calls are queued and executed sequentially.
  */
-export function runPromptSerialized(prompt: string, images?: ImageContent[]): Promise<string> {
-	return enqueue(() => runPrompt(prompt, images));
+export function runPromptSerialized(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
+	return enqueue(() => runPrompt(prompt, images, imageFallbackPrompt));
 }
 
 /**
@@ -886,10 +1032,11 @@ export function runPromptInSession(
 	sessionPath: string,
 	prompt: string,
 	images?: ImageContent[],
+	imageFallbackPrompt?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		await switchToSession(sessionPath);
-		return runPrompt(prompt, images);
+		return runPrompt(prompt, images, imageFallbackPrompt);
 	});
 }
 
@@ -968,6 +1115,7 @@ export function runPromptStreaming(
 	prompt: string,
 	onEvent: StreamEventCallback,
 	images?: ImageContent[],
+	imageFallbackPrompt?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		const session = getSession();
@@ -1035,11 +1183,18 @@ export function runPromptStreaming(
 			}
 		});
 		try {
-			await promptWithNativeImageFallback(session, prompt, nativeImages, () => {
-				retryingWithoutNativeImages = true;
-				output = "";
-				streamError = undefined;
-			});
+			await promptWithNativeImageFallback(session, prompt, nativeImages, {
+				onRetry: () => {
+					nativeAttemptRejected = false;
+					output = "";
+					streamError = undefined;
+				},
+				onFallback: () => {
+					retryingWithoutNativeImages = true;
+					output = "";
+					streamError = undefined;
+				},
+			}, imageFallbackPrompt);
 		} finally {
 			unsubscribe();
 			obsUnsub();
@@ -1067,6 +1222,7 @@ export function runPromptStreamingInSession(
 	images?: ImageContent[],
 	lifecycle?: PromptRunLifecycle,
 	cwdOverride?: string,
+	imageFallbackPrompt?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		let output = "";
@@ -1112,11 +1268,18 @@ export function runPromptStreamingInSession(
 					}
 				});
 				try {
-					await promptWithNativeImageFallback(session, prompt, nativeImages, () => {
-						retryingWithoutNativeImages = true;
-						output = "";
-						streamError = undefined;
-					});
+					await promptWithNativeImageFallback(session, prompt, nativeImages, {
+						onRetry: () => {
+							nativeAttemptRejected = false;
+							output = "";
+							streamError = undefined;
+						},
+						onFallback: () => {
+							retryingWithoutNativeImages = true;
+							output = "";
+							streamError = undefined;
+						},
+					}, imageFallbackPrompt);
 				} finally {
 					unsubscribe();
 					obsUnsub();
