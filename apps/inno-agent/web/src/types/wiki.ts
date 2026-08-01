@@ -31,6 +31,7 @@ export interface WikiPageDetail {
 export interface WikiGraphData {
 	nodes: WikiGraphNode[];
 	edges: WikiGraphEdge[];
+	communities?: WikiGraphCommunities;
 }
 
 export interface WikiGraphNode {
@@ -38,12 +39,21 @@ export interface WikiGraphNode {
 	title: string;
 	type: WikiPageType | "tag";
 	tags: string[];
+	degree?: number;
+	community?: number;
 }
 
 export interface WikiGraphEdge {
 	source: string;
 	target: string;
 	type: "link" | "tag";
+	weight?: number;
+}
+
+export interface WikiGraphCommunities {
+	count: number;
+	modularity: number;
+	lowCohesion: { community: number; cohesion: number; size: number }[];
 }
 
 export interface WikiStats {

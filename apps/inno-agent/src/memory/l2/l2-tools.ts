@@ -7,7 +7,7 @@ import { join, isAbsolute, resolve } from "node:path";
 import type { ManifestEntry, RawSourceType } from "./types.js";
 import { saveRaw, saveRawFile } from "./raw-store.js";
 import { convertToExtracted } from "./source-converter.js";
-import { appendManifest, readManifest, findManifestByHash } from "./manifest-store.js";
+import { upsertManifest, readManifest, findManifestByHash } from "./manifest-store.js";
 import {
 	createSourcePage,
 	rebuildIndex,
@@ -15,14 +15,33 @@ import {
 	ensureL2Directories,
 	readMaintenanceContext,
 } from "./wiki-maintainer.js";
-import { queryWikiHybrid } from "./wiki-query.js";
+import { queryWikiHybridDetailed } from "./wiki-query.js";
 import { summarizeContent } from "./summarizer.js";
 import { maintainLinkedWikiPages } from "./wiki-linker.js";
-import { readText } from "../../storage/file-store.js";
+import { fileExists, readText } from "../../storage/file-store.js";
 import { parseDocument, DocumentParseError } from "./document-parser.js";
 import { getL2Memory, type L2Memory } from "./l2-memory.js";
 import { regenerateOverview } from "./overview.js";
+import { formatL2LintReport, runL2Lint } from "./l2-lint.js";
 import { logger } from "../../logger.js";
+
+// PI may dispatch several archive tool calls from one turn concurrently.
+const archiveQueueTails = new Map<string, Promise<void>>();
+
+function enqueueArchive<T>(l2DataDir: string, task: () => Promise<T>): Promise<T> {
+	const queueKey = resolve(l2DataDir);
+	const previous = archiveQueueTails.get(queueKey) ?? Promise.resolve();
+	const run = previous.then(task, task);
+	const tail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	archiveQueueTails.set(queueKey, tail);
+
+	return run.finally(() => {
+		if (archiveQueueTails.get(queueKey) === tail) archiveQueueTails.delete(queueKey);
+	});
+}
 
 /**
  * Create L2 Wiki memory tools for the Inno Agent.
@@ -30,11 +49,15 @@ import { logger } from "../../logger.js";
  * short-circuit to a disabled notice without touching the knowledge base.
  * `l2Memory` keeps the retrieval index in sync; defaults to the per-dir
  * singleton so callers that don't pass one still get index maintenance.
+ * `getActiveWorkspaceDir` resolves relative file paths for the current
+ * session; server callers must keep this dynamic because sessions can switch
+ * workspaces without recreating the extension.
  */
 export function createL2Tools(
 	l2DataDir: string,
 	isEnabled?: () => boolean,
 	l2Memory: L2Memory = getL2Memory(l2DataDir),
+	getActiveWorkspaceDir?: () => string,
 ): ToolDefinition[] {
 	const l2DisabledResult = () => ({
 		content: [{ type: "text" as const, text: "L2 Wiki 知识库已在设置中关闭，当前不归档也不检索知识库内容。" }],
@@ -68,6 +91,7 @@ export function createL2Tools(
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (isEnabled && !isEnabled()) return l2DisabledResult();
+			return enqueueArchive(l2DataDir, async () => {
 			ensureL2Directories(l2DataDir);
 			const maintenanceContext = readMaintenanceContext(l2DataDir);
 
@@ -80,7 +104,7 @@ export function createL2Tools(
 
 			if (isFileType && params.filePath) {
 				// File-based: parse with LiteParse
-				const workspaceDir = process.env.INNO_WORKSPACE_DIR || process.cwd();
+				const workspaceDir = getActiveWorkspaceDir?.() || process.env.INNO_WORKSPACE_DIR || process.cwd();
 				resolvedFilePath = isAbsolute(params.filePath)
 					? params.filePath
 					: resolve(workspaceDir, params.filePath);
@@ -110,11 +134,10 @@ export function createL2Tools(
 
 			const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
 
-			// Dedup: check if same content already archived
-			if (!params.force) {
-				const existing = findManifestByHash(l2DataDir, contentHash);
-				if (existing) {
-					return {
+				// Completed content is a duplicate. Incomplete records resume below.
+				const existing = !params.force ? findManifestByHash(l2DataDir, contentHash) : undefined;
+				if (existing?.status === "indexed") {
+						return {
 						content: [
 							{
 								type: "text" as const,
@@ -129,22 +152,29 @@ export function createL2Tools(
 						details: { id: existing.id, duplicate: true },
 					};
 				}
-			}
 
-			const rawPath = resolvedFilePath
-				? saveRawFile(l2DataDir, params.title, resolvedFilePath, sourceType)
-				: saveRaw(l2DataDir, params.title, content, sourceType, params.url);
+				const existingRawPath = existing?.rawPath && fileExists(join(l2DataDir, existing.rawPath))
+					? existing.rawPath
+					: undefined;
+				const rawPath = existingRawPath ?? (resolvedFilePath
+					? saveRawFile(l2DataDir, params.title, resolvedFilePath, sourceType)
+					: saveRaw(l2DataDir, params.title, content, sourceType, params.url));
 
-			const id = `l2src_${randomUUID().slice(0, 8)}`;
-			const tags = params.tags ?? [];
+				const id = existing?.id ?? `l2src_${randomUUID().slice(0, 8)}`;
+				const tags = params.tags ?? [];
 
-			// Convert to extracted markdown
-			const extractedPath = convertToExtracted(l2DataDir, params.title, content, sourceType);
+				// Convert to extracted markdown
+				const existingExtractedPath = existing?.extractedPath && fileExists(join(l2DataDir, existing.extractedPath))
+					? existing.extractedPath
+					: undefined;
+				const extractedPath = existingExtractedPath
+					?? convertToExtracted(l2DataDir, params.title, content, sourceType);
 
-			// Build manifest entry
-			const inferredOrigin = sourceType === "conversation" ? "conversation" : "user_upload";
-			const entry: ManifestEntry = {
-				id,
+				// Persist the recoverable source record before model/page work begins.
+				const inferredOrigin = sourceType === "conversation" ? "conversation" : "user_upload";
+				const entry: ManifestEntry = {
+					...existing,
+					id,
 				title: params.title,
 				sourceType,
 				rawPath,
@@ -158,48 +188,60 @@ export function createL2Tools(
 					...(params.url && { url: params.url }),
 					...(params.sessionId && { sessionId: params.sessionId }),
 				},
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			};
+					createdAt: existing?.createdAt ?? new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+				};
+				upsertManifest(l2DataDir, entry);
 
-			// Create wiki source page (with LLM summary)
-			const extractedContent = readText(join(l2DataDir, extractedPath));
-			let summaryBody = `## 摘要\n\n${extractedContent}`;
-			if (ctx.model) {
-				const summary = await summarizeContent(ctx.model, ctx.modelRegistry, params.title, extractedContent);
-				if (summary) summaryBody = summary;
-			}
-			const wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
-			const linkMaintenance = await maintainLinkedWikiPages(
-				l2DataDir,
-				entry,
-				wikiPagePath,
-				summaryBody,
-				ctx.model,
-				ctx.modelRegistry,
-			);
-			entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
-			entry.status = "indexed";
+				let wikiPagePath = "";
+				let linkMaintenance: Awaited<ReturnType<typeof maintainLinkedWikiPages>>;
+				try {
+					// Create wiki source page (with LLM summary)
+					const extractedContent = readText(join(l2DataDir, extractedPath));
+					let summaryBody = `## 摘要\n\n${extractedContent}`;
+					if (ctx.model) {
+						const summary = await summarizeContent(ctx.model, ctx.modelRegistry, params.title, extractedContent);
+						if (summary) summaryBody = summary;
+					}
+					wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
+					linkMaintenance = await maintainLinkedWikiPages(
+						l2DataDir,
+						entry,
+						wikiPagePath,
+						summaryBody,
+						ctx.model,
+						ctx.modelRegistry,
+					);
+					if (linkMaintenance.sourcePageBody !== summaryBody) {
+						createSourcePage(l2DataDir, entry, linkMaintenance.sourcePageBody, extractedPath);
+					}
+					entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
+					entry.status = "indexed";
+					entry.updatedAt = new Date().toISOString();
+					upsertManifest(l2DataDir, entry);
 
-			// Write manifest
-			appendManifest(l2DataDir, entry);
+					// Rebuild index
+					const allEntries = readManifest(l2DataDir);
+					rebuildIndex(l2DataDir, allEntries);
 
-			// Rebuild index
-			const allEntries = readManifest(l2DataDir);
-			rebuildIndex(l2DataDir, allEntries);
+					// Keep the retrieval index in sync with the touched pages.
+					for (const wikiPath of entry.wikiPages) {
+						await l2Memory.indexPageByPath(wikiPath);
+					}
 
-			// Keep the retrieval index in sync with the touched pages.
-			for (const wikiPath of entry.wikiPages) {
-				await l2Memory.indexPageByPath(wikiPath);
-			}
-
-			// Regenerate the knowledge-base overview (best-effort; never fails archive).
-			try {
-				const overviewPath = await regenerateOverview(l2DataDir, ctx.model, ctx.modelRegistry);
-				if (overviewPath) await l2Memory.indexPageByPath(overviewPath);
-			} catch (err) {
-				logger.warn({ err }, "l2_archive: overview regeneration failed");
-			}
+					// Regenerate the knowledge-base overview (best-effort; never fails archive).
+					try {
+						const overviewPath = await regenerateOverview(l2DataDir, ctx.model, ctx.modelRegistry);
+						if (overviewPath) await l2Memory.indexPageByPath(overviewPath);
+					} catch (err) {
+						logger.warn({ err }, "l2_archive: overview regeneration failed");
+					}
+				} catch (err) {
+					entry.status = "error";
+					entry.updatedAt = new Date().toISOString();
+					upsertManifest(l2DataDir, entry);
+					throw err;
+				}
 
 			// Append log
 			appendLog(
@@ -234,6 +276,7 @@ export function createL2Tools(
 				],
 				details: { id, rawPath, wikiPagePath, linkedPages: linkMaintenance.pages },
 			};
+			});
 		},
 	});
 
@@ -258,14 +301,30 @@ export function createL2Tools(
 			if (isEnabled && !isEnabled()) return l2DisabledResult();
 			ensureL2Directories(l2DataDir);
 			const query = params.query ?? "";
-			const result = await queryWikiHybrid(l2Memory, query);
+			const result = await queryWikiHybridDetailed(l2Memory, query);
 			appendLog(l2DataDir, "query", query, "- L2 query executed through l2_query.");
 			return {
-				content: [{ type: "text" as const, text: result }],
-				details: {},
+				content: [{ type: "text" as const, text: result.text }],
+				details: { disabled: false, mode: result.mode, hits: result.hits },
 			};
 		},
 	});
 
-	return [archiveTool, queryTool];
+	// ---- Tool 3: l2_lint ----
+	const lintTool = defineTool({
+		name: "l2_lint",
+		label: "检查 L2 Wiki",
+		description: "只读检查 L2 Wiki 的 frontmatter、双链、来源追溯、manifest 和 index 一致性。不会修改或自动修复文件。",
+		parameters: Type.Object({}),
+		async execute() {
+			if (isEnabled && !isEnabled()) return l2DisabledResult();
+			const report = runL2Lint(l2DataDir);
+			return {
+				content: [{ type: "text" as const, text: formatL2LintReport(report) }],
+				details: { disabled: false, ...report },
+			};
+		},
+	});
+
+	return [archiveTool, queryTool, lintTool];
 }

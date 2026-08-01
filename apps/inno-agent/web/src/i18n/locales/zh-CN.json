@@ -67,6 +67,9 @@
 		"graph": {
 			"fit": "自适应",
 			"center": "居中",
+			"colorType": "页面类型",
+			"colorCommunity": "社区",
+			"communityStats": "{{count}} 个社区 · Q {{modularity}}",
 			"labels": "标签",
 			"size": "节点大小",
 			"refresh": "刷新图谱",

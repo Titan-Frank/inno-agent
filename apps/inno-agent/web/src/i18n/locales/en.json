@@ -67,6 +67,9 @@
 		"graph": {
 			"fit": "Fit",
 			"center": "Center",
+			"colorType": "Page type",
+			"colorCommunity": "Community",
+			"communityStats": "{{count}} communities · Q {{modularity}}",
 			"labels": "Labels",
 			"size": "Node size",
 			"refresh": "Refresh",

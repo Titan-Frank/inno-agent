@@ -26,7 +26,9 @@ function typeColor(type?: WikiPageType): string {
 
 export function Notebook() {
 	const { t } = useTranslation();
-	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [sidebarOpen, setSidebarOpen] = useState(
+		() => typeof window === "undefined" || !window.matchMedia("(max-width: 767px)").matches,
+	);
 	const state = useStoreSnapshot(notebookStore, () => ({
 		pages: notebookStore.filteredPages,
 		filterType: notebookStore.filterType,
@@ -52,17 +54,34 @@ export function Notebook() {
 		void notebookStore.loadAll();
 	}, []);
 
+	useEffect(() => {
+		const narrowScreen = window.matchMedia("(max-width: 767px)");
+		const closeSidebarOnNarrowScreen = (event: MediaQueryListEvent) => {
+			if (event.matches) setSidebarOpen(false);
+		};
+		narrowScreen.addEventListener("change", closeSidebarOnNarrowScreen);
+		return () => narrowScreen.removeEventListener("change", closeSidebarOnNarrowScreen);
+	}, []);
+
 	return (
-		<div className={`grid h-full min-h-0 gap-3 p-3 transition-[grid-template-columns] duration-200 ${sidebarOpen ? "grid-cols-[260px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"}`}>
-			<aside className={`flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] transition-opacity duration-200 ${sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}>
-				<div className="border-b border-[var(--inno-border)] p-2">
+		<div className={`relative grid h-full min-h-0 gap-3 p-3 transition-[grid-template-columns] duration-200 max-md:grid-cols-[minmax(0,1fr)] ${sidebarOpen ? "grid-cols-[260px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"}`}>
+			<aside className={`flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] transition-opacity duration-200 max-md:absolute max-md:inset-3 max-md:z-20 ${sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0 max-md:hidden"}`}>
+				<div className="flex gap-2 border-b border-[var(--inno-border)] p-2">
 					<input
 						type="text"
-						className="w-full rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-1.5 text-sm focus-visible:border-[var(--inno-focus-border)] focus-visible:outline-none focus-visible:shadow-[var(--inno-ring)]"
+						className="min-w-0 flex-1 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-1.5 text-sm focus-visible:border-[var(--inno-focus-border)] focus-visible:outline-none focus-visible:shadow-[var(--inno-ring)]"
 						placeholder={t("notebook.search") ?? ""}
 						value={state.searchQuery}
 						onChange={(event) => notebookStore.setSearchQuery(event.target.value)}
 					/>
+					<button
+						type="button"
+						className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--inno-text-subtle)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)] max-md:flex"
+						onClick={() => setSidebarOpen(false)}
+						title={t("common.collapseSidebar", "Collapse sidebar")}
+					>
+						<PanelLeftClose size={16} />
+					</button>
 				</div>
 				<div className="flex flex-wrap gap-1 border-b border-[var(--inno-border)] px-2 py-2">
 					{FILTER_TYPES.map((type) => (
@@ -120,7 +139,7 @@ export function Notebook() {
 				</div>
 			</aside>
 
-			<section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)]">
+			<section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] max-md:col-start-1 max-md:row-start-1">
 				<div className="@container flex items-center justify-between border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2">
 					<div className="flex items-center gap-2">
 						<button
@@ -151,7 +170,7 @@ export function Notebook() {
 					</div>
 					<div className="text-xs text-[var(--inno-text-muted)]">{state.currentPagePath ?? ""}</div>
 				</div>
-				<div className="min-h-0 flex-1 overflow-auto">
+				<div className={`min-h-0 flex-1 ${state.view === "graph" ? "overflow-hidden" : "overflow-auto"}`}>
 					{state.view === "graph" ? <GraphView /> : <PageView />}
 				</div>
 			</section>
