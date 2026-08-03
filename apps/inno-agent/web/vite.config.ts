@@ -42,9 +42,43 @@ const stubLmStudioPlugin = {
 	},
 };
 
+// @mariozechner/mini-lit's MarkdownBlock calls marked.use() inside render(),
+// re-registering the same four KaTeX math extensions on the global marked
+// instance on every render. The tokenizer chain grows without bound, so every
+// markdown parse gets slower the longer the page lives (only a reload resets
+// it). Route the call through a once-per-page-load guard, applied as a source
+// transform so node_modules stays untouched. Requires the package to be
+// excluded from optimizeDeps so dev-mode prebundling doesn't bypass this hook.
+const MINILIT_MARKED_GUARD = "__innoRegisterMarkedExtensionsOnce";
+const patchMiniLitMarkedPlugin = {
+	name: "inno-patch-minilit-marked",
+	enforce: "pre" as const,
+	transform(code: string, id: string) {
+		// Dev-mode ids carry a version query ("MarkdownBlock.js?v=3ef4b778").
+		const path = id.split("?", 1)[0];
+		if (!path.includes("@mariozechner/mini-lit") || !path.endsWith("MarkdownBlock.js")) return null;
+		if (code.includes(MINILIT_MARKED_GUARD)) return null;
+		if (code.split("marked.use({").length !== 2) {
+			console.warn("[inno-patch-minilit-marked] unexpected marked.use() count in MarkdownBlock.js — leaving upstream code untouched");
+			return null;
+		}
+		const prelude = `function ${MINILIT_MARKED_GUARD}(markedInstance, options) {\n\tif (globalThis.__innoMarkedExtensionsDone) return;\n\tglobalThis.__innoMarkedExtensionsDone = true;\n\tmarkedInstance.use(options);\n}\n`;
+		return {
+			code: prelude + code.replace("marked.use({", `${MINILIT_MARKED_GUARD}(marked, {`),
+			map: null,
+		};
+	},
+};
+
 export default defineConfig({
+	optimizeDeps: {
+		// Serve mini-lit as plain ESM so patchMiniLitMarkedPlugin's transform
+		// hook sees MarkdownBlock.js in dev mode (prebundled deps skip transforms).
+		exclude: ["@mariozechner/mini-lit"],
+	},
 	plugins: [
 		stubLmStudioPlugin,
+		patchMiniLitMarkedPlugin,
 		react(),
 		{
 			name: "link-katex-fonts",

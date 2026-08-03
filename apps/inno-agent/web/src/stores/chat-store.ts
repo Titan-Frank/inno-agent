@@ -8,7 +8,11 @@ import { workspaceStore, type StreamingWorkspacePreview } from "./workspace-stor
 
 type StreamingTarget = "chat" | "workspace";
 
-const STREAM_CHANGE_INTERVAL_MS = 80;
+// Flush interval for streaming text/thinking updates. 40ms (~25fps) is the
+// floor for motion to read as continuous rather than stepped; rendering cost
+// per flush is bounded by the block-split in StreamingBubbles (only the
+// incomplete tail re-parses), so a faster cadence is affordable.
+const STREAM_CHANGE_INTERVAL_MS = 40;
 
 type StreamingPreviewPatch = Partial<Pick<StreamingWorkspacePreview, "title" | "path" | "language" | "content" | "status" | "stage">>;
 
