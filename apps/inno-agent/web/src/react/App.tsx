@@ -8,6 +8,7 @@ import { useStoreSnapshot } from "./hooks.js";
 import { ChatCenter } from "./ChatCenter.js";
 import { SessionSidebar } from "./SessionSidebar.js";
 import { WorkspacePanel } from "./WorkspacePanel.js";
+import { SettingsOverlay } from "./settings/SettingsOverlay.js";
 
 /** Breakpoint below which sidebars auto-collapse */
 const SIDEBAR_COLLAPSE_BP = 960;
@@ -114,20 +115,23 @@ export function App() {
 	const setWorkspaceWidth = useCallback((width: number) => appStore.setWorkspaceWidth(width), []);
 
 	return (
-		<div
-			className={`app-layout app-layout--sidebar-${app.sidebarCollapsed ? "collapsed" : "expanded"} app-layout--workspace-${app.workspaceMode}`}
-			style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
-		>
-			<SessionSidebar collapsed={app.sidebarCollapsed} />
-			<ChatCenter />
-			<WorkspacePanel
-				activeTab={app.rightPanelTab}
-				mode={app.workspaceMode}
-				width={app.workspaceWidth}
-				onTabChange={setTab}
-				onModeChange={setWorkspaceMode}
-				onWidthChange={setWorkspaceWidth}
-			/>
-		</div>
+		<>
+			<div
+				className={`app-layout app-layout--sidebar-${app.sidebarCollapsed ? "collapsed" : "expanded"} app-layout--workspace-${app.workspaceMode}`}
+				style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
+			>
+				<SessionSidebar collapsed={app.sidebarCollapsed} />
+				<ChatCenter />
+				<WorkspacePanel
+					activeTab={app.rightPanelTab}
+					mode={app.workspaceMode}
+					width={app.workspaceWidth}
+					onTabChange={setTab}
+					onModeChange={setWorkspaceMode}
+					onWidthChange={setWorkspaceWidth}
+				/>
+			</div>
+			<SettingsOverlay />
+		</>
 	);
 }

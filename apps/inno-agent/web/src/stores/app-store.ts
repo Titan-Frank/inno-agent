@@ -1,14 +1,15 @@
 import { EventEmitter } from "./event-emitter.js";
 
-export type RightPanelTab = "notebook" | "preview" | "profile" | "skills" | "jobs" | "settings";
+export type RightPanelTab = "notebook" | "preview" | "profile" | "skills" | "jobs";
 export type SidebarSection = "chat" | "wiki" | "jobs" | "settings";
 export type WorkspaceMode = "collapsed" | "quarter" | "half" | "full";
+export type SettingsTab = "general" | "models" | "memory" | "integrations" | "channels" | "about";
 
 interface AppStoreEvents {
 	change: void;
 }
 
-const VALID_TABS: RightPanelTab[] = ["notebook", "preview", "profile", "skills", "jobs", "settings"];
+const VALID_TABS: RightPanelTab[] = ["notebook", "preview", "profile", "skills", "jobs"];
 // Legacy values mapped to current ones.
 const TAB_ALIASES: Record<string, RightPanelTab> = {
 	wiki: "notebook",
@@ -21,6 +22,26 @@ class AppStoreImpl extends EventEmitter<AppStoreEvents> {
 	sidebarCollapsed = false;
 	workspaceMode: WorkspaceMode = "collapsed";
 	workspaceWidth = getInitialWorkspaceWidth();
+	settingsOpen = getInitialSettingsOpen();
+	activeSettingsTab: SettingsTab = "general";
+
+	openSettings(tab: SettingsTab = "general") {
+		this.settingsOpen = true;
+		this.activeSettingsTab = tab;
+		this.emit("change", undefined);
+	}
+
+	closeSettings() {
+		if (!this.settingsOpen) return;
+		this.settingsOpen = false;
+		this.emit("change", undefined);
+	}
+
+	setSettingsTab(tab: SettingsTab) {
+		if (this.activeSettingsTab === tab) return;
+		this.activeSettingsTab = tab;
+		this.emit("change", undefined);
+	}
 
 	setRightPanelTab(tab: RightPanelTab) {
 		if (this.rightPanelTab === tab) return;
@@ -77,6 +98,11 @@ function getInitialRightPanelTab(): RightPanelTab {
 	if (tab && TAB_ALIASES[tab]) return TAB_ALIASES[tab];
 	if (tab && (VALID_TABS as string[]).includes(tab)) return tab as RightPanelTab;
 	return "preview";
+}
+
+function getInitialSettingsOpen(): boolean {
+	if (typeof window === "undefined") return false;
+	return new URLSearchParams(window.location.search).get("tab") === "settings";
 }
 
 export const appStore = new AppStoreImpl();

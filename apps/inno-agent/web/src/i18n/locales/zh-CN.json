@@ -11,8 +11,7 @@
 			"preview": "预览",
 			"profile": "学习者画像",
 			"skills": "技能",
-			"jobs": "定时任务",
-			"settings": "设置"
+			"jobs": "定时任务"
 		}
 	},
 	"common": {
@@ -519,6 +518,37 @@
 			"qrConfirmed": "绑定成功",
 			"qrWaiting": "等待扫描…",
 			"qrRegenerate": "重新生成"
+		},
+		"back": "返回",
+		"tabs": {
+			"general": "通用",
+			"models": "模型",
+			"memory": "记忆",
+			"integrations": "集成",
+			"channels": "渠道",
+			"about": "关于"
+		},
+		"sections": {
+			"general": {
+				"desc": "外观与语言偏好",
+				"themeDesc": "选择界面配色主题",
+				"languageDesc": "切换界面显示语言"
+			},
+			"models": {
+				"desc": "配置模型提供商与默认模型"
+			},
+			"memory": {
+				"desc": "简单模式与分层记忆开关"
+			},
+			"integrations": {
+				"desc": "内容源、OCR 与联网搜索等外部服务"
+			},
+			"channels": {
+				"desc": "飞书、微信等消息渠道接入"
+			},
+			"about": {
+				"desc": "服务状态与存储统计"
+			}
 		}
 	},
 	"chat": {

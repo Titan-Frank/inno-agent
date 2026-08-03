@@ -11,8 +11,7 @@
 			"preview": "Preview",
 			"profile": "Profile",
 			"skills": "Skills",
-			"jobs": "Jobs",
-			"settings": "Settings"
+			"jobs": "Jobs"
 		}
 	},
 	"common": {
@@ -519,6 +518,37 @@
 			"qrConfirmed": "Binding successful",
 			"qrWaiting": "Waiting for scan...",
 			"qrRegenerate": "Regenerate"
+		},
+		"back": "Back",
+		"tabs": {
+			"general": "General",
+			"models": "Models",
+			"memory": "Memory",
+			"integrations": "Integrations",
+			"channels": "Channels",
+			"about": "About"
+		},
+		"sections": {
+			"general": {
+				"desc": "Appearance and language preferences",
+				"themeDesc": "Choose the interface color theme",
+				"languageDesc": "Switch the display language"
+			},
+			"models": {
+				"desc": "Configure model providers and the default model"
+			},
+			"memory": {
+				"desc": "Simple Mode and layered memory toggles"
+			},
+			"integrations": {
+				"desc": "External services: content hub, OCR and web search"
+			},
+			"channels": {
+				"desc": "Messaging channel integrations (Feishu, WeChat)"
+			},
+			"about": {
+				"desc": "Server status and storage stats"
+			}
 		}
 	},
 	"chat": {
