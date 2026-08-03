@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import type { PendingQuestion, QuestionAnswer, QuestionData, QuestionnaireResult } from "../types/chat.js";
 import { chatStore } from "../stores/chat-store.js";
+import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 
 function OptionRow({
 	label,
@@ -35,8 +36,8 @@ function OptionRow({
 				) : null}
 			</span>
 			<span className="min-w-0 flex-1">
-				<span className="font-medium">{label}</span>
-				{description ? <span className="mt-0.5 block text-xs text-[var(--inno-text-muted)]">{description}</span> : null}
+				<markdown-block className="font-medium" content={normalizeMarkdownMath(label)} />
+				{description ? <markdown-block className="mt-0.5 text-xs text-[var(--inno-text-muted)]" content={normalizeMarkdownMath(description)} /> : null}
 			</span>
 		</button>
 	);
@@ -121,7 +122,7 @@ function QuestionTab({
 
 	return (
 		<div className="space-y-3">
-			<p className="text-sm font-medium text-[var(--inno-text)]">{q.question}</p>
+			<markdown-block className="text-sm font-medium text-[var(--inno-text)]" content={normalizeMarkdownMath(q.question)} />
 
 			<div className={hasPreview ? "flex gap-3" : ""}>
 				<div className={`space-y-1.5 ${hasPreview ? "w-1/2" : ""}`}>
