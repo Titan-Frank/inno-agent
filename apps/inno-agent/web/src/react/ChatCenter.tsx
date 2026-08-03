@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -19,6 +19,7 @@ import type { PresetMeta } from "../types/presets.js";
 import { arrayBufferToBase64 } from "../api/uploads.js";
 import { uploadWorkspaceFiles } from "../api/workspace.js";
 import { normalizeMarkdownMath } from "../utils/markdown-math.js";
+import { splitStreamingMarkdown } from "../utils/markdown-blocks.js";
 import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { QuestionDialog } from "./QuestionDialog.js";
@@ -216,9 +217,12 @@ function AssistantContent({ content }: { content: string }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const trimmed = content.trim();
+	// normalizeMarkdownMath is a multi-regex full-text scan — cache it so
+	// unrelated re-renders (e.g. streaming emits) don't re-scan old messages.
+	const normalized = useMemo(() => normalizeMarkdownMath(trimmed), [trimmed]);
 	if (!trimmed) return null;
 	if (!shouldCollapseAssistantContent(trimmed)) {
-		return <markdown-artifact content={normalizeMarkdownMath(trimmed)} />;
+		return <markdown-artifact content={normalized} />;
 	}
 	const lineCount = trimmed.split(/\r\n|\r|\n/).length;
 	const preview = trimmed.slice(0, 900);
@@ -231,7 +235,7 @@ function AssistantContent({ content }: { content: string }) {
 			</div>
 			{expanded ? (
 				<div className="max-h-[60vh] overflow-auto rounded border border-[var(--inno-border)] bg-[var(--inno-surface)] p-2">
-					<markdown-artifact content={normalizeMarkdownMath(trimmed)} />
+					<markdown-artifact content={normalized} />
 				</div>
 			) : (
 				<pre className="max-h-36 overflow-hidden whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--inno-text-muted)] [overflow-wrap:anywhere]">
@@ -271,7 +275,7 @@ function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; classNam
 	);
 }
 
-function MessageBubble({ message, showChannel }: { message: ChatMessage; showChannel?: boolean }) {
+const MessageBubble = memo(function MessageBubble({ message, showChannel }: { message: ChatMessage; showChannel?: boolean }) {
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
 	if (message.role === "user") {
@@ -341,6 +345,108 @@ function MessageBubble({ message, showChannel }: { message: ChatMessage; showCha
 				) : null}
 			</div>
 		</motion.div>
+	);
+});
+
+/**
+ * Memoized artifact for one closed block of a streaming reply. Closed blocks
+ * never change, so they are parsed by marked/KaTeX exactly once and never
+ * re-render — which also keeps the bubble's height monotonically growing
+ * (no re-parse shrink that could yank the scroll position upwards).
+ */
+const StableStreamingMarkdown = memo(function StableStreamingMarkdown({ content }: { content: string }) {
+	return <markdown-artifact content={content} />;
+});
+
+/**
+ * Live-stream bubbles (thinking + reply text). Subscribes to the chat store
+ * independently so the high-frequency text flushes re-render only this small
+ * subtree, not the whole message list.
+ */
+function StreamingBubbles() {
+	const { t } = useTranslation();
+	const stream = useStoreSnapshot(chatStore, () => ({
+		text: chatStore.streamingText,
+		thinking: chatStore.streamingThinking,
+		target: chatStore.streamingTarget,
+		// Low-frequency fields for the "waiting" dots — included here (rather
+		// than read off ChatCenter's snapshot) so the dots live in the same
+		// subtree that knows whether reply text has started.
+		isSending: chatStore.isSending,
+		hasError: chatStore.streamingError !== "",
+		hasPendingQuestion: chatStore.pendingQuestion !== null,
+		activeToolCount: chatStore.activeTools.length,
+	}));
+
+	const normalized = useMemo(() => normalizeMarkdownMath(stream.text), [stream.text]);
+	const { blocks, tail } = useMemo(() => splitStreamingMarkdown(normalized), [normalized]);
+
+	return (
+		<>
+			{stream.thinking ? (
+				<motion.div
+					className="flex justify-start"
+					initial={{ opacity: 0, y: 8 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.2, ease: "easeOut" }}
+				>
+					<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
+						<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Thinking...</summary>
+						<pre className="mt-1 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{stream.thinking}</pre>
+					</details>
+				</motion.div>
+			) : null}
+
+			{stream.text && stream.target === "workspace" ? (
+				<motion.div
+					className="flex justify-start"
+					initial={{ opacity: 0, y: 8 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.2, ease: "easeOut" }}
+				>
+					<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-[13px] text-[var(--inno-text-muted)]">
+						<div className="flex min-w-0 items-center gap-2">
+							<span className="inno-stream-status-dot is-streaming shrink-0" />
+							<span className="min-w-0 break-words [overflow-wrap:anywhere]">{t("chat.streamingInWorkspace", "长内容正在右侧文件区生成")}</span>
+						</div>
+					</div>
+				</motion.div>
+			) : stream.text ? (
+				<motion.div
+					className="flex justify-start"
+					initial={{ opacity: 0, y: 8 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.2, ease: "easeOut" }}
+				>
+					<div className="inno-message inno-streaming-blocks max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+						{blocks.map((block, index) => (
+							<StableStreamingMarkdown key={index} content={block} />
+						))}
+						{/* Always mounted while text streams (even when the tail is
+						    momentarily empty) so the DOM node — and the height below the
+						    stable blocks — never churns mid-stream. */}
+						<markdown-artifact content={tail} />
+					</div>
+				</motion.div>
+			) : null}
+
+			{stream.isSending && !stream.hasPendingQuestion && !stream.text && !stream.hasError && stream.activeToolCount === 0 ? (
+				<motion.div
+					className="flex justify-start"
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
+					transition={{ duration: 0.15 }}
+				>
+					<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3 py-2 text-sm text-[var(--inno-text-muted)]">
+						<span className="inline-flex gap-1">
+							<span className="animate-bounce">·</span>
+							<span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
+							<span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
+						</span>
+					</div>
+				</motion.div>
+			) : null}
+		</>
 	);
 }
 
@@ -545,13 +651,15 @@ export function ChatCenter() {
 		void settingsStore.saveSimpleMode(next).finally(() => setTogglingMode(false));
 	}, [togglingMode]);
 
+	// NOTE: high-frequency streaming fields (streamingText / streamingThinking
+	// / streamingTarget) are deliberately excluded — they flush every 40ms and
+	// are subscribed to by StreamingBubbles instead, so token growth re-renders
+	// only that subtree. Combined with the shallow-equal guard in
+	// useStoreSnapshot, streaming emits no longer re-render ChatCenter at all.
 	const chat = useStoreSnapshot(chatStore, () => ({
 		messages: chatStore.messages,
 		isSending: chatStore.isSending,
 		isLoadingHistory: chatStore.isLoadingHistory,
-		streamingText: chatStore.streamingText,
-		streamingThinking: chatStore.streamingThinking,
-		streamingTarget: chatStore.streamingTarget,
 		streamingActivity: chatStore.streamingActivity,
 		streamingActivityDetail: chatStore.streamingActivityDetail,
 		streamingError: chatStore.streamingError,
@@ -656,18 +764,28 @@ export function ChatCenter() {
 		}
 	}, [isWelcome, wsMode, wsExistingId, sessions.preselectedWorkspaceId]);
 
-	const scrollTextKey = chat.streamingTarget === "workspace" ? chat.streamingTarget : chat.streamingText;
+	// Stick-to-bottom scrolling, driven by a ResizeObserver on the content
+	// column: any height change — streaming flushes, Lit's async markdown
+	// renders, KaTeX, code highlighting, images — re-pins the scroll position
+	// in the same frame the growth happens. (The previous effect-based rAF
+	// scroll only fired when specific React state changed, so async renders
+	// between flushes left the view behind; combined with transient height
+	// shrink during re-parses, the pinned scrollTop got clamped and the view
+	// jumped back up towards the question.)
+	useEffect(() => {
+		const el = scrollRef.current;
+		const content = el?.querySelector<HTMLElement>("[data-conversation-content]");
+		if (!el || !content) return;
+		const observer = new ResizeObserver(() => {
+			if (shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
+		});
+		observer.observe(content);
+		return () => observer.disconnect();
+	}, [sessions.currentSessionId]);
 
 	useEffect(() => {
 		shouldStickToBottomRef.current = true;
 	}, [sessions.currentSessionId]);
-
-	useEffect(() => {
-		requestAnimationFrame(() => {
-			const el = scrollRef.current;
-			if (el && shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
-		});
-	}, [chat.messages, scrollTextKey, chat.streamingThinking, chat.activeTools.length, chat.completedTools.length, chat.pendingQuestion]);
 
 	const handleChatScroll = useCallback(() => {
 		const el = scrollRef.current;
@@ -1245,20 +1363,6 @@ export function ChatCenter() {
 						</motion.div>
 					) : null}
 
-					{chat.streamingThinking ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
-								<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Thinking...</summary>
-								<pre className="mt-1 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{chat.streamingThinking}</pre>
-							</details>
-						</motion.div>
-					) : null}
-
 					{chat.completedTools.length > 0 ? (
 						<motion.div
 							className="flex justify-start"
@@ -1277,32 +1381,8 @@ export function ChatCenter() {
 						</motion.div>
 					) : null}
 
-					{chat.streamingText && chat.streamingTarget === "workspace" ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-[13px] text-[var(--inno-text-muted)]">
-								<div className="flex min-w-0 items-center gap-2">
-									<span className="inno-stream-status-dot is-streaming shrink-0" />
-									<span className="min-w-0 break-words [overflow-wrap:anywhere]">{t("chat.streamingInWorkspace", "长内容正在右侧文件区生成")}</span>
-								</div>
-							</div>
-						</motion.div>
-					) : chat.streamingText ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
-								<markdown-artifact content={normalizeMarkdownMath(chat.streamingText)} />
-							</div>
-						</motion.div>
-					) : null}
+					{/* Thinking + reply text bubbles — own store subscription, see above */}
+					<StreamingBubbles />
 
 					{chat.streamingError ? (
 						<motion.div
@@ -1313,23 +1393,6 @@ export function ChatCenter() {
 						>
 							<div className="inno-message max-w-[78%]">
 								<ErrorBlock error={chat.streamingError} />
-							</div>
-						</motion.div>
-					) : null}
-
-					{chat.isSending && !chat.pendingQuestion && !chat.streamingText && !chat.streamingError && chat.activeTools.length === 0 ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							transition={{ duration: 0.15 }}
-						>
-							<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3 py-2 text-sm text-[var(--inno-text-muted)]">
-								<span className="inline-flex gap-1">
-									<span className="animate-bounce">·</span>
-									<span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
-									<span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
-								</span>
 							</div>
 						</motion.div>
 					) : null}

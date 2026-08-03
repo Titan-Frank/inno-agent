@@ -423,6 +423,15 @@ inno-workspace-panel textarea {
 	display: block;
 }
 
+/* The streaming bubble splits the reply into a memoized stable region and a
+   live tail, each rendered as its own markdown-artifact. Each artifact carries
+   p-4 padding, so without correction the junction would show 2rem of vertical
+   space where a single artifact would show a 1rem paragraph margin. Pull the
+   second artifact up by 1rem to make the split seam invisible. */
+.inno-streaming-blocks markdown-artifact + markdown-artifact {
+	margin-top: -1rem;
+}
+
 .inno-composer {
 	border: 1px solid var(--inno-border);
 	background: var(--inno-surface);

@@ -224,8 +224,12 @@ export function ConversationMinimap({
 		const resizeObserver = new ResizeObserver(scheduleMeasure);
 		resizeObserver.observe(scrollElement);
 		resizeObserver.observe(trackElement);
-		const contentElement = scrollElement.querySelector<HTMLElement>("[data-conversation-content]");
-		if (contentElement) resizeObserver.observe(contentElement);
+		// Observe each turn anchor, NOT the whole content container: while a
+		// reply streams, the container grows every frame (forcing a full
+		// getBoundingClientRect pass over all turns each time), but the anchors
+		// themselves don't move — the streaming bubble isn't a turn. Turn
+		// additions re-run this effect via `turns.length`, and content edits
+		// (expand/collapse, image loads) resize the affected anchor directly.
 		for (const anchor of scrollElement.querySelectorAll<HTMLElement>("[data-conversation-turn]")) {
 			resizeObserver.observe(anchor);
 		}
