@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "motion/react";
 import { PanelRightOpen, PanelRightClose, Columns2, Maximize2, BookOpen, BriefcaseBusiness, FolderKanban, Settings, Sparkles, UserRound } from "lucide-react";
 import type { RightPanelTab, WorkspaceMode } from "../stores/app-store.js";
+import { appStore } from "../stores/app-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { WorkspaceBrowser } from "./WorkspaceBrowser.js";
@@ -10,7 +11,6 @@ import { Notebook } from "./Notebook.js";
 import { JobsPanel } from "./JobsPanel.js";
 import { LearnerProfilePanel } from "./LearnerProfilePanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
-import { SettingsPanel } from "./SettingsPanel.js";
 
 interface WorkspacePanelProps {
 	activeTab: RightPanelTab;
@@ -21,7 +21,7 @@ interface WorkspacePanelProps {
 	onWidthChange(width: number): void;
 }
 
-const TAB_ORDER: RightPanelTab[] = ["preview", "notebook", "profile", "jobs", "skills", "settings"];
+const TAB_ORDER: RightPanelTab[] = ["preview", "notebook", "profile", "jobs", "skills"];
 
 const TAB_ICONS: Record<RightPanelTab, React.ReactNode> = {
 	notebook: <BookOpen size={14} />,
@@ -29,7 +29,6 @@ const TAB_ICONS: Record<RightPanelTab, React.ReactNode> = {
 	profile: <UserRound size={14} />,
 	jobs: <BriefcaseBusiness size={14} />,
 	skills: <Sparkles size={14} />,
-	settings: <Settings size={14} />,
 };
 
 function WorkspaceContent({ activeTab }: { activeTab: RightPanelTab }) {
@@ -44,8 +43,6 @@ function WorkspaceContent({ activeTab }: { activeTab: RightPanelTab }) {
 			return <SkillsPanel />;
 		case "jobs":
 			return <JobsPanel />;
-		case "settings":
-			return <SettingsPanel />;
 	}
 }
 
@@ -54,7 +51,7 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 	const [isResizing, setIsResizing] = useState(false);
 
 	// In Simple Mode, hide the advanced tabs: notebook (L2 wiki), profile (L1),
-	// jobs (scheduled tasks) and skills — leaving just preview + settings.
+	// jobs (scheduled tasks) and skills — leaving just preview.
 	const simpleMode = useStoreSnapshot(settingsStore, () => settingsStore.settings?.simpleMode?.enabled === true);
 	const HIDDEN_IN_SIMPLE: RightPanelTab[] = ["notebook", "profile", "jobs", "skills"];
 	const tabs = simpleMode ? TAB_ORDER.filter((tab) => !HIDDEN_IN_SIMPLE.includes(tab)) : TAB_ORDER;
@@ -138,6 +135,13 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 					})}
 				</div>
 				<div className="ml-1 flex shrink-0 items-center gap-1 border-l border-[var(--inno-border)] pl-1">
+					<button
+						className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--inno-text-subtle)] transition-colors hover:bg-[var(--inno-surface)] hover:text-[var(--inno-text-muted)]"
+						title={t("settings.title") ?? ""}
+						onClick={() => appStore.openSettings()}
+					>
+						<Settings size={14} />
+					</button>
 					<button
 						className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--inno-text-subtle)] transition-colors hover:bg-[var(--inno-surface)] hover:text-[var(--inno-text-muted)]"
 						title={mode === "full" ? (t("workspace.half") ?? "") : (t("workspace.full") ?? "")}
