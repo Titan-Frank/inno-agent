@@ -468,7 +468,9 @@
 				"desc": "通过 WebSocket 原生接入飞书私聊",
 				"appId": "App ID",
 				"appSecret": "App Secret",
-				"appSecretHint": "留空保留现有密钥"
+				"appSecretHint": "留空保留现有密钥",
+				"configured": "已配置",
+				"notConfigured": "未配置"
 			},
 			"qq": {
 				"title": "QQ",

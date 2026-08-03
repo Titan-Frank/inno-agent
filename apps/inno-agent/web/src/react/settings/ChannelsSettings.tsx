@@ -1,118 +1,281 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight, QrCode as QrCodeIcon, CheckCircle, Wifi, WifiOff } from "lucide-react";
+import { QrCode as QrCodeIcon, CheckCircle, Wifi, WifiOff, Bird, MessageCircle } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { settingsStore } from "../../stores/settings-store.js";
 import { feishuQrRegister, feishuQrStatus, wechatQrLogin, wechatQrStatus, wechatStatus } from "../../api/settings.js";
 import type { InnoSettings, ChannelsSettingsPayload, PersonalBridgeChannelConfig } from "../../types/settings.js";
 import { inputCls } from "../ui/input.js";
 import { checkboxCls } from "../ui/checkbox.js";
+import { Switch } from "../ui/Switch.js";
 import { SettingsSection } from "./primitives.js";
 
-/* ---------- Channels Settings ---------- */
+const labelCls = "mb-0.5 block text-[10px] text-[var(--inno-text-muted)]";
+const checkCls = "flex items-center gap-1.5 text-xs text-[var(--inno-text-muted)]";
 
-function ChannelsCard({ settings }: { settings: InnoSettings }) {
-	const { t } = useTranslation();
-	const [expanded, setExpanded] = useState(false);
-	const [saving, setSaving] = useState(false);
-	const [saveMsg, setSaveMsg] = useState<string | null>(null);
-	const [formError, setFormError] = useState<string | null>(null);
+/* ---------- Shared channel building blocks ---------- */
 
-	// Feishu
-	const [feishuEnabled, setFeishuEnabled] = useState(settings.channels?.feishu?.enabled ?? false);
-	const [feishuAppId, setFeishuAppId] = useState(settings.feishu?.appId ?? "");
-	const [feishuAppSecret, setFeishuAppSecret] = useState("");
-	const [feishuPersonalOnly, setFeishuPersonalOnly] = useState(settings.channels?.feishu?.personalOnly ?? true);
-	const [feishuAllowedUsers, setFeishuAllowedUsers] = useState(
-		(settings.channels?.feishu?.allowedUserIds ?? []).join("\n"),
+/** Card shell shared by every channel: icon + title + description, enable Switch on the right. */
+function ChannelCard({ icon, title, desc, enabled, onEnabledChange, children }: {
+	icon: ReactNode;
+	title: string;
+	desc: string;
+	enabled: boolean;
+	onEnabledChange: (next: boolean) => void;
+	children: ReactNode;
+}) {
+	return (
+		<div className="rounded-lg bg-[var(--inno-surface)] p-4">
+			<div className="flex items-start justify-between gap-3">
+				<div className="flex min-w-0 items-start gap-2.5">
+					<span className="mt-0.5 shrink-0 text-[var(--inno-text)]">{icon}</span>
+					<div className="min-w-0">
+						<h4 className="text-sm font-medium text-[var(--inno-text)]">{title}</h4>
+						<p className="mt-0.5 text-xs leading-relaxed text-[var(--inno-text-muted)]">{desc}</p>
+					</div>
+				</div>
+				<Switch checked={enabled} onChange={onEnabledChange} />
+			</div>
+			<div className="mt-4 grid gap-3">{children}</div>
+		</div>
 	);
+}
 
-	// Feishu QR registration state
-	const [feishuQrUrl, setFeishuQrUrl] = useState<string | null>(null);
-	const [feishuQrDeviceCode, setFeishuQrDeviceCode] = useState<string | null>(null);
-	const [feishuQrState, setFeishuQrState] = useState<string | null>(null); // waitingScan | confirmed | expired | denied
-	const [feishuQrError, setFeishuQrError] = useState<string | null>(null);
-	const feishuQrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+/** Connection status row: colored dot icon + state label + optional detail (appId / botId). */
+function ChannelStatusRow({ connected, label, detail }: {
+	connected: boolean;
+	label: string;
+	detail?: string | null;
+}) {
+	return (
+		<div className="flex items-center gap-2 rounded border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3 py-2">
+			{connected ? (
+				<>
+					<Wifi size={14} className="shrink-0 text-[var(--inno-success)]" />
+					<span className="text-xs font-medium text-[var(--inno-success)]">{label}</span>
+					{detail ? <span className="ml-1 text-[10px] text-[var(--inno-text-subtle)]">{detail}</span> : null}
+				</>
+			) : (
+				<>
+					<WifiOff size={14} className="shrink-0 text-[var(--inno-text-subtle)]" />
+					<span className="text-xs text-[var(--inno-text-muted)]">{label}</span>
+				</>
+			)}
+		</div>
+	);
+}
+
+/** Dashed container hosting the QR code / QR flow status / action button. */
+function QrPanel({ children }: { children: ReactNode }) {
+	return (
+		<div className="flex flex-col items-center gap-2 rounded border border-dashed border-[var(--inno-border)] bg-[var(--inno-surface)] p-3">
+			{children}
+		</div>
+	);
+}
+
+function QrActionButton({ label, onClick }: { label: string; onClick: () => void }) {
+	return (
+		<button
+			className="flex items-center gap-1.5 rounded-md inno-primary-button px-3 py-1.5 text-xs text-white"
+			onClick={onClick}
+		>
+			<QrCodeIcon size={14} />
+			{label}
+		</button>
+	);
+}
+
+/** Access control fields shared by all channels: personal-only + allowed user IDs. */
+function AccessControl({ personalOnly, onPersonalOnlyChange, userIds, onUserIdsChange }: {
+	personalOnly: boolean;
+	onPersonalOnlyChange: (next: boolean) => void;
+	userIds: string;
+	onUserIdsChange: (next: string) => void;
+}) {
+	const { t } = useTranslation();
+	return (
+		<div className="grid gap-2">
+			<label className={checkCls}>
+				<input type="checkbox" className={checkboxCls} checked={personalOnly} onChange={(e) => onPersonalOnlyChange(e.target.checked)} />
+				{t("settings.channels.personalOnly")}
+			</label>
+			<div>
+				<label className={labelCls}>{t("settings.channels.allowedUserIds")}</label>
+				<textarea
+					className={`${inputCls} h-14 resize-y`}
+					placeholder={t("settings.channels.allowedUserIdsHint") ?? ""}
+					value={userIds}
+					onChange={(e) => onUserIdsChange(e.target.value)}
+				/>
+			</div>
+		</div>
+	);
+}
+
+/* ---------- Feishu channel ---------- */
+
+function FeishuChannel({ settings, state, onStateChange }: {
+	settings: InnoSettings;
+	state: {
+		enabled: boolean;
+		appId: string;
+		appSecret: string;
+		personalOnly: boolean;
+		allowedUsers: string;
+	};
+	onStateChange: (patch: Partial<{ enabled: boolean; appId: string; appSecret: string; personalOnly: boolean; allowedUsers: string }>) => void;
+}) {
+	const { t } = useTranslation();
+
+	// QR registration state
+	const [qrUrl, setQrUrl] = useState<string | null>(null);
+	const [qrDeviceCode, setQrDeviceCode] = useState<string | null>(null);
+	const [qrState, setQrState] = useState<string | null>(null); // scanning | waitingScan | confirmed | expired | denied
+	const [qrError, setQrError] = useState<string | null>(null);
+	const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	useEffect(() => {
-		return () => { if (feishuQrPollRef.current) clearInterval(feishuQrPollRef.current); };
+		return () => { if (qrPollRef.current) clearInterval(qrPollRef.current); };
 	}, []);
 
-	const startFeishuQrRegister = useCallback(async () => {
-		setFeishuQrState("scanning");
-		setFeishuQrUrl(null);
-		setFeishuQrError(null);
-		if (feishuQrPollRef.current) clearInterval(feishuQrPollRef.current);
+	const startQrRegister = useCallback(async () => {
+		setQrState("scanning");
+		setQrUrl(null);
+		setQrError(null);
+		if (qrPollRef.current) clearInterval(qrPollRef.current);
 		try {
-			const { deviceCode, qrUrl, interval } = await feishuQrRegister();
-			setFeishuQrDeviceCode(deviceCode);
-			setFeishuQrUrl(qrUrl);
-			setFeishuQrState("waitingScan");
+			const { deviceCode, qrUrl: url, interval } = await feishuQrRegister();
+			setQrDeviceCode(deviceCode);
+			setQrUrl(url);
+			setQrState("waitingScan");
 			// Poll status
-			feishuQrPollRef.current = setInterval(async () => {
+			qrPollRef.current = setInterval(async () => {
 				try {
 					const res = await feishuQrStatus(deviceCode);
 					if (res.status === "confirmed") {
-						setFeishuQrState("confirmed");
-						setFeishuEnabled(true);
-						if (feishuQrPollRef.current) clearInterval(feishuQrPollRef.current);
+						setQrState("confirmed");
+						onStateChange({ enabled: true });
+						if (qrPollRef.current) clearInterval(qrPollRef.current);
 						// Refresh settings to get new appId
 						settingsStore.load();
 					} else if (res.status === "expired") {
-						setFeishuQrState("expired");
-						if (feishuQrPollRef.current) clearInterval(feishuQrPollRef.current);
+						setQrState("expired");
+						if (qrPollRef.current) clearInterval(qrPollRef.current);
 					} else if (res.status === "denied") {
-						setFeishuQrState("denied");
-						if (feishuQrPollRef.current) clearInterval(feishuQrPollRef.current);
+						setQrState("denied");
+						if (qrPollRef.current) clearInterval(qrPollRef.current);
 					}
 				} catch {
 					// ignore poll errors
 				}
 			}, (interval || 5) * 1000);
 		} catch (err) {
-			setFeishuQrState(null);
-			setFeishuQrError(err instanceof Error ? err.message : "QR registration failed");
+			setQrState(null);
+			setQrError(err instanceof Error ? err.message : "QR registration failed");
 		}
-	}, []);
+	}, [onStateChange]);
 
-	// QQ
-	const qqConfig = settings.channels?.qq as PersonalBridgeChannelConfig | undefined;
-	const [qqEnabled, setQqEnabled] = useState(qqConfig?.enabled ?? false);
-	const [qqSidecarUrl, setQqSidecarUrl] = useState(qqConfig?.sidecarBaseUrl ?? "http://127.0.0.1:4318");
-	const [qqPersonalOnly, setQqPersonalOnly] = useState(qqConfig?.personalOnly ?? true);
-	const [qqAllowedUsers, setQqAllowedUsers] = useState(
-		(qqConfig?.allowedUserIds ?? []).join("\n"),
-	);
-	// QQ channel is not yet implemented; flip to true when ready to expose settings.
-	const QQ_CHANNEL_READY = false;
+	const configured = Boolean(settings.feishu?.appId) || qrState === "confirmed";
 
-	// WeChat (iLink native mode)
-	const wechatConfig = settings.channels?.wechat;
-	const [wechatEnabled, setWechatEnabled] = useState(wechatConfig?.enabled ?? false);
-	const [wechatPersonalOnly, setWechatPersonalOnly] = useState(wechatConfig?.personalOnly ?? true);
-	const [wechatAllowedUsers, setWechatAllowedUsers] = useState(
-		(wechatConfig?.allowedUserIds ?? []).join("\n"),
+	return (
+		<ChannelCard
+			icon={<Bird size={16} />}
+			title={t("settings.channels.feishu.title")}
+			desc={t("settings.channels.feishu.desc")}
+			enabled={state.enabled}
+			onEnabledChange={(v) => onStateChange({ enabled: v })}
+		>
+			<ChannelStatusRow
+				connected={configured}
+				label={configured ? t("settings.channels.feishu.configured", "已配置") : t("settings.channels.feishu.notConfigured", "未配置")}
+				detail={settings.feishu?.appId ? `App ID: ${settings.feishu.appId}` : null}
+			/>
+
+			<QrPanel>
+				{qrState === "waitingScan" && qrUrl ? (
+					<>
+						<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.feishu.qrTitle")}</div>
+						<QRCodeSVG value={qrUrl} size={192} />
+						<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.feishu.qrSubtitle")}</div>
+						<div className="text-xs text-[var(--inno-accent)]">{t("settings.feishu.qrWaiting")}</div>
+					</>
+				) : qrState === "confirmed" ? (
+					<div className="flex items-center gap-1.5 text-xs text-[var(--inno-success)]">
+						<CheckCircle size={14} />
+						{t("settings.feishu.qrConfirmed")}
+					</div>
+				) : qrState === "expired" ? (
+					<div className="text-xs text-[var(--inno-warning)]">{t("settings.feishu.qrExpired")}</div>
+				) : qrState === "denied" ? (
+					<div className="text-xs text-[var(--inno-danger)]">{t("settings.feishu.qrDenied")}</div>
+				) : qrState === "scanning" ? (
+					<div className="text-xs text-[var(--inno-text-subtle)]">{t("settings.feishu.qrWaiting")}</div>
+				) : null}
+				{(!qrState || qrState === "confirmed" || qrState === "expired" || qrState === "denied") && (
+					<QrActionButton label={t("settings.feishu.qrRegister")} onClick={startQrRegister} />
+				)}
+				{qrError && (
+					<div className="rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-xs text-[var(--inno-danger)]">{qrError}</div>
+				)}
+			</QrPanel>
+
+			{state.enabled && (
+				<>
+					<div className="grid grid-cols-2 gap-2">
+						<div>
+							<label className={labelCls}>{t("settings.channels.feishu.appId")}</label>
+							<input className={inputCls} value={state.appId} onChange={(e) => onStateChange({ appId: e.target.value })} />
+						</div>
+						<div>
+							<label className={labelCls}>{t("settings.channels.feishu.appSecret")} {settings.feishu?.appSecret && <span className="text-[var(--inno-text-subtle)]">(••••)</span>}</label>
+							<input className={inputCls} type="password" placeholder={t("settings.channels.feishu.appSecretHint") ?? ""} value={state.appSecret} onChange={(e) => onStateChange({ appSecret: e.target.value })} />
+						</div>
+					</div>
+					<AccessControl
+						personalOnly={state.personalOnly}
+						onPersonalOnlyChange={(v) => onStateChange({ personalOnly: v })}
+						userIds={state.allowedUsers}
+						onUserIdsChange={(v) => onStateChange({ allowedUsers: v })}
+					/>
+				</>
+			)}
+		</ChannelCard>
 	);
+}
+
+/* ---------- WeChat channel (iLink native) ---------- */
+
+function WechatChannel({ settings, state, onStateChange }: {
+	settings: InnoSettings;
+	state: {
+		enabled: boolean;
+		personalOnly: boolean;
+		allowedUsers: string;
+	};
+	onStateChange: (patch: Partial<{ enabled: boolean; personalOnly: boolean; allowedUsers: string }>) => void;
+}) {
+	const { t } = useTranslation();
+
 	// QR login state
 	const [qrUrl, setQrUrl] = useState<string | null>(null);
 	const [qrId, setQrId] = useState<string | null>(null);
 	const [qrStatus, setQrStatus] = useState<string | null>(null); // scanning | waitingScan | scanned | confirmed | expired
+	const [qrError, setQrError] = useState<string | null>(null);
 	const [wxConnected, setWxConnected] = useState(false);
 	const [wxBotId, setWxBotId] = useState<string | null>(null);
 	const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	// Check WeChat connection status on mount
 	useEffect(() => {
-		if (wechatEnabled) {
+		if (state.enabled) {
 			wechatStatus().then((s) => {
 				setWxConnected(s.connected);
 				if (s.botId) setWxBotId(s.botId);
 			}).catch(() => {});
 		}
 		return () => { if (qrPollRef.current) clearInterval(qrPollRef.current); };
-	}, [wechatEnabled]);
-
-	const [qrError, setQrError] = useState<string | null>(null);
+	}, [state.enabled]);
 
 	const startQrLogin = useCallback(async () => {
 		setQrStatus("scanning");
@@ -148,6 +311,105 @@ function ChannelsCard({ settings }: { settings: InnoSettings }) {
 		}
 	}, []);
 
+	const connected = wxConnected || qrStatus === "confirmed";
+
+	return (
+		<ChannelCard
+			icon={<MessageCircle size={16} />}
+			title={t("settings.channels.wechat.title")}
+			desc={t("settings.channels.wechat.desc")}
+			enabled={state.enabled}
+			onEnabledChange={(v) => onStateChange({ enabled: v })}
+		>
+			<ChannelStatusRow
+				connected={connected}
+				label={connected ? t("settings.channels.wechat.connected") : t("settings.channels.wechat.disconnected")}
+				detail={connected && wxBotId ? `${t("settings.channels.wechat.botId")}: ${wxBotId}` : null}
+			/>
+
+			<QrPanel>
+				{qrUrl && qrStatus !== "confirmed" && qrStatus !== "expired" && (
+					<QRCodeSVG value={qrUrl} size={192} level="M" />
+				)}
+				{qrStatus === "confirmed" && (
+					<div className="flex items-center gap-1.5 text-xs text-[var(--inno-success)]">
+						<CheckCircle size={14} />
+						{t("settings.channels.wechat.confirmed")}
+					</div>
+				)}
+				{qrStatus === "expired" && (
+					<div className="text-xs text-[var(--inno-warning)]">{t("settings.channels.wechat.expired")}</div>
+				)}
+				{qrStatus === "scanning" && (
+					<div className="text-xs text-[var(--inno-text-subtle)]">{t("settings.channels.wechat.scanning")}</div>
+				)}
+				{qrStatus === "waitingScan" && (
+					<div className="text-xs text-[var(--inno-text-muted)]">{t("settings.channels.wechat.waitingScan")}</div>
+				)}
+				{qrStatus === "scanned" && (
+					<div className="text-xs text-[var(--inno-accent)]">{t("settings.channels.wechat.scanned")}</div>
+				)}
+				{(!qrStatus || qrStatus === "confirmed" || qrStatus === "expired") && (
+					<QrActionButton
+						label={connected ? t("settings.channels.wechat.relogin") : t("settings.channels.wechat.scanLogin")}
+						onClick={() => void startQrLogin()}
+					/>
+				)}
+				{qrError && (
+					<div className="rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-xs text-[var(--inno-danger)]">{qrError}</div>
+				)}
+			</QrPanel>
+
+			{state.enabled && (
+				<AccessControl
+					personalOnly={state.personalOnly}
+					onPersonalOnlyChange={(v) => onStateChange({ personalOnly: v })}
+					userIds={state.allowedUsers}
+					onUserIdsChange={(v) => onStateChange({ allowedUsers: v })}
+				/>
+			)}
+		</ChannelCard>
+	);
+}
+
+/* ---------- Channels category page ---------- */
+
+export function ChannelsSettings({ settings }: { settings: InnoSettings }) {
+	const { t } = useTranslation();
+	const [saving, setSaving] = useState(false);
+	const [saveMsg, setSaveMsg] = useState<string | null>(null);
+	const [formError, setFormError] = useState<string | null>(null);
+
+	// Feishu
+	const [feishu, setFeishu] = useState({
+		enabled: settings.channels?.feishu?.enabled ?? false,
+		appId: settings.feishu?.appId ?? "",
+		appSecret: "",
+		personalOnly: settings.channels?.feishu?.personalOnly ?? true,
+		allowedUsers: (settings.channels?.feishu?.allowedUserIds ?? []).join("\n"),
+	});
+	const patchFeishu = useCallback((patch: Partial<typeof feishu>) => setFeishu((s) => ({ ...s, ...patch })), []);
+
+	// QQ
+	const qqConfig = settings.channels?.qq as PersonalBridgeChannelConfig | undefined;
+	const [qqEnabled, setQqEnabled] = useState(qqConfig?.enabled ?? false);
+	const [qqSidecarUrl, setQqSidecarUrl] = useState(qqConfig?.sidecarBaseUrl ?? "http://127.0.0.1:4318");
+	const [qqPersonalOnly, setQqPersonalOnly] = useState(qqConfig?.personalOnly ?? true);
+	const [qqAllowedUsers, setQqAllowedUsers] = useState(
+		(qqConfig?.allowedUserIds ?? []).join("\n"),
+	);
+	// QQ channel is not yet implemented; flip to true when ready to expose settings.
+	const QQ_CHANNEL_READY = false;
+
+	// WeChat
+	const wechatConfig = settings.channels?.wechat;
+	const [wechat, setWechat] = useState({
+		enabled: wechatConfig?.enabled ?? false,
+		personalOnly: wechatConfig?.personalOnly ?? true,
+		allowedUsers: (wechatConfig?.allowedUserIds ?? []).join("\n"),
+	});
+	const patchWechat = useCallback((patch: Partial<typeof wechat>) => setWechat((s) => ({ ...s, ...patch })), []);
+
 	// Bridge
 	const [bridgeToken, setBridgeToken] = useState("");
 
@@ -163,9 +425,9 @@ function ChannelsCard({ settings }: { settings: InnoSettings }) {
 			const payload: ChannelsSettingsPayload = {
 				channels: {
 					feishu: {
-						enabled: feishuEnabled,
-						personalOnly: feishuPersonalOnly,
-						allowedUserIds: parseUserIds(feishuAllowedUsers),
+						enabled: feishu.enabled,
+						personalOnly: feishu.personalOnly,
+						allowedUserIds: parseUserIds(feishu.allowedUsers),
 					},
 					qq: {
 						enabled: qqEnabled,
@@ -175,17 +437,17 @@ function ChannelsCard({ settings }: { settings: InnoSettings }) {
 						sidecarBaseUrl: qqSidecarUrl.trim(),
 					},
 					wechat: {
-						enabled: wechatEnabled,
+						enabled: wechat.enabled,
 						mode: "ilink",
-						personalOnly: wechatPersonalOnly,
-						allowedUserIds: parseUserIds(wechatAllowedUsers),
+						personalOnly: wechat.personalOnly,
+						allowedUserIds: parseUserIds(wechat.allowedUsers),
 					},
 				},
 			};
-			if (feishuAppId.trim()) {
+			if (feishu.appId.trim()) {
 				payload.feishu = {
-					appId: feishuAppId.trim(),
-					...(feishuAppSecret.trim() ? { appSecret: feishuAppSecret.trim() } : {}),
+					appId: feishu.appId.trim(),
+					...(feishu.appSecret.trim() ? { appSecret: feishu.appSecret.trim() } : {}),
 				};
 			}
 			if (bridgeToken.trim()) {
@@ -201,256 +463,71 @@ function ChannelsCard({ settings }: { settings: InnoSettings }) {
 		}
 	}
 
-	const labelCls = "mb-0.5 block text-[10px] text-[var(--inno-text-muted)]";
-	const checkCls = "flex items-center gap-1.5 text-xs text-[var(--inno-text-muted)]";
-
-	return (
-		<div className="rounded-lg bg-[var(--inno-surface)]">
-			<button
-				className="flex w-full items-center justify-between px-4 py-3 text-left"
-				onClick={() => { setExpanded((v) => !v); setFormError(null); setSaveMsg(null); }}
-			>
-				<div className="flex items-center gap-2">
-					{expanded ? <ChevronDown size={14} className="text-[var(--inno-text-subtle)]" /> : <ChevronRight size={14} className="text-[var(--inno-text-subtle)]" />}
-					<span className="text-sm font-medium text-[var(--inno-text)]">{t("settings.channels.title")}</span>
-				</div>
-				<div className="flex items-center gap-2 text-xs text-[var(--inno-text-subtle)]">
-					{feishuEnabled && <span className="rounded bg-[var(--inno-success-bg)] px-1.5 py-0.5 text-[var(--inno-success)]">{t("settings.channels.feishu.title")}</span>}
-					{qqEnabled && QQ_CHANNEL_READY && <span className="rounded bg-[var(--inno-accent-soft)] px-1.5 py-0.5 text-[var(--inno-accent)]">{t("settings.channels.qq.title")}</span>}
-					{wechatEnabled && <span className="rounded bg-[var(--inno-success-bg)] px-1.5 py-0.5 text-[var(--inno-success)]">{t("settings.channels.wechat.title")}</span>}
-				</div>
-			</button>
-			{expanded && (
-				<div className="border-t border-[var(--inno-border)] px-4 pb-4 pt-3 grid gap-4">
-					{/* Feishu */}
-					<div className="rounded-lg bg-[var(--inno-surface)] p-3">
-						<div className="mb-2 flex items-center justify-between">
-							<div>
-								<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.channels.feishu.title")}</div>
-								<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.channels.feishu.desc")}</div>
-							</div>
-							<label className={checkCls}>
-								<input type="checkbox" className={checkboxCls} checked={feishuEnabled} onChange={(e) => setFeishuEnabled(e.target.checked)} />
-								{t("settings.channels.enabled")}
-							</label>
-						</div>
-
-						{/* Feishu QR Registration */}
-						<div className="mb-3">
-							{feishuQrState === "waitingScan" && feishuQrUrl ? (
-								<div className="flex flex-col items-center gap-2 rounded-lg bg-[var(--inno-bg-alt)] p-4">
-									<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.feishu.qrTitle")}</div>
-									<QRCodeSVG value={feishuQrUrl} size={192} />
-									<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.feishu.qrSubtitle")}</div>
-									<div className="text-[10px] text-[var(--inno-accent)]">{t("settings.feishu.qrWaiting")}</div>
-								</div>
-							) : feishuQrState === "confirmed" ? (
-								<div className="flex items-center gap-2 rounded-lg border border-[var(--inno-success-border)] bg-[var(--inno-success-bg)] p-3">
-									<CheckCircle className="h-4 w-4 text-[var(--inno-success)]" />
-									<span className="text-xs text-[var(--inno-success)]">{t("settings.feishu.qrConfirmed")}</span>
-								</div>
-							) : feishuQrState === "expired" ? (
-								<div className="flex items-center gap-2 rounded-lg border border-[var(--inno-warning-border)] bg-[var(--inno-warning-bg)] p-3">
-									<span className="text-xs text-[var(--inno-warning)]">{t("settings.feishu.qrExpired")}</span>
-									<button className="ml-auto rounded bg-[var(--inno-accent)] px-2 py-0.5 text-[10px] text-white" onClick={startFeishuQrRegister}>{t("settings.feishu.qrRegenerate")}</button>
-								</div>
-							) : feishuQrState === "denied" ? (
-								<div className="flex items-center gap-2 rounded-lg border border-[var(--inno-danger-border)] bg-[var(--inno-danger-bg)] p-3">
-									<span className="text-xs text-[var(--inno-danger)]">{t("settings.feishu.qrDenied")}</span>
-									<button className="ml-auto rounded bg-[var(--inno-accent)] px-2 py-0.5 text-[10px] text-white" onClick={startFeishuQrRegister}>{t("settings.feishu.qrRegenerate")}</button>
-								</div>
-							) : feishuQrState === "scanning" ? (
-								<div className="text-center text-[10px] text-[var(--inno-text-subtle)] py-2">{t("settings.feishu.qrWaiting")}</div>
-							) : (
-								<button
-									className="w-full rounded border border-[var(--inno-border)] bg-[var(--inno-bg-alt)] px-3 py-2 text-xs text-[var(--inno-text)] hover:bg-[var(--inno-bg-hover)] flex items-center justify-center gap-2"
-									onClick={startFeishuQrRegister}
-								>
-									<QrCodeIcon size={14} />
-									{t("settings.feishu.qrRegister")}
-								</button>
-							)}
-							{feishuQrError && (
-								<div className="mt-1 rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-[10px] text-[var(--inno-danger)]">{feishuQrError}</div>
-							)}
-						</div>
-
-						{feishuEnabled && (
-							<div className="grid grid-cols-2 gap-2">
-								<div>
-									<label className={labelCls}>{t("settings.channels.feishu.appId")}</label>
-									<input className={inputCls} value={feishuAppId} onChange={(e) => setFeishuAppId(e.target.value)} />
-								</div>
-								<div>
-									<label className={labelCls}>{t("settings.channels.feishu.appSecret")} {settings.feishu?.appSecret && <span className="text-[var(--inno-text-subtle)]">(••••)</span>}</label>
-									<input className={inputCls} type="password" placeholder={t("settings.channels.feishu.appSecretHint") ?? ""} value={feishuAppSecret} onChange={(e) => setFeishuAppSecret(e.target.value)} />
-								</div>
-								<div className="col-span-2 flex items-center gap-3">
-									<label className={checkCls}>
-										<input type="checkbox" className={checkboxCls} checked={feishuPersonalOnly} onChange={(e) => setFeishuPersonalOnly(e.target.checked)} />
-										{t("settings.channels.personalOnly")}
-									</label>
-								</div>
-								<div className="col-span-2">
-									<label className={labelCls}>{t("settings.channels.allowedUserIds")}</label>
-									<textarea className={`${inputCls} h-14 resize-y`} placeholder={t("settings.channels.allowedUserIdsHint") ?? ""} value={feishuAllowedUsers} onChange={(e) => setFeishuAllowedUsers(e.target.value)} />
-								</div>
-							</div>
-						)}
-					</div>
-
-					{/* QQ (hidden: channel not yet implemented) */}
-					{QQ_CHANNEL_READY && (
-					<div className="rounded-lg bg-[var(--inno-surface)] p-3">
-						<div className="mb-2 flex items-center justify-between">
-							<div>
-								<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.channels.qq.title")}</div>
-								<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.channels.qq.desc")}</div>
-							</div>
-							<label className={checkCls}>
-								<input type="checkbox" className={checkboxCls} checked={qqEnabled} onChange={(e) => setQqEnabled(e.target.checked)} />
-								{t("settings.channels.enabled")}
-							</label>
-						</div>
-						{qqEnabled && (
-							<div className="grid grid-cols-2 gap-2">
-								<div className="col-span-2">
-									<label className={labelCls}>{t("settings.channels.sidecarBaseUrl")}</label>
-									<input className={inputCls} value={qqSidecarUrl} onChange={(e) => setQqSidecarUrl(e.target.value)} />
-								</div>
-								<div className="col-span-2 flex items-center gap-3">
-									<label className={checkCls}>
-										<input type="checkbox" className={checkboxCls} checked={qqPersonalOnly} onChange={(e) => setQqPersonalOnly(e.target.checked)} />
-										{t("settings.channels.personalOnly")}
-									</label>
-								</div>
-								<div className="col-span-2">
-									<label className={labelCls}>{t("settings.channels.allowedUserIds")}</label>
-									<textarea className={`${inputCls} h-14 resize-y`} placeholder={t("settings.channels.allowedUserIdsHint") ?? ""} value={qqAllowedUsers} onChange={(e) => setQqAllowedUsers(e.target.value)} />
-								</div>
-							</div>
-						)}
-					</div>
-					)}
-
-					{/* WeChat (iLink native) */}
-					<div className="rounded-lg bg-[var(--inno-surface)] p-3">
-						<div className="mb-2 flex items-center justify-between">
-							<div>
-								<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.channels.wechat.title")}</div>
-								<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.channels.wechat.desc")}</div>
-							</div>
-							<label className={checkCls}>
-								<input type="checkbox" className={checkboxCls} checked={wechatEnabled} onChange={(e) => setWechatEnabled(e.target.checked)} />
-								{t("settings.channels.enabled")}
-							</label>
-						</div>
-						{wechatEnabled && (
-							<div className="grid gap-2">
-								{/* Connection status */}
-								<div className="flex items-center gap-2 rounded border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2.5 py-2">
-									{wxConnected ? (
-										<>
-											<Wifi size={14} className="text-[var(--inno-success)]" />
-											<span className="text-xs font-medium text-[var(--inno-success)]">{t("settings.channels.wechat.connected")}</span>
-											{wxBotId && <span className="text-[10px] text-[var(--inno-text-subtle)] ml-1">{t("settings.channels.wechat.botId")}: {wxBotId}</span>}
-										</>
-									) : (
-										<>
-											<WifiOff size={14} className="text-[var(--inno-text-subtle)]" />
-											<span className="text-xs text-[var(--inno-text-muted)]">{t("settings.channels.wechat.disconnected")}</span>
-										</>
-									)}
-								</div>
-
-								{/* QR login area */}
-								<div className="flex flex-col items-center gap-2 rounded border border-dashed border-[var(--inno-border)] bg-[var(--inno-surface)] p-3">
-									{qrUrl && qrStatus !== "confirmed" && qrStatus !== "expired" && (
-										<QRCodeSVG value={qrUrl} size={192} level="M" />
-									)}
-									{qrStatus === "confirmed" && (
-										<div className="flex items-center gap-1.5 text-xs text-[var(--inno-success)]">
-											<CheckCircle size={14} />
-											{t("settings.channels.wechat.confirmed")}
-										</div>
-									)}
-									{qrStatus === "expired" && (
-										<div className="text-xs text-[var(--inno-warning)]">{t("settings.channels.wechat.expired")}</div>
-									)}
-									{qrStatus === "scanning" && (
-										<div className="text-xs text-[var(--inno-text-subtle)]">{t("settings.channels.wechat.scanning")}</div>
-									)}
-									{qrStatus === "waitingScan" && (
-										<div className="text-xs text-[var(--inno-text-muted)]">{t("settings.channels.wechat.waitingScan")}</div>
-									)}
-									{qrStatus === "scanned" && (
-										<div className="text-xs text-[var(--inno-accent)]">{t("settings.channels.wechat.scanned")}</div>
-									)}
-									{(!qrStatus || qrStatus === "confirmed" || qrStatus === "expired") && (
-										<button
-											className="flex items-center gap-1.5 rounded-md inno-primary-button px-3 py-1.5 text-xs text-white"
-											onClick={() => void startQrLogin()}
-										>
-											<QrCodeIcon size={14} />
-											{wxConnected ? t("settings.channels.wechat.relogin") : t("settings.channels.wechat.scanLogin")}
-										</button>
-									)}
-									{qrError && (
-										<div className="rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-xs text-[var(--inno-danger)]">{qrError}</div>
-									)}
-								</div>
-								<div className="flex items-center gap-3">
-									<label className={checkCls}>
-										<input type="checkbox" className={checkboxCls} checked={wechatPersonalOnly} onChange={(e) => setWechatPersonalOnly(e.target.checked)} />
-										{t("settings.channels.personalOnly")}
-									</label>
-								</div>
-								<div>
-									<label className={labelCls}>{t("settings.channels.allowedUserIds")}</label>
-									<textarea className={`${inputCls} h-14 resize-y`} placeholder={t("settings.channels.allowedUserIdsHint") ?? ""} value={wechatAllowedUsers} onChange={(e) => setWechatAllowedUsers(e.target.value)} />
-								</div>
-							</div>
-						)}
-					</div>
-
-					{/* Bridge Token (used by QQ sidecar) */}
-					{QQ_CHANNEL_READY && qqEnabled && (
-						<div className="rounded-lg bg-[var(--inno-surface)] p-3">
-							<div className="text-xs font-medium text-[var(--inno-text)] mb-1">{t("settings.channels.bridgeToken")}</div>
-							<div className="text-[10px] text-[var(--inno-text-subtle)] mb-2">{t("settings.channels.bridgeTokenHint")}</div>
-							<input
-								className={inputCls}
-								type="password"
-								placeholder={settings.bridge?.token ? t("settings.channels.bridgeTokenPlaceholder") ?? "" : ""}
-								value={bridgeToken}
-								onChange={(e) => setBridgeToken(e.target.value)}
-							/>
-							{settings.bridge?.token && <div className="mt-1 text-[10px] text-[var(--inno-text-subtle)]">({settings.bridge.token})</div>}
-						</div>
-					)}
-
-					{formError && <div className="rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-xs text-[var(--inno-danger)]">{formError}</div>}
-					{saveMsg && <div className="rounded bg-[var(--inno-success-bg)] px-2 py-1 text-xs text-[var(--inno-success)]">{saveMsg}</div>}
-					<button
-						className="rounded-md inno-primary-button px-3 py-1.5 text-xs text-white disabled:opacity-50 justify-self-start"
-						disabled={saving}
-						onClick={() => void handleSave()}
-					>
-						{saving ? t("settings.channels.saving") : t("settings.channels.save")}
-					</button>
-				</div>
-			)}
-		</div>
-	);
-}
-
-/* ---------- Channels category page ---------- */
-
-export function ChannelsSettings({ settings }: { settings: InnoSettings }) {
-	const { t } = useTranslation();
 	return (
 		<SettingsSection title={t("settings.tabs.channels")} description={t("settings.sections.channels.desc", "飞书、微信等消息渠道接入")}>
-			<ChannelsCard settings={settings} />
+			<FeishuChannel settings={settings} state={feishu} onStateChange={patchFeishu} />
+
+			{/* QQ (hidden: channel not yet implemented) */}
+			{QQ_CHANNEL_READY && (
+				<div className="rounded-lg bg-[var(--inno-surface)] p-4">
+					<div className="mb-2 flex items-center justify-between">
+						<div>
+							<div className="text-xs font-medium text-[var(--inno-text)]">{t("settings.channels.qq.title")}</div>
+							<div className="text-[10px] text-[var(--inno-text-subtle)]">{t("settings.channels.qq.desc")}</div>
+						</div>
+						<label className={checkCls}>
+							<input type="checkbox" className={checkboxCls} checked={qqEnabled} onChange={(e) => setQqEnabled(e.target.checked)} />
+							{t("settings.channels.enabled")}
+						</label>
+					</div>
+					{qqEnabled && (
+						<div className="grid grid-cols-2 gap-2">
+							<div className="col-span-2">
+								<label className={labelCls}>{t("settings.channels.sidecarBaseUrl")}</label>
+								<input className={inputCls} value={qqSidecarUrl} onChange={(e) => setQqSidecarUrl(e.target.value)} />
+							</div>
+							<div className="col-span-2">
+								<AccessControl
+									personalOnly={qqPersonalOnly}
+									onPersonalOnlyChange={setQqPersonalOnly}
+									userIds={qqAllowedUsers}
+									onUserIdsChange={setQqAllowedUsers}
+								/>
+							</div>
+						</div>
+					)}
+				</div>
+			)}
+
+			<WechatChannel settings={settings} state={wechat} onStateChange={patchWechat} />
+
+			{/* Bridge Token (used by QQ sidecar) */}
+			{QQ_CHANNEL_READY && qqEnabled && (
+				<div className="rounded-lg bg-[var(--inno-surface)] p-4">
+					<div className="text-xs font-medium text-[var(--inno-text)] mb-1">{t("settings.channels.bridgeToken")}</div>
+					<div className="text-[10px] text-[var(--inno-text-subtle)] mb-2">{t("settings.channels.bridgeTokenHint")}</div>
+					<input
+						className={inputCls}
+						type="password"
+						placeholder={settings.bridge?.token ? t("settings.channels.bridgeTokenPlaceholder") ?? "" : ""}
+						value={bridgeToken}
+						onChange={(e) => setBridgeToken(e.target.value)}
+					/>
+					{settings.bridge?.token && <div className="mt-1 text-[10px] text-[var(--inno-text-subtle)]">({settings.bridge.token})</div>}
+				</div>
+			)}
+
+			<div className="grid justify-items-start gap-2">
+				{formError && <div className="w-full rounded bg-[var(--inno-danger-bg)] px-2 py-1 text-xs text-[var(--inno-danger)]">{formError}</div>}
+				{saveMsg && <div className="w-full rounded bg-[var(--inno-success-bg)] px-2 py-1 text-xs text-[var(--inno-success)]">{saveMsg}</div>}
+				<button
+					className="rounded-md inno-primary-button px-3 py-1.5 text-xs text-white disabled:opacity-50"
+					disabled={saving}
+					onClick={() => void handleSave()}
+				>
+					{saving ? t("settings.channels.saving") : t("settings.channels.save")}
+				</button>
+			</div>
 		</SettingsSection>
 	);
 }
