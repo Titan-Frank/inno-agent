@@ -607,7 +607,6 @@ export function ChatCenter() {
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const shouldStickToBottomRef = useRef(true);
-	const lastProgrammaticPinTopRef = useRef<number | null>(null);
 	const [uploads, setUploads] = useState<PendingUpload[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
 	const [inlineImages, setInlineImages] = useState<(InlineImage & { name: string; previewUrl: string })[]>([]);
@@ -773,6 +772,14 @@ export function ChatCenter() {
 	// between flushes left the view behind; combined with transient height
 	// shrink during re-parses, the pinned scrollTop got clamped and the view
 	// jumped back up towards the question.)
+	//
+	// The sticky flag is updated ONLY in response to genuine user gestures
+	// (wheel / touch / scrollbar drag / keyboard). Scroll-position changes also
+	// come from our own pins, from browser clamping after transient content
+	// shrink, and from CSS scroll anchoring during markdown re-renders — all of
+	// which fire scroll events whose distance-from-bottom says nothing about
+	// user intent. Treating those as "user scrolled away" wrongly disengaged
+	// sticking, and the view ended up back near the question at turn end.
 	useEffect(() => {
 		const el = scrollRef.current;
 		const content = el?.querySelector<HTMLElement>("[data-conversation-content]");
@@ -780,9 +787,6 @@ export function ChatCenter() {
 		const observer = new ResizeObserver(() => {
 			if (!shouldStickToBottomRef.current) return;
 			el.scrollTop = el.scrollHeight;
-			// Record the position we pinned to (read back after clamping) so the
-			// scroll handler can recognise this pin's echo event.
-			lastProgrammaticPinTopRef.current = el.scrollTop;
 		});
 		observer.observe(content);
 		return () => observer.disconnect();
@@ -790,22 +794,38 @@ export function ChatCenter() {
 
 	useEffect(() => {
 		shouldStickToBottomRef.current = true;
-		lastProgrammaticPinTopRef.current = null;
 	}, [sessions.currentSessionId]);
+
+	const userScrollGestureRef = useRef(false);
+	const markUserScrollGesture = useCallback(() => {
+		userScrollGestureRef.current = true;
+	}, []);
+	// Only presses on the scrollbar track (right edge) count as scroll gestures —
+	// plain content clicks (text selection, links, buttons) must not, or the next
+	// programmatic/anchoring scroll event would be mistaken for user intent.
+	const handleScrollerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+		const el = scrollRef.current;
+		if (!el) return;
+		if (event.clientX >= el.getBoundingClientRect().right - 24) markUserScrollGesture();
+	}, [markUserScrollGesture]);
 
 	const handleChatScroll = useCallback(() => {
 		const el = scrollRef.current;
 		if (!el) return;
-		// Scroll events are dispatched asynchronously, so the echo of our own
-		// stick-to-bottom pin can fire *after* the next streaming flush has
-		// already grown scrollHeight. Reading the distance-from-bottom at that
-		// point sees the stale pinned scrollTop against the new scrollHeight and
-		// wrongly clears the sticky flag — the view then stops following the
-		// stream and ends up back near the question. A scroll position that is
-		// exactly where our last pin put it is such an echo, not a user scroll.
-		if (lastProgrammaticPinTopRef.current !== null && el.scrollTop === lastProgrammaticPinTopRef.current) return;
-		shouldStickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
-		if (!shouldStickToBottomRef.current) lastProgrammaticPinTopRef.current = null;
+		const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+		// Reaching the bottom always re-engages sticking, no matter how the
+		// scroll was initiated (user gesture, smooth-scroll button, or a pin).
+		if (distanceFromBottom < 96) {
+			shouldStickToBottomRef.current = true;
+			userScrollGestureRef.current = false;
+			return;
+		}
+		// Away from the bottom: only a real user gesture may disengage sticking.
+		// Echoes of programmatic pins, clamping, and scroll-anchoring shifts are
+		// ignored — see the comment above the observer.
+		if (!userScrollGestureRef.current) return;
+		userScrollGestureRef.current = false;
+		shouldStickToBottomRef.current = false;
 	}, []);
 
 	const pauseAutoScroll = useCallback(() => {
@@ -1304,6 +1324,9 @@ export function ChatCenter() {
 				<div
 					ref={scrollRef}
 					onScroll={handleChatScroll}
+					onWheel={markUserScrollGesture}
+					onTouchStart={markUserScrollGesture}
+					onPointerDown={handleScrollerPointerDown}
 					className="chat-scroll inno-chat-grid h-full min-h-0 overflow-y-auto px-4 py-4"
 				>
 					<div data-conversation-content className="mx-auto flex min-w-0 max-w-3xl flex-col gap-3">

@@ -275,6 +275,10 @@ inno-workspace-panel textarea {
 .chat-scroll {
 	scrollbar-width: thin;
 	scrollbar-color: var(--inno-scrollbar-thumb) transparent;
+	/* Stick-to-bottom is managed explicitly by the ResizeObserver in
+	   ChatCenter. Browser scroll anchoring would otherwise shift scrollTop
+	   during streaming markdown re-renders and fight that pinning. */
+	overflow-anchor: none;
 }
 
 .chat-scroll::-webkit-scrollbar,
