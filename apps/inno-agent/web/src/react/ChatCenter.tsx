@@ -381,6 +381,32 @@ function StreamingBubbles() {
 	const normalized = useMemo(() => normalizeMarkdownMath(stream.text), [stream.text]);
 	const { blocks, tail } = useMemo(() => splitStreamingMarkdown(normalized), [normalized]);
 
+	// Shrink guard: while a reply streams, the tail <markdown-artifact> re-parses
+	// on every flush — code fences open and close as characters arrive, tables
+	// snap into being when their separator row lands — and its height briefly
+	// shrinks before settling taller. The stick-to-bottom pin faithfully
+	// amplifies each transient shrink into a visible yank. Hold the bubble at
+	// the tallest height seen so far (via min-height) so re-parse shrinks are
+	// absorbed as blank space inside the bubble instead of moving the layout.
+	// The callback ref re-arms per bubble mount, so each turn starts fresh.
+	const heightWatermarkRef = useRef(0);
+	const bubbleObserverRef = useRef<ResizeObserver | null>(null);
+	const streamingBubbleRef = useCallback((el: HTMLDivElement | null) => {
+		bubbleObserverRef.current?.disconnect();
+		bubbleObserverRef.current = null;
+		if (!el) return;
+		heightWatermarkRef.current = 0;
+		el.style.minHeight = "";
+		const observer = new ResizeObserver(() => {
+			const height = el.offsetHeight;
+			if (height > heightWatermarkRef.current) heightWatermarkRef.current = height;
+			const minHeight = `${heightWatermarkRef.current}px`;
+			if (el.style.minHeight !== minHeight) el.style.minHeight = minHeight;
+		});
+		observer.observe(el);
+		bubbleObserverRef.current = observer;
+	}, []);
+
 	return (
 		<>
 			{stream.thinking ? (
@@ -418,7 +444,7 @@ function StreamingBubbles() {
 					animate={{ opacity: 1, y: 0 }}
 					transition={{ duration: 0.2, ease: "easeOut" }}
 				>
-					<div className="inno-message inno-streaming-blocks max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+					<div ref={streamingBubbleRef} className="inno-message inno-streaming-blocks max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
 						{blocks.map((block, index) => (
 							<StableStreamingMarkdown key={index} content={block} />
 						))}
