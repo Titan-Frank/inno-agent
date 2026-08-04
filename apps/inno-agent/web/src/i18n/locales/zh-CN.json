@@ -551,7 +551,20 @@
 			"about": {
 				"desc": "服务状态与存储统计"
 			}
-		}
+		},
+		"wizard": {
+			"docs": "文档",
+			"changePreset": "更换提供方",
+			"getApiKey": "获取 API Key",
+			"fetchModels": "拉取模型列表",
+			"fetching": "拉取中…",
+			"fetchedCount": "已拉取 {{count}} 个模型",
+			"modelPlaceholder": "输入或从拉取的列表中选择",
+			"vision": "视觉",
+			"autoFilled": "参数已自动填充",
+			"advanced": "高级选项"
+		},
+		"editModel": "编辑模型"
 	},
 	"chat": {
 		"welcomePlaceholder": "有什么想学习或实践的?发送消息开始…",

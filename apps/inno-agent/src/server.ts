@@ -15,6 +15,7 @@ import { buildWikiGraph } from "./memory/l2/wiki-graph.js";
 import { loadConfig, saveConfig, setDefaultModel, upsertProvider, deleteProvider, deleteModel, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig, type InnoModelConfig, type InnoProviderConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
+import { probeProviderModels } from "./agent/model-probe.js";
 import { ensureDir, readJson, readText, writeJson, writeText } from "./storage/file-store.js";
 import {
 	createNewSession,
@@ -4135,6 +4136,27 @@ const server = createServer(async (req, res) => {
 				config = saveConfig(paths.configPath, setDefaultModel(config, config.defaultProvider, config.defaultModel));
 			}
 			json(res, 200, buildSafeSettings());
+			return;
+		}
+
+		// Probe a provider's model list server-side (the browser can't call
+		// provider APIs directly due to CORS + API key exposure). If apiKey is
+		// omitted, fall back to the stored key of an existing provider.
+		if (method === "POST" && url === "/api/settings/providers/probe-models") {
+			const body = (await readBody(req)) as Record<string, unknown>;
+			const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+			const api = typeof body.api === "string" ? body.api : undefined;
+			let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+			const providerId = typeof body.providerId === "string" ? body.providerId.trim() : "";
+			if ((!apiKey || apiKey.startsWith("****")) && providerId) {
+				apiKey = config.providers?.[providerId]?.apiKey ?? "";
+			}
+			try {
+				const result = await probeProviderModels({ baseUrl, apiKey, api });
+				json(res, 200, result);
+			} catch (err) {
+				json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+			}
 			return;
 		}
 
