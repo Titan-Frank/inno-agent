@@ -607,6 +607,7 @@ export function ChatCenter() {
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const shouldStickToBottomRef = useRef(true);
+	const lastProgrammaticPinTopRef = useRef<number | null>(null);
 	const [uploads, setUploads] = useState<PendingUpload[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
 	const [inlineImages, setInlineImages] = useState<(InlineImage & { name: string; previewUrl: string })[]>([]);
@@ -777,7 +778,11 @@ export function ChatCenter() {
 		const content = el?.querySelector<HTMLElement>("[data-conversation-content]");
 		if (!el || !content) return;
 		const observer = new ResizeObserver(() => {
-			if (shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
+			if (!shouldStickToBottomRef.current) return;
+			el.scrollTop = el.scrollHeight;
+			// Record the position we pinned to (read back after clamping) so the
+			// scroll handler can recognise this pin's echo event.
+			lastProgrammaticPinTopRef.current = el.scrollTop;
 		});
 		observer.observe(content);
 		return () => observer.disconnect();
@@ -785,12 +790,22 @@ export function ChatCenter() {
 
 	useEffect(() => {
 		shouldStickToBottomRef.current = true;
+		lastProgrammaticPinTopRef.current = null;
 	}, [sessions.currentSessionId]);
 
 	const handleChatScroll = useCallback(() => {
 		const el = scrollRef.current;
 		if (!el) return;
+		// Scroll events are dispatched asynchronously, so the echo of our own
+		// stick-to-bottom pin can fire *after* the next streaming flush has
+		// already grown scrollHeight. Reading the distance-from-bottom at that
+		// point sees the stale pinned scrollTop against the new scrollHeight and
+		// wrongly clears the sticky flag — the view then stops following the
+		// stream and ends up back near the question. A scroll position that is
+		// exactly where our last pin put it is such an echo, not a user scroll.
+		if (lastProgrammaticPinTopRef.current !== null && el.scrollTop === lastProgrammaticPinTopRef.current) return;
 		shouldStickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+		if (!shouldStickToBottomRef.current) lastProgrammaticPinTopRef.current = null;
 	}, []);
 
 	const pauseAutoScroll = useCallback(() => {
