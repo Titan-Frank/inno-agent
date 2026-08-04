@@ -39,7 +39,8 @@
 		"publish": {
 			"provider": "github",
 			"owner": "hhyqhh",
-			"repo": "inno-agent"
+			"repo": "inno-agent",
+			"releaseType": "release"
 		},
 		"files": [
 			"electron/**/*",
