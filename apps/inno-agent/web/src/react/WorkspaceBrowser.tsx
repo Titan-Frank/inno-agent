@@ -1,22 +1,6 @@
 import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Tree, type NodeRendererProps, type TreeApi, type CreateHandler, type RenameHandler, type DeleteHandler, type MoveHandler } from "react-arborist";
-import MDEditor from "@uiw/react-md-editor";
-import CodeMirror from "@uiw/react-codemirror";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { json } from "@codemirror/lang-json";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
-import { sql } from "@codemirror/lang-sql";
-import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
-import { java } from "@codemirror/lang-java";
-import { cpp } from "@codemirror/lang-cpp";
-import { rust } from "@codemirror/lang-rust";
-import { go } from "@codemirror/lang-go";
-import type { Extension } from "@codemirror/state";
 import { RefreshCw, FileText, FileType, Globe, File, FolderOpen, Folder, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Sparkles, Download, FileCode2, Presentation, FileSpreadsheet, Copy, Check, ListChecks, Trash2 } from "lucide-react";
 import { workspaceStore, type StreamingWorkspacePreview } from "../stores/workspace-store.js";
 import { workspaceFileUrl, workspaceFolderZipUrl, triggerDownload } from "../api/workspace.js";
@@ -27,13 +11,13 @@ import { appStore } from "../stores/app-store.js";
 import { getSessionWorkspace } from "../api/workspaces.js";
 import { TerminalDrawer } from "./terminal/TerminalDrawer.js";
 import { RunButton } from "./terminal/RunButton.js";
+import { LazyCodeEditor } from "./LazyCodeEditor.js";
+import { LazyMarkdownEditor } from "./LazyMarkdownEditor.js";
 import type { WorkspaceFileDetail, WorkspaceFileKind, WorkspaceOfficeFormat } from "../types/workspace.js";
 import { type ArboristNode, toArboristNodes } from "../types/workspace.js";
 import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { useStoreSnapshot } from "./hooks.js";
 import "@earendil-works/pi-web-ui";
-import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
 
 // Heavy office renderers are lazy-loaded so docx-preview / xlsx stay off the
 // critical path and only download when an office file is actually opened.
@@ -148,27 +132,6 @@ function langFromName(name: string): string {
 		".txt": "plaintext", ".log": "plaintext", ".csv": "plaintext",
 	};
 	return map[ext] ?? "plaintext";
-}
-
-/** Return CodeMirror language extension for the given lang key */
-function cmLangExtension(lang: string): Extension[] {
-	switch (lang) {
-		case "typescript": case "tsx": return [javascript({ jsx: true, typescript: true })];
-		case "javascript": case "jsx": return [javascript({ jsx: true })];
-		case "python": return [python()];
-		case "json": return [json()];
-		case "html": return [html()];
-		case "css": case "scss": case "less": return [css()];
-		case "xml": return [xml()];
-		case "yaml": case "toml": return [yaml()];
-		case "sql": return [sql()];
-		case "markdown": return [cmMarkdown()];
-		case "java": case "kotlin": return [java()];
-		case "c": case "cpp": return [cpp()];
-		case "rust": return [rust()];
-		case "go": return [go()];
-		default: return [];
-	}
 }
 
 /* ---------- CSV / TSV parsing ---------- */
@@ -407,53 +370,24 @@ function Preview({ file, isLoading }: { file: WorkspaceFileDetail; isLoading: bo
 	}
 	const lang = langFromName(file.name);
 	return (
-		<div className="h-full overflow-hidden">
-			<CodeMirror
-				value={file.content ?? ""}
-				height="100%"
-				readOnly
-				editable={false}
-				extensions={cmLangExtension(lang)}
-				basicSetup={{ foldGutter: true, lineNumbers: true, highlightActiveLine: false }}
-				style={{ height: "100%", fontSize: "12px" }}
-			/>
-		</div>
+		<LazyCodeEditor
+			value={file.content ?? ""}
+			lang={lang}
+			readOnly
+		/>
 	);
 }
 
 /* ---------- Markdown Editor ---------- */
 
 function MarkdownEditorPane({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-	return (
-		<div className="h-full overflow-hidden" data-color-mode="light">
-			<MDEditor
-				value={value}
-				onChange={(v) => onChange(v ?? "")}
-				height="100%"
-				preview="live"
-				visibleDragbar={false}
-				style={{ height: "100%" }}
-			/>
-		</div>
-	);
+	return <LazyMarkdownEditor value={value} onChange={onChange} />;
 }
 
 /* ---------- Code Editor (CodeMirror) ---------- */
 
 function CodeEditorPane({ value, onChange, lang }: { value: string; onChange: (v: string) => void; lang: string }) {
-	const extensions = useMemo(() => cmLangExtension(lang), [lang]);
-	return (
-		<div className="h-full overflow-hidden">
-			<CodeMirror
-				value={value}
-				height="100%"
-				extensions={extensions}
-				onChange={onChange}
-				basicSetup={{ foldGutter: true, lineNumbers: true, highlightActiveLine: true }}
-				style={{ height: "100%", fontSize: "12px" }}
-			/>
-		</div>
-	);
+	return <LazyCodeEditor value={value} lang={lang} onChange={onChange} />;
 }
 
 function StreamingPreviewPane({ preview, onToggleSidebar, sidebarOpen }: { preview: StreamingWorkspacePreview; onToggleSidebar: () => void; sidebarOpen: boolean }) {

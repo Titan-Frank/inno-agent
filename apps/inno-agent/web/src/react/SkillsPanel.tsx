@@ -1,22 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Tree, type NodeRendererProps } from "react-arborist";
-import MDEditor from "@uiw/react-md-editor";
-import CodeMirror from "@uiw/react-codemirror";
-import { javascript } from "@codemirror/lang-javascript";
-import { python } from "@codemirror/lang-python";
-import { json as jsonLang } from "@codemirror/lang-json";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
-import { sql } from "@codemirror/lang-sql";
-import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
-import { java } from "@codemirror/lang-java";
-import { cpp } from "@codemirror/lang-cpp";
-import { rust } from "@codemirror/lang-rust";
-import { go } from "@codemirror/lang-go";
-import type { Extension } from "@codemirror/state";
 import { RefreshCw, Upload, Trash2, ChevronLeft, File, FileText, FileType, Folder, FolderOpen, Globe, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Library, Download, Check, FileCode2, Search } from "lucide-react";
 import { skillsStore } from "../stores/skills-store.js";
 import { skillRawUrl } from '../api/skills.js';
@@ -28,9 +12,9 @@ import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { checkboxCls } from "./ui/checkbox.js";
 import { Spinner } from "./ui/Spinner.js";
+import { LazyCodeEditor } from "./LazyCodeEditor.js";
+import { LazyMarkdownEditor } from "./LazyMarkdownEditor.js";
 import "@earendil-works/pi-web-ui";
-import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
 
 /* ---------- helpers (same as WorkspaceBrowser) ---------- */
 
@@ -72,26 +56,6 @@ function langFromName(name: string): string {
 	return map[ext] ?? "plaintext";
 }
 
-function cmLangExtension(lang: string): Extension[] {
-	switch (lang) {
-		case "typescript": case "tsx": return [javascript({ jsx: true, typescript: true })];
-		case "javascript": case "jsx": return [javascript({ jsx: true })];
-		case "python": return [python()];
-		case "json": return [jsonLang()];
-		case "html": return [html()];
-		case "css": case "scss": case "less": return [css()];
-		case "xml": return [xml()];
-		case "yaml": case "toml": return [yaml()];
-		case "sql": return [sql()];
-		case "markdown": return [cmMarkdown()];
-		case "java": case "kotlin": return [java()];
-		case "c": case "cpp": return [cpp()];
-		case "rust": return [rust()];
-		case "go": return [go()];
-		default: return [];
-	}
-}
-
 function SkillHtmlPreview({ file }: { file: WorkspaceFileDetail }) {
   return <iframe className="h-full w-full border-0 bg-[var(--inno-surface)]" sandbox="allow-scripts allow-same-origin" srcDoc={file.content ?? ""} title={file.name} />;
 }
@@ -128,17 +92,11 @@ function FilePreview({ file, skillName, isLoading }: { file: WorkspaceFileDetail
 	}
 	const lang = langFromName(file.name);
 	return (
-		<div className="h-full overflow-hidden">
-			<CodeMirror
-				value={file.content ?? ""}
-				height="100%"
-				readOnly
-				editable={false}
-				extensions={cmLangExtension(lang)}
-				basicSetup={{ foldGutter: true, lineNumbers: true, highlightActiveLine: false }}
-				style={{ height: "100%", fontSize: "12px" }}
-			/>
-		</div>
+		<LazyCodeEditor
+			value={file.content ?? ""}
+			lang={lang}
+			readOnly
+		/>
 	);
 }
 
@@ -191,7 +149,6 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 	if (state.isEditing && state.file) {
 		const isMd = state.file.kind === "markdown";
 		const lang = langFromName(state.file.name);
-		const extensions = cmLangExtension(lang);
 		return (
 			<div className="flex h-full flex-col">
 				<div className="flex h-10 items-center justify-between border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-3">
@@ -215,13 +172,9 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 				</div>
 				<div className="min-h-0 flex-1">
 					{isMd ? (
-						<div className="h-full overflow-hidden" data-color-mode="light">
-							<MDEditor value={state.editBuffer} onChange={(v) => skillsStore.updateEditBuffer(v ?? "")} height="100%" preview="live" visibleDragbar={false} style={{ height: "100%" }} />
-						</div>
+						<LazyMarkdownEditor value={state.editBuffer} onChange={(v) => skillsStore.updateEditBuffer(v)} />
 					) : (
-						<div className="h-full overflow-hidden">
-							<CodeMirror value={state.editBuffer} height="100%" extensions={extensions} onChange={(v) => skillsStore.updateEditBuffer(v)} basicSetup={{ foldGutter: true, lineNumbers: true, highlightActiveLine: true }} style={{ height: "100%", fontSize: "12px" }} />
-						</div>
+						<LazyCodeEditor value={state.editBuffer} lang={lang} onChange={(v) => skillsStore.updateEditBuffer(v)} />
 					)}
 				</div>
 			</div>

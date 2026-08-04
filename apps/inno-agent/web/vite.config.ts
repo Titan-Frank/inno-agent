@@ -1,12 +1,23 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { cpSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { defineConfig, type Plugin, type ResolvedConfig } from "vite";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const monoRoot = resolve(__dirname, "../../..");
+const COMPRESSIBLE_EXTENSIONS = new Set([".js", ".mjs", ".css", ".html", ".json", ".svg"]);
+const HEAVY_LAZY_CHUNK_PATTERNS = [
+	"pi-web-ui",
+	"PromptDialog",
+	"markdown-editor",
+	"codemirror",
+	"cytoscape",
+	"xlsx",
+	"docx-preview",
+];
 
 function sanitizeUploadName(name: string): string {
 	const cleaned = name
@@ -69,6 +80,49 @@ const patchMiniLitMarkedPlugin = {
 		};
 	},
 };
+
+function precompressStaticAssetsPlugin(thresholdBytes = 10 * 1024): Plugin {
+	let resolvedConfig: ResolvedConfig;
+
+	function compressFile(filePath: string): void {
+		const ext = extname(filePath);
+		if (!COMPRESSIBLE_EXTENSIONS.has(ext) || filePath.endsWith(".br") || filePath.endsWith(".gz")) return;
+
+		const stat = statSync(filePath);
+		if (!stat.isFile() || stat.size < thresholdBytes) return;
+
+		const source = readFileSync(filePath);
+		const brotli = brotliCompressSync(source, {
+			params: {
+				[zlibConstants.BROTLI_PARAM_QUALITY]: 11,
+			},
+		});
+		if (brotli.length < source.length) writeFileSync(`${filePath}.br`, brotli);
+
+		const gzip = gzipSync(source, { level: 9 });
+		if (gzip.length < source.length) writeFileSync(`${filePath}.gz`, gzip);
+	}
+
+	function walk(dir: string): void {
+		if (!existsSync(dir)) return;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const fullPath = join(dir, entry.name);
+			if (entry.isDirectory()) walk(fullPath);
+			else if (entry.isFile()) compressFile(fullPath);
+		}
+	}
+
+	return {
+		name: "inno-precompress-static-assets",
+		apply: "build",
+		configResolved(config) {
+			resolvedConfig = config;
+		},
+		closeBundle() {
+			walk(resolve(resolvedConfig.root, resolvedConfig.build.outDir));
+		},
+	};
+}
 
 export default defineConfig({
 	optimizeDeps: {
@@ -153,6 +207,7 @@ export default defineConfig({
 				});
 			},
 		},
+		precompressStaticAssetsPlugin(),
 		tailwindcss(),
 	],
 	server: {
@@ -167,30 +222,52 @@ export default defineConfig({
 		},
 	},
 	build: {
+		modulePreload: {
+			resolveDependencies: (_filename, deps) => deps.filter((dep) => !HEAVY_LAZY_CHUNK_PATTERNS.some((pattern) => dep.includes(pattern))),
+		},
 		rollupOptions: {
 			output: {
-				manualChunks: {
-					codemirror: [
-						"@uiw/react-codemirror",
-						"@codemirror/lang-cpp",
-						"@codemirror/lang-css",
-						"@codemirror/lang-go",
-						"@codemirror/lang-html",
-						"@codemirror/lang-java",
-						"@codemirror/lang-javascript",
-						"@codemirror/lang-json",
-						"@codemirror/lang-markdown",
-						"@codemirror/lang-python",
-						"@codemirror/lang-rust",
-						"@codemirror/lang-sql",
-						"@codemirror/lang-xml",
-						"@codemirror/lang-yaml",
-					],
-					"markdown-editor": ["@uiw/react-md-editor"],
-					cytoscape: ["cytoscape", "cytoscape-cola", "cytoscape-cose-bilkent"],
-					katex: ["katex"],
-					"docx-preview": ["docx-preview"],
-					xlsx: ["xlsx"],
+				manualChunks(id) {
+					if (id.includes("vite/preload-helper")) {
+						return "vite-preload-helper";
+					}
+					if (!id.includes("node_modules")) return undefined;
+					if (
+						id.includes("/node_modules/react/") ||
+						id.includes("/node_modules/react-dom/") ||
+						id.includes("/node_modules/scheduler/")
+					) {
+						return "react-vendor";
+					}
+					if (id.includes("/node_modules/@uiw/react-codemirror/") || id.includes("/node_modules/@codemirror/")) {
+						return "codemirror";
+					}
+					if (
+						id.includes("/node_modules/@uiw/react-md-editor/") ||
+						id.includes("/node_modules/@uiw/react-markdown-preview/")
+					) {
+						return "markdown-editor";
+					}
+					if (
+						id.includes("/node_modules/@earendil-works/pi-web-ui/") ||
+						id.includes("/node_modules/@juicesharp/") ||
+						id.includes("/node_modules/@mariozechner/mini-lit/")
+					) {
+						return "pi-web-ui";
+					}
+					if (id.includes("/node_modules/cytoscape")) {
+						return "cytoscape";
+					}
+					if (id.includes("/node_modules/katex/")) {
+						return "katex";
+					}
+					if (id.includes("/node_modules/docx-preview/")) {
+						return "docx-preview";
+					}
+					if (id.includes("/node_modules/xlsx/")) {
+						return "xlsx";
+					}
+					return undefined;
 				},
 			},
 		},
