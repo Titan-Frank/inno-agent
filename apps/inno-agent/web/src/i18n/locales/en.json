@@ -551,6 +551,21 @@
 			"about": {
 				"desc": "Server status and storage stats"
 			}
+		},
+		"update": {
+			"title": "Version & Updates",
+			"currentVersion": "Current version",
+			"check": "Check for updates",
+			"checking": "Checking for updates…",
+			"available": "New version v{{version}} available",
+			"downloading": "Downloading update v{{version}}…",
+			"downloaded": "Update v{{version}} is ready",
+			"notAvailable": "You're on the latest version",
+			"error": "Update check failed: {{message}}",
+			"install": "Restart & install",
+			"goDownload": "Download",
+			"devDisabled": "Auto-update is disabled in development",
+			"macHint": "In-app installation is not supported on macOS yet. Please download the latest installer and reinstall."
 		}
 	},
 	"chat": {

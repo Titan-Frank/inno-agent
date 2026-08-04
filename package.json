@@ -36,6 +36,11 @@
 		"directories": {
 			"output": "dist-electron"
 		},
+		"publish": {
+			"provider": "github",
+			"owner": "hhyqhh",
+			"repo": "inno-agent"
+		},
 		"files": [
 			"electron/**/*",
 			"apps/inno-agent/dist/**/*",
@@ -56,6 +61,12 @@
 			"target": [
 				{
 					"target": "dmg",
+					"arch": [
+						"arm64"
+					]
+				},
+				{
+					"target": "zip",
 					"arch": [
 						"arm64"
 					]
@@ -107,6 +118,9 @@
 			"oneClick": false,
 			"perMachine": false
 		}
+	},
+	"dependencies": {
+		"electron-updater": "^6.6.2"
 	},
 	"devDependencies": {
 		"@tailwindcss/cli": "^4.0.0-beta.14",
