@@ -12,8 +12,8 @@ import { app, ipcMain, shell } from "electron";
 
 const DOWNLOAD_PAGE_URL = "https://github.com/hhyqhh/inno-agent/releases/latest";
 
-/** Windows 上由 electron-updater 自动下载安装；macOS 仅提示（未签名无法安装） */
-const canAutoInstall = process.platform === "win32";
+/** Windows(NSIS)/Linux(AppImage) 由 electron-updater 自动下载安装；macOS 仅提示（未签名无法安装） */
+const canAutoInstall = process.platform === "win32" || process.platform === "linux";
 
 /** 当前更新状态 */
 let currentStatus = { status: "idle" };
