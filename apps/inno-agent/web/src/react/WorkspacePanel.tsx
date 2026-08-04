@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "motion/react";
 import { PanelRightOpen, PanelRightClose, Columns2, Maximize2, BookOpen, BriefcaseBusiness, FolderKanban, Settings, Sparkles, UserRound } from "lucide-react";
@@ -6,11 +6,13 @@ import type { RightPanelTab, WorkspaceMode } from "../stores/app-store.js";
 import { appStore } from "../stores/app-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { useStoreSnapshot } from "./hooks.js";
-import { WorkspaceBrowser } from "./WorkspaceBrowser.js";
-import { Notebook } from "./Notebook.js";
-import { JobsPanel } from "./JobsPanel.js";
-import { LearnerProfilePanel } from "./LearnerProfilePanel.js";
-import { SkillsPanel } from "./SkillsPanel.js";
+
+const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser.js").then((mod) => ({ default: mod.WorkspaceBrowser })));
+const Notebook = lazy(() => import("./Notebook.js").then((mod) => ({ default: mod.Notebook })));
+const JobsPanel = lazy(() => import("./JobsPanel.js").then((mod) => ({ default: mod.JobsPanel })));
+const LearnerProfilePanel = lazy(() => import("./LearnerProfilePanel.js").then((mod) => ({ default: mod.LearnerProfilePanel })));
+const SkillsPanel = lazy(() => import("./SkillsPanel.js").then((mod) => ({ default: mod.SkillsPanel })));
+const SettingsPanel = lazy(() => import("./SettingsPanel.js").then((mod) => ({ default: mod.SettingsPanel })));
 
 interface WorkspacePanelProps {
 	activeTab: RightPanelTab;
@@ -23,13 +25,56 @@ interface WorkspacePanelProps {
 
 const TAB_ORDER: RightPanelTab[] = ["preview", "notebook", "profile", "jobs", "skills"];
 
-const TAB_ICONS: Record<RightPanelTab, React.ReactNode> = {
+const TAB_ICONS: Record<RightPanelTab, ReactNode> = {
 	notebook: <BookOpen size={14} />,
 	preview: <FolderKanban size={14} />,
 	profile: <UserRound size={14} />,
 	jobs: <BriefcaseBusiness size={14} />,
 	skills: <Sparkles size={14} />,
 };
+
+class WorkspaceContentErrorBoundary extends Component<
+	{ resetKey: RightPanelTab; children: ReactNode },
+	{ error: Error | null }
+> {
+	state: { error: Error | null } = { error: null };
+
+	static getDerivedStateFromError(error: Error) {
+		return { error };
+	}
+
+	componentDidCatch(error: Error, info: ErrorInfo) {
+		console.error("[workspace-panel] failed to render lazy content", error, info);
+	}
+
+	componentDidUpdate(prevProps: { resetKey: RightPanelTab }) {
+		if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+			this.setState({ error: null });
+		}
+	}
+
+	render() {
+		if (this.state.error) {
+			return (
+				<div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+					<div className="text-sm font-medium text-[var(--inno-text)]">Panel failed to load</div>
+					<div className="max-w-sm text-xs text-[var(--inno-text-muted)]">
+						Switch tabs or close and reopen the panel to try again.
+					</div>
+				</div>
+			);
+		}
+		return this.props.children;
+	}
+}
+
+function WorkspaceContentFallback() {
+	return (
+		<div className="flex h-full items-center justify-center bg-[var(--inno-workspace-bg)] text-xs text-[var(--inno-text-muted)]">
+			Loading panel...
+		</div>
+	);
+}
 
 function WorkspaceContent({ activeTab }: { activeTab: RightPanelTab }) {
 	switch (activeTab) {
@@ -176,7 +221,11 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 						exit={{ opacity: 0, y: -6 }}
 						transition={{ duration: 0.18, ease: "easeOut" }}
 					>
-						<WorkspaceContent activeTab={activeTab} />
+						<WorkspaceContentErrorBoundary resetKey={activeTab}>
+							<Suspense fallback={<WorkspaceContentFallback />}>
+								<WorkspaceContent activeTab={activeTab} />
+							</Suspense>
+						</WorkspaceContentErrorBoundary>
 					</motion.div>
 				</AnimatePresence>
 			</div>

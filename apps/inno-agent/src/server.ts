@@ -728,13 +728,67 @@ const MIME_TYPES: Record<string, string> = {
 	".woff2": "font/woff2",
 };
 
-function serveStatic(res: ServerResponse, filePath: string, sendBody = true): boolean {
+function isHashedStaticAsset(filePath: string): boolean {
+	const rel = relative(webDistDir, filePath).split(sep).join("/");
+	return /^assets\/.+-[A-Za-z0-9_-]{8,}\.[^.]+$/.test(rel);
+}
+
+function acceptEncodingHeader(req: HttpReq): string {
+	const value = req.headers["accept-encoding"];
+	return Array.isArray(value) ? value.join(",") : value ?? "";
+}
+
+function encodingAccepted(acceptEncoding: string, encoding: "br" | "gzip"): boolean {
+	let wildcardQ: number | undefined;
+	for (const part of acceptEncoding.split(",")) {
+		const [rawToken, ...params] = part.trim().split(";");
+		const token = rawToken.trim().toLowerCase();
+		if (!token) continue;
+		let q = 1;
+		for (const param of params) {
+			const [name, value] = param.trim().split("=", 2);
+			if (name?.trim().toLowerCase() !== "q") continue;
+			const parsed = Number.parseFloat(value?.trim() ?? "");
+			q = Number.isFinite(parsed) ? parsed : 0;
+			break;
+		}
+		if (token === encoding) return q > 0;
+		if (token === "*") wildcardQ = q;
+	}
+	return wildcardQ !== undefined ? wildcardQ > 0 : false;
+}
+
+function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBody = true): boolean {
 	try {
 		if (!existsSync(filePath) || !statSync(filePath).isFile()) return false;
 		const ext = extname(filePath);
 		const contentType = MIME_TYPES[ext] || "application/octet-stream";
-		const content = readFileSync(filePath);
-		res.writeHead(200, { "Content-Type": contentType, "Content-Length": content.length });
+		const acceptEncoding = acceptEncodingHeader(req);
+		let responsePath = filePath;
+		let contentEncoding: "br" | "gzip" | undefined;
+		if (encodingAccepted(acceptEncoding, "br") && existsSync(`${filePath}.br`)) {
+			responsePath = `${filePath}.br`;
+			contentEncoding = "br";
+		} else if (encodingAccepted(acceptEncoding, "gzip") && existsSync(`${filePath}.gz`)) {
+			responsePath = `${filePath}.gz`;
+			contentEncoding = "gzip";
+		}
+
+		const content = readFileSync(responsePath);
+		const headers: Record<string, string | number> = {
+			"Content-Type": contentType,
+			"Content-Length": content.length,
+			"Cache-Control": ext === ".html"
+				? "no-cache"
+				: isHashedStaticAsset(filePath)
+					? "public, max-age=31536000, immutable"
+					: "no-cache",
+		};
+		if (contentEncoding) {
+			headers["Content-Encoding"] = contentEncoding;
+			headers.Vary = "Accept-Encoding";
+		}
+		res.writeHead(200, headers);
 		res.end(sendBody ? content : undefined);
 		return true;
 	} catch (err) {
@@ -4821,9 +4875,9 @@ const server = createServer(async (req, res) => {
 			const staticPath = safeJoin(webDistDir, urlPath.replace(/^\/+/, ""));
 			const sendBody = method === "GET";
 			// Try exact file in web/dist
-			if (staticPath && serveStatic(res, staticPath, sendBody)) return;
+			if (staticPath && serveStatic(req, res, staticPath, sendBody)) return;
 			// SPA fallback: serve index.html for non-API paths
-			if (serveStatic(res, join(webDistDir, "index.html"), sendBody)) return;
+			if (serveStatic(req, res, join(webDistDir, "index.html"), sendBody)) return;
 		}
 
 		// --- 404 ---

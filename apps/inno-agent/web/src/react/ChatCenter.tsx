@@ -24,7 +24,7 @@ import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { QuestionDialog } from "./QuestionDialog.js";
 import { buildConversationTurns, ConversationMinimap } from "./ConversationMinimap.js";
-import "@earendil-works/pi-web-ui";
+import { MarkdownArtifact } from "./MarkdownArtifact.js";
 
 // Thresholds for collapsing a large paste into a placeholder chip. A paste
 // crossing EITHER threshold is collapsed. Tuned so normal multi-line typing
@@ -222,7 +222,7 @@ function AssistantContent({ content }: { content: string }) {
 	const normalized = useMemo(() => normalizeMarkdownMath(trimmed), [trimmed]);
 	if (!trimmed) return null;
 	if (!shouldCollapseAssistantContent(trimmed)) {
-		return <markdown-artifact content={normalized} />;
+		return <MarkdownArtifact content={normalized} />;
 	}
 	const lineCount = trimmed.split(/\r\n|\r|\n/).length;
 	const preview = trimmed.slice(0, 900);
@@ -235,7 +235,7 @@ function AssistantContent({ content }: { content: string }) {
 			</div>
 			{expanded ? (
 				<div className="max-h-[60vh] overflow-auto rounded border border-[var(--inno-border)] bg-[var(--inno-surface)] p-2">
-					<markdown-artifact content={normalized} />
+					<MarkdownArtifact content={normalized} />
 				</div>
 			) : (
 				<pre className="max-h-36 overflow-hidden whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--inno-text-muted)] [overflow-wrap:anywhere]">
@@ -355,7 +355,7 @@ const MessageBubble = memo(function MessageBubble({ message, showChannel }: { me
  * (no re-parse shrink that could yank the scroll position upwards).
  */
 const StableStreamingMarkdown = memo(function StableStreamingMarkdown({ content }: { content: string }) {
-	return <markdown-artifact content={content} />;
+	return <MarkdownArtifact content={content} />;
 });
 
 /**
@@ -425,7 +425,7 @@ function StreamingBubbles() {
 						{/* Always mounted while text streams (even when the tail is
 						    momentarily empty) so the DOM node — and the height below the
 						    stable blocks — never churns mid-stream. */}
-						<markdown-artifact content={tail} />
+						<MarkdownArtifact content={tail} />
 					</div>
 				</motion.div>
 			) : null}
