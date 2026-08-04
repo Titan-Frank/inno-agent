@@ -12,7 +12,6 @@ const Notebook = lazy(() => import("./Notebook.js").then((mod) => ({ default: mo
 const JobsPanel = lazy(() => import("./JobsPanel.js").then((mod) => ({ default: mod.JobsPanel })));
 const LearnerProfilePanel = lazy(() => import("./LearnerProfilePanel.js").then((mod) => ({ default: mod.LearnerProfilePanel })));
 const SkillsPanel = lazy(() => import("./SkillsPanel.js").then((mod) => ({ default: mod.SkillsPanel })));
-const SettingsPanel = lazy(() => import("./SettingsPanel.js").then((mod) => ({ default: mod.SettingsPanel })));
 
 interface WorkspacePanelProps {
 	activeTab: RightPanelTab;
