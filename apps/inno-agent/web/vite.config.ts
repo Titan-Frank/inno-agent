@@ -227,6 +227,13 @@ export default defineConfig({
 		},
 		rollupOptions: {
 			output: {
+				// Only assign modules that explicitly match manualChunks below.
+				// Without this, Rollup merges each matched module's whole dependency
+				// subtree into the manual chunk — which dragged mini-lit's
+				// MarkdownBlock.js (statically imported by main.tsx for QuestionDialog)
+				// into the pi-web-ui chunk, making that 2MB chunk a static dependency
+				// of the entry and defeating the lazy loading entirely.
+				onlyExplicitManualChunks: true,
 				manualChunks(id) {
 					if (id.includes("vite/preload-helper")) {
 						return "vite-preload-helper";
@@ -248,10 +255,16 @@ export default defineConfig({
 					) {
 						return "markdown-editor";
 					}
+					// NOTE: @mariozechner/mini-lit is deliberately NOT assigned here.
+					// main.tsx statically imports mini-lit/dist/MarkdownBlock.js (needed by
+					// QuestionDialog), so forcing all of mini-lit into the pi-web-ui chunk
+					// would make that chunk a static dependency of the entry and defeat the
+					// lazy loading of pi-web-ui (and its katex/docx-preview/xlsx deps).
+					// Leaving mini-lit unassigned lets Rollup put only MarkdownBlock's
+					// closure into the entry graph; the rest stays inside the lazy chunk.
 					if (
 						id.includes("/node_modules/@earendil-works/pi-web-ui/") ||
-						id.includes("/node_modules/@juicesharp/") ||
-						id.includes("/node_modules/@mariozechner/mini-lit/")
+						id.includes("/node_modules/@juicesharp/")
 					) {
 						return "pi-web-ui";
 					}
