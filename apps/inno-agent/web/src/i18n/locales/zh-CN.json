@@ -551,21 +551,6 @@
 			"about": {
 				"desc": "服务状态与存储统计"
 			}
-		},
-		"update": {
-			"title": "版本与更新",
-			"currentVersion": "当前版本",
-			"check": "检查更新",
-			"checking": "正在检查更新…",
-			"available": "发现新版本 v{{version}}",
-			"downloading": "正在下载更新 v{{version}}…",
-			"downloaded": "更新 v{{version}} 已就绪",
-			"notAvailable": "已是最新版本",
-			"error": "检查更新失败：{{message}}",
-			"install": "重启安装",
-			"goDownload": "前往下载",
-			"devDisabled": "开发环境不启用自动更新",
-			"macHint": "macOS 版本暂不支持应用内安装，请下载最新安装包覆盖安装。"
 		}
 	},
 	"chat": {

@@ -1,6 +1,6 @@
 {
 	"name": "inno-agent",
-	"version": "0.4.7",
+	"version": "0.4.5",
 	"private": true,
 	"description": "Personal learning agent built on PI SDK with three-layer memory system",
 	"author": "Inno Agent Contributors",
@@ -36,12 +36,6 @@
 		"directories": {
 			"output": "dist-electron"
 		},
-		"publish": {
-			"provider": "github",
-			"owner": "hhyqhh",
-			"repo": "inno-agent",
-			"releaseType": "release"
-		},
 		"files": [
 			"electron/**/*",
 			"apps/inno-agent/dist/**/*",
@@ -62,12 +56,6 @@
 			"target": [
 				{
 					"target": "dmg",
-					"arch": [
-						"arm64"
-					]
-				},
-				{
-					"target": "zip",
 					"arch": [
 						"arm64"
 					]

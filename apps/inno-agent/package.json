@@ -1,6 +1,6 @@
 {
 	"name": "inno-agent",
-	"version": "0.4.7",
+	"version": "0.4.5",
 	"description": "Personal learning agent built on PI SDK with three-layer memory system",
 	"type": "module",
 	"bin": {
@@ -25,7 +25,6 @@
 		"@types/ws": "^8.18.1",
 		"axios": "^1.16.1",
 		"cron-parser": "^5.5.0",
-		"electron-updater": "^6.6.2",
 		"graphology": "^0.26.0",
 		"graphology-communities-louvain": "^2.0.2",
 		"node-pty": "^1.0.0",

@@ -50,29 +50,24 @@ jobs:
       - name: Build frontend (vite)
         run: npm --workspace inno-agent-web run build
 
-      # ── 7. 打包 Electron DMG + ZIP ────────────────────────────────────────────
+      # ── 7. 打包 Electron DMG ─────────────────────────────────────────────────
       #   未签名版：不需要 Apple 证书，用户首次打开需右键→打开
-      #   tag 触发时 --publish always：electron-builder 自动创建/复用 GitHub Release
-      #   并上传 dmg/zip/latest-mac.yml（自动更新的更新源）；手动触发只打包不发布
-      - name: Package Electron (unsigned DMG + ZIP)
-        run: npx electron-builder --mac --arm64 --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+      - name: Package Electron (unsigned DMG)
+        # --publish never：只打包，不让 electron-builder 自动发布（发布交给后面的步骤）
+        run: npx electron-builder --mac dmg --arm64 --publish never
         env:
           # 跳过代码签名（无证书时必须）
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── 7b. [可选] 签名 + 公证版（取消注释并配置 Secrets 后生效） ────────────
-      #   签名后 macOS 自动更新即可启用（electron-updater 要求 app 已签名，
-      #   未签名构建只能「检测新版本 + 引导手动下载」）
       # - name: Package Electron (signed + notarized DMG)
-      #   run: npx electron-builder --mac --arm64 --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+      #   run: npx electron-builder --mac dmg --arm64
       #   env:
       #     CSC_LINK: ${{ secrets.CSC_LINK }}                          # base64 编码的 .p12 证书
       #     CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}          # .p12 密码
       #     APPLE_ID: ${{ secrets.APPLE_ID }}                          # Apple ID 邮箱
       #     APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       #     APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── 8. 读取实际版本号 ────────────────────────────────────────────────────
       - name: Read version
@@ -86,7 +81,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: InnoAgent-${{ steps.pkg.outputs.version }}-arm64
-          path: |
-            dist-electron/*.dmg
-            dist-electron/*.zip
+          path: dist-electron/*.dmg
           retention-days: 30
+
+      # ── 10. 创建 GitHub Release（仅 tag 触发时） ────────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Inno Agent v${{ steps.pkg.outputs.version }}"
+          files: dist-electron/*.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-rc') }}

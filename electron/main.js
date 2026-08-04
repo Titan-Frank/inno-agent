@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { initAutoUpdater, registerUpdaterIpc } from "./updater.js";
 
 // macOS 上避免未签名 app 触发钥匙串权限弹窗
 app.commandLine.appendSwitch("use-mock-keychain");
@@ -88,20 +87,13 @@ function openMainWindow() {
     minHeight: 600,
     title: "Inno Agent",
     backgroundColor: "#0f1117",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: join(__dirname, "preload.cjs"),
-    },
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
   // 关闭 loading 窗口
   loadingWindow?.close();
-
-  // 自动更新（仅打包环境启用，开发环境跳过）
-  if (app.isPackaged) initAutoUpdater(mainWindow);
 
   mainWindow.on("closed", () => { mainWindow = null; });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -169,7 +161,6 @@ app.whenReady().then(async () => {
   tray.on("click", () => { if (mainWindow) mainWindow.show(); else openMainWindow(); });
 
   ensureConfig();
-  registerUpdaterIpc();
   openLoadingWindow();
   startServer(() => openMainWindow());
 });
