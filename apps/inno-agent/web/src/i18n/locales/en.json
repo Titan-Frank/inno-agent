@@ -551,7 +551,20 @@
 			"about": {
 				"desc": "Server status and storage stats"
 			}
-		}
+		},
+		"wizard": {
+			"docs": "Docs",
+			"changePreset": "Change provider",
+			"getApiKey": "Get API key",
+			"fetchModels": "Fetch model list",
+			"fetching": "Fetching…",
+			"fetchedCount": "{{count}} models fetched",
+			"modelPlaceholder": "Type or pick from the fetched list",
+			"vision": "Vision",
+			"autoFilled": "Parameters auto-filled",
+			"advanced": "Advanced options"
+		},
+		"editModel": "Edit model"
 	},
 	"chat": {
 		"welcomePlaceholder": "What would you like to learn or build? Send a message to start…",

@@ -32,6 +32,20 @@ export async function deleteModelApi(providerId: string, modelId: string): Promi
 	);
 }
 
+export interface ProbeModelsRequest {
+	baseUrl: string;
+	apiKey?: string;
+	providerId?: string;
+	api?: string;
+}
+
+export async function probeProviderModels(payload: ProbeModelsRequest): Promise<{ models: string[] }> {
+	return apiFetch<{ models: string[] }>("/api/settings/providers/probe-models", {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
 export async function saveChannelsSettings(payload: ChannelsSettingsPayload): Promise<InnoSettings> {
 	return apiFetch<InnoSettings>("/api/settings/channels", {
 		method: "PUT",
