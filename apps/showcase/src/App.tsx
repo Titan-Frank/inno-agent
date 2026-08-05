@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { CaseListPage } from "./pages/CaseListPage.js";
+import { CaseSidebar } from "./components/CaseSidebar.js";
 import { ReplayPage } from "./pages/ReplayPage.js";
+import { WelcomePage } from "./pages/WelcomePage.js";
+import type { CaseMeta } from "./cases.js";
+import { fetchCaseIndex } from "./cases.js";
 
-/** Minimal hash routing: "" -> case list, "#/case/<id>" -> replay player. */
+/** Minimal hash routing: "" -> welcome, "#/case/<id>" -> replay player. */
 function useHashRoute(): string {
 	const [hash, setHash] = useState(() => window.location.hash);
 	useEffect(() => {
@@ -15,9 +18,24 @@ function useHashRoute(): string {
 
 export function App() {
 	const hash = useHashRoute();
+	const [cases, setCases] = useState<CaseMeta[] | null>(null);
+
+	useEffect(() => {
+		fetchCaseIndex()
+			.then(setCases)
+			.catch(() => setCases([]));
+	}, []);
+
 	const caseMatch = /^#\/case\/([^/]+)$/.exec(hash);
-	if (caseMatch) {
-		return <ReplayPage caseId={decodeURIComponent(caseMatch[1])} />;
-	}
-	return <CaseListPage />;
+	const activeId = caseMatch ? decodeURIComponent(caseMatch[1]) : undefined;
+
+	// Same frame classes as the product shell (app.css): sidebar column +
+	// chat column, workspace column collapsed. .showcase-frame adds the
+	// mobile fallback (sidebar hidden, chat full-width).
+	return (
+		<div className="app-layout app-layout--sidebar-expanded app-layout--workspace-collapsed showcase-frame">
+			<CaseSidebar cases={cases} activeId={activeId} />
+			{activeId ? <ReplayPage caseId={activeId} /> : <WelcomePage cases={cases} />}
+		</div>
+	);
 }

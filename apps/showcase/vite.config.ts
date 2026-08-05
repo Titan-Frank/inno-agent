@@ -54,6 +54,29 @@ export default defineConfig({
 	// sites, S3 prefixes, etc.).
 	base: "./",
 	optimizeDeps: {
+		// The main app's vite config discovers pi-web-ui statically (it lives
+		// inside that app's root), so highlight.js etc. get prebundled with
+		// CJS→ESM interop. Here pi-web-ui is only reached through the @inno-web
+		// source alias at runtime, which the dep scanner doesn't follow — raw
+		// mini-lit then imports raw highlight.js/lib (CJS) and crashes with
+		// "does not provide an export named 'default'". Force-prebundle it.
+		// mini-lit is served raw (excluded below, so the marked patch transform
+		// applies), and its CodeBlock.js deep-imports these CJS subpaths — they
+		// must each be prebundled with interop or dev mode crashes with
+		// "does not provide an export named 'default'".
+		include: [
+			"@earendil-works/pi-web-ui",
+			"highlight.js",
+			"highlight.js/lib/core",
+			"highlight.js/lib/languages/bash",
+			"highlight.js/lib/languages/css",
+			"highlight.js/lib/languages/javascript",
+			"highlight.js/lib/languages/json",
+			"highlight.js/lib/languages/python",
+			"highlight.js/lib/languages/sql",
+			"highlight.js/lib/languages/typescript",
+			"highlight.js/lib/languages/xml",
+		],
 		exclude: ["@mariozechner/mini-lit"],
 	},
 	resolve: {

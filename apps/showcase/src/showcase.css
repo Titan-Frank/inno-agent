@@ -1,22 +1,14 @@
 /* Showcase-only styles. Product look & feel comes from @inno-web/app.css. */
 
-.inno-replay-dot {
-	width: 6px;
-	height: 6px;
-	border-radius: 9999px;
-	background: currentColor;
-	animation: inno-replay-bounce 1s infinite ease-in-out;
-}
-
-@keyframes inno-replay-bounce {
-	0%,
-	100% {
-		opacity: 0.25;
-		transform: translateY(0);
+/* Mobile fallback for the product frame: the real .app-layout positions its
+ * columns absolutely with a fixed 264px sidebar; below md we hide the sidebar
+ * and let the chat column span full width. */
+@media (max-width: 768px) {
+	.showcase-frame > :nth-child(1) {
+		display: none;
 	}
-	50% {
-		opacity: 1;
-		transform: translateY(-2px);
+	.showcase-frame > :nth-child(2) {
+		left: 0;
 	}
 }
 
