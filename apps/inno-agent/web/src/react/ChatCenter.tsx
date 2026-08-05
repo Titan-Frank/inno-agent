@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -21,8 +21,10 @@ import { uploadWorkspaceFiles } from "../api/workspace.js";
 import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { splitStreamingMarkdown } from "../utils/markdown-blocks.js";
 import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
+import { answeredQuestionnaireFromTool, buildAnsweredQuestionnaireTimeline } from "../utils/questionnaire.js";
+import type { AnsweredQuestionnaireView } from "../utils/questionnaire.js";
 import { useStoreSnapshot } from "./hooks.js";
-import { QuestionDialog } from "./QuestionDialog.js";
+import { AnsweredQuestionCard, QuestionDialog } from "./QuestionDialog.js";
 import { buildConversationTurns, ConversationMinimap } from "./ConversationMinimap.js";
 import { MarkdownArtifact } from "./MarkdownArtifact.js";
 
@@ -253,6 +255,27 @@ function AssistantContent({ content }: { content: string }) {
 	);
 }
 
+/** Keep a completed questionnaire anchored where its tool call interrupted the
+ * assistant text. Session history merges the text before and after a tool call
+ * into one message, so rendering every tool above the message moves the card
+ * away from the point at which the learner originally answered it. */
+function AssistantTimelineContent({ content, questionnaires }: { content: string; questionnaires: AnsweredQuestionnaireView[] }) {
+	const timeline = buildAnsweredQuestionnaireTimeline(content, questionnaires);
+	return (
+		<>
+			{timeline.entries.map(({ tool, questionnaire, before }) => (
+				<Fragment key={tool.toolCallId}>
+					<AssistantContent content={before} />
+					<div className="my-2">
+						<AnsweredQuestionCard questionnaire={questionnaire} />
+					</div>
+				</Fragment>
+			))}
+			<AssistantContent content={timeline.tail} />
+		</>
+	);
+}
+
 function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; className: string }) {
 	const [open, setOpen] = useState(false);
 	const detail = useMemo(() => {
@@ -277,6 +300,12 @@ function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; classNam
 
 const MessageBubble = memo(function MessageBubble({ message, showChannel }: { message: ChatMessage; showChannel?: boolean }) {
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+	const toolViews = (message.tools ?? []).map((tool) => ({
+		tool,
+		questionnaire: answeredQuestionnaireFromTool(tool),
+	}));
+	const answeredQuestionnaires = toolViews.filter((item) => item.questionnaire !== null);
+	const regularTools = toolViews.filter((item) => item.questionnaire === null).map((item) => item.tool);
 
 	if (message.role === "user") {
 		return (
@@ -321,23 +350,26 @@ const MessageBubble = memo(function MessageBubble({ message, showChannel }: { me
 				{showChannel && message.channel ? (
 					<div className="mb-1"><ChannelBadge channel={message.channel} /></div>
 				) : null}
-				{message.thinking || message.tools?.length ? (
+				{message.thinking || regularTools.length ? (
 					<details className="mb-2 min-w-0 max-w-full overflow-hidden rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1.5 text-xs text-[var(--inno-text-muted)]">
 						<summary className="cursor-pointer select-none break-words font-medium text-[var(--inno-text-muted)] [overflow-wrap:anywhere]">
 							Thinking & tool calls
-							{message.tools?.length ? ` · ${message.tools.length}` : ""}
+							{regularTools.length ? ` · ${regularTools.length}` : ""}
 						</summary>
 						{message.thinking ? <pre className="mt-2 max-h-44 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{message.thinking}</pre> : null}
-						{message.tools?.length ? (
+						{regularTools.length ? (
 							<div className="mt-2 grid min-w-0 max-w-full gap-1.5">
-								{message.tools.map((tool) => (
+								{regularTools.map((tool) => (
 									<ToolRecordDetails key={tool.toolCallId} tool={tool} className="min-w-0 max-w-full overflow-hidden rounded border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-1" />
 								))}
 							</div>
 						) : null}
 					</details>
 				) : null}
-				<AssistantContent content={message.content} />
+				<AssistantTimelineContent
+					content={message.content}
+					questionnaires={answeredQuestionnaires as AnsweredQuestionnaireView[]}
+				/>
 				{message.error ? (
 					<div className={message.content.trim() ? "mt-2" : ""}>
 						<ErrorBlock error={message.error} />
@@ -347,6 +379,29 @@ const MessageBubble = memo(function MessageBubble({ message, showChannel }: { me
 		</motion.div>
 	);
 });
+
+function CompletedToolRecords({ tools }: { tools: ChatToolRecord[] }) {
+	const views = tools.map((tool) => ({ tool, questionnaire: answeredQuestionnaireFromTool(tool) }));
+	const regularTools = views.filter((item) => item.questionnaire === null).map((item) => item.tool);
+
+	return regularTools.length ? (
+				<motion.div
+					className="flex justify-start"
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
+					transition={{ duration: 0.2 }}
+				>
+					<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
+						<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Completed tool calls · {regularTools.length}</summary>
+						<div className="mt-2 grid min-w-0 max-w-full gap-1.5">
+							{regularTools.map((tool) => (
+								<ToolRecordDetails key={tool.toolCallId} tool={tool} className="min-w-0 max-w-full overflow-hidden rounded border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1" />
+							))}
+						</div>
+					</details>
+				</motion.div>
+	) : null;
+}
 
 /**
  * Memoized artifact for one closed block of a streaming reply. Closed blocks
@@ -376,9 +431,18 @@ function StreamingBubbles() {
 		hasError: chatStore.streamingError !== "",
 		hasPendingQuestion: chatStore.pendingQuestion !== null,
 		activeToolCount: chatStore.activeTools.length,
+		completedTools: chatStore.completedTools,
 	}));
 
-	const normalized = useMemo(() => normalizeMarkdownMath(stream.text), [stream.text]);
+	const questionnaires = useMemo(() => stream.completedTools.flatMap((tool): AnsweredQuestionnaireView[] => {
+		const questionnaire = answeredQuestionnaireFromTool(tool);
+		return questionnaire ? [{ tool, questionnaire }] : [];
+	}), [stream.completedTools]);
+	const timeline = useMemo(
+		() => buildAnsweredQuestionnaireTimeline(stream.text, questionnaires),
+		[stream.text, questionnaires],
+	);
+	const normalized = useMemo(() => normalizeMarkdownMath(timeline.tail), [timeline.tail]);
 	const { blocks, tail } = useMemo(() => splitStreamingMarkdown(normalized), [normalized]);
 
 	// Shrink guard: while a reply streams, the tail <markdown-artifact> re-parses
@@ -437,7 +501,7 @@ function StreamingBubbles() {
 						</div>
 					</div>
 				</motion.div>
-			) : stream.text ? (
+			) : stream.text || questionnaires.length ? (
 				<motion.div
 					className="flex justify-start"
 					initial={{ opacity: 0, y: 8 }}
@@ -445,6 +509,14 @@ function StreamingBubbles() {
 					transition={{ duration: 0.2, ease: "easeOut" }}
 				>
 					<div ref={streamingBubbleRef} className="inno-message inno-streaming-blocks max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+						{timeline.entries.map(({ tool, questionnaire, before }) => (
+							<Fragment key={tool.toolCallId}>
+								{before.trim() ? <StableStreamingMarkdown content={normalizeMarkdownMath(before.trim())} /> : null}
+								<div className="my-2">
+									<AnsweredQuestionCard questionnaire={questionnaire} />
+								</div>
+							</Fragment>
+						))}
 						{blocks.map((block, index) => (
 							<StableStreamingMarkdown key={index} content={block} />
 						))}
@@ -456,7 +528,7 @@ function StreamingBubbles() {
 				</motion.div>
 			) : null}
 
-			{stream.isSending && !stream.hasPendingQuestion && !stream.text && !stream.hasError && stream.activeToolCount === 0 ? (
+			{stream.isSending && !stream.hasPendingQuestion && !stream.text && questionnaires.length === 0 && !stream.hasError && stream.activeToolCount === 0 ? (
 				<motion.div
 					className="flex justify-start"
 					initial={{ opacity: 0 }}
@@ -1427,23 +1499,7 @@ export function ChatCenter() {
 						</motion.div>
 					) : null}
 
-					{chat.completedTools.length > 0 ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							transition={{ duration: 0.2 }}
-						>
-							<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
-								<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Completed tool calls · {chat.completedTools.length}</summary>
-								<div className="mt-2 grid min-w-0 max-w-full gap-1.5">
-									{chat.completedTools.map((tool) => (
-										<ToolRecordDetails key={tool.toolCallId} tool={tool} className="min-w-0 max-w-full overflow-hidden rounded border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1" />
-									))}
-								</div>
-							</details>
-						</motion.div>
-					) : null}
+					{chat.completedTools.length > 0 ? <CompletedToolRecords tools={chat.completedTools} /> : null}
 
 					{/* Thinking + reply text bubbles — own store subscription, see above */}
 					<StreamingBubbles />

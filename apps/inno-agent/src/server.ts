@@ -1839,6 +1839,7 @@ interface SessionMessageSummary {
 		toolCallId: string;
 		toolName: string;
 		args: unknown;
+		contentOffset?: number;
 		result?: unknown;
 		isError?: boolean;
 	}>;
@@ -2080,7 +2081,12 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 							const toolName = typeof block.name === "string" ? block.name : "tool";
 							const args = block.arguments;
 							pending.tools = pending.tools ?? [];
-							pending.tools.push({ toolCallId, toolName, args });
+							pending.tools.push({
+								toolCallId,
+								toolName,
+								args,
+								contentOffset: pending.content.length,
+							});
 						}
 					}
 				} else if (typeof content === "string" && content) {
@@ -2098,7 +2104,12 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 				const pending = ensureAssistant(ts);
 				const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : "";
 				const toolName = typeof message.toolName === "string" ? message.toolName : "tool";
-				const result = textFromContent(message.content) || message.content;
+				// PI keeps a tool's structured details alongside its text content. Keep
+				// those details in session history so completed questionnaires can be
+				// rendered with the selected options after the session is reopened.
+				const result = toolName === "ask_user_question" && message.details !== undefined
+					? message.details
+					: textFromContent(message.content) || message.content;
 				const isError = Boolean(message.isError);
 				pending.tools = pending.tools ?? [];
 				const existing = pending.tools.find((t) => t.toolCallId === toolCallId);
