@@ -9,8 +9,12 @@ import "./i18n.js";
 // Register <markdown-block> explicitly — QuestionDialog depends on it (same
 // reasoning as the product's main.tsx).
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
-import "@inno-web/stores/theme-store.js";
+import { themeStore } from "@inno-web/stores/theme-store.js";
 import "./showcase.css";
+
+// The showcase always wears the innospark theme, regardless of what theme a
+// visitor's localStorage carries over from the product on this origin.
+themeStore.apply("innospark");
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

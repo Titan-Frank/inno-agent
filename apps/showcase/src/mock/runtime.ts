@@ -272,10 +272,52 @@ export class MockBackend {
 		if (state.content !== undefined && kind !== "pdf" && kind !== "image" && kind !== "office") {
 			detail.content = state.content;
 		}
-		if (state.asset) {
+		// Mirror the real backend: binary-ish kinds get a raw URL instead of
+		// inline content; pptx additionally gets a server-rendered preview URL.
+		// Fixture assets (e.g. the paper PDF) are served as static files, so
+		// they keep their direct asset URL.
+		if (kind === "pdf" || kind === "image" || kind === "office") {
+			detail.url = state.asset
+				? `${import.meta.env.BASE_URL}${state.asset}`
+				: `/api/workspace/raw?path=${encodeURIComponent(path)}`;
+			if (detail.format === "pptx") {
+				detail.previewUrl = `/api/workspace/pptx-preview?path=${encodeURIComponent(path)}`;
+			}
+		} else if (state.asset) {
 			detail.url = `${import.meta.env.BASE_URL}${state.asset}`;
 		}
 		return jsonResponse(detail);
+	}
+
+	private handleWorkspaceRaw(doc: CaseDoc, params: URLSearchParams): Response {
+		const rawPath = params.get("path") ?? "";
+		const candidates = [
+			rawPath,
+			rawPath.replace(/^\/+/, ""),
+			rawPath.replace(/^\/+/, "").replace(/^workspace\//, ""),
+		];
+		const files = this.workspaceFiles(doc);
+		let path = rawPath;
+		let state: WorkspaceFileState | undefined;
+		for (const candidate of candidates) {
+			const hit = files.get(candidate);
+			if (hit) {
+				path = candidate;
+				state = hit;
+				break;
+			}
+		}
+		if (!state) return jsonResponse({ error: "File not found" }, 404);
+		if (state.asset) {
+			return Response.redirect(`${window.location.origin}${import.meta.env.BASE_URL}${state.asset}`, 302);
+		}
+		if (state.content !== undefined) {
+			return new Response(state.content, {
+				status: 200,
+				headers: { "Content-Type": MIME_BY_EXT[extOf(path)] ?? "text/plain; charset=utf-8" },
+			});
+		}
+		return jsonResponse({ error: "File not found" }, 404);
 	}
 
 	private emptyProfile() {
@@ -379,6 +421,9 @@ export class MockBackend {
 		if (pathname === "/api/workspace/file" && doc) {
 			return this.handleWorkspaceFile(doc, params);
 		}
+		if (pathname === "/api/workspace/raw" && doc) {
+			return this.handleWorkspaceRaw(doc, params);
+		}
 
 		// --- wiki (L2) ---
 		if (pathname === "/api/wiki/pages" && doc) {
@@ -439,7 +484,7 @@ export class MockBackend {
 				configuredModels: [{ provider: "demo", id: "demo-model", input: ["text"] }],
 				simpleMode: { enabled: false },
 				memory: { l1Enabled: true, l2Enabled: true, l3Enabled: true },
-				ui: { theme: "light" },
+				ui: { theme: "innospark" },
 				channels: {},
 			});
 		}
