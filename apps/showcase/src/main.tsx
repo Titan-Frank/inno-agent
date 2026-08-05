@@ -1,8 +1,15 @@
-// Reuse the main app's full stylesheet (pi-web-ui css + tailwind + themes +
-// .inno-message chat styles) so replayed conversations look exactly like the
-// real product, and stay in sync as the product UI evolves.
+// The showcase runs the product's real UI against a mock backend, so the
+// fetch shim must be installed before any store/component issues a request.
+import { installMockFetch } from "./mock/runtime.js";
+installMockFetch();
+
+// Full product stylesheet (pi-web-ui css + tailwind + themes + chat styles).
 import "@inno-web/app.css";
 import "./i18n.js";
+// Register <markdown-block> explicitly — QuestionDialog depends on it (same
+// reasoning as the product's main.tsx).
+import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "@inno-web/stores/theme-store.js";
 import "./showcase.css";
 
 import { StrictMode } from "react";

@@ -16,9 +16,9 @@
  * secret shapes, but message CONTENT is preserved verbatim.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -38,6 +38,10 @@ interface CaseSpec {
 	tags: string[];
 	/** Keep only the first N user turns (and their assistant replies). */
 	maxUserTurns?: number;
+	/** Display name for the reconstructed workspace (defaults to the cwd basename). */
+	workspaceName?: string;
+	/** Workspace-relative paths excluded from the initial-file snapshot. */
+	excludePaths?: string[];
 }
 
 const CASES: CaseSpec[] = [
@@ -48,7 +52,7 @@ const CASES: CaseSpec[] = [
 		titleEn: "Generating a trigonometry handout",
 		description: "学习者说明自己的薄弱点后，agent 先理论后练习，生成讲义并记录学习事件到 L1 画像。",
 		tags: ["L1 学习者画像", "讲义生成", "个性化教学"],
-		maxUserTurns: 6,
+		maxUserTurns: 8,
 	},
 	{
 		id: "l2-wiki-autoresearch",
@@ -65,6 +69,7 @@ const CASES: CaseSpec[] = [
 		titleEn: "Walking through a paper in the workspace",
 		description: "agent 解析工作区里的 PDF 论文，给出结构化解读。",
 		tags: ["文档解析", "论文解读"],
+		excludePaths: ["截屏2026-06-30 19.28.13.png"],
 	},
 	{
 		id: "gaokao-geometry",
@@ -113,8 +118,10 @@ function buildPathRewrites(): Array<[RegExp, string]> {
 }
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
-	[/\b(sk|pk|pat| Bearer)[-_A-Za-z0-9]{16,}\b/g, "[REDACTED]"],
-	[/"(apiKey|token|accessToken|refreshToken|secret)"\s*:\s*"[^"]{6,}"/g, '"$1": "[REDACTED]"'],
+	// Common API key shapes: sk-*, tvly-*, ghp_*, xox*, Bearer tokens, etc.
+	[/\b(sk|pk|pat|tvly|ghp|gho|xox[bap]| Bearer)[-_A-Za-z0-9]{10,}\b/g, "[REDACTED]"],
+	[/"(apiKey|api_key|token|accessToken|refreshToken|secret)"\s*:\s*"[^"]{6,}"/g, '"$1": "[REDACTED]"'],
+	[/\\"(apiKey|api_key|token|accessToken|refreshToken|secret)\\"\s*:\s*\\"[^\\"]{6,}\\"/g, '\\"$1\\": \\"[REDACTED]\\"'],
 ];
 
 function sanitizeText(input: string, rewrites: Array<[RegExp, string]>): string {
@@ -265,6 +272,220 @@ function parseSessionMessages(filePath: string): ShowcaseMessage[] {
 	);
 }
 
+// --- Panel reconstruction (workspace / wiki / profile) -----------------------
+// The showcase replays not just the chat but the side panels' evolution. All
+// keyframes carry `atMessage` = index into the exported messages array, so
+// they must be extracted from the TRIMMED but PRE-TRUNCATION message list.
+
+interface WorkspaceInitFile {
+	path: string;
+	content?: string;
+	asset?: string;
+	size: number;
+	updatedAt: string;
+}
+
+interface WorkspaceKeyframe {
+	atMessage: number;
+	path: string;
+	content: string;
+	change: "created" | "modified";
+}
+
+interface WikiKeyframe {
+	atMessage: number;
+	page: { path: string; title: string; content: string };
+}
+
+interface ProfileEvent {
+	atMessage: number;
+	summary: string;
+}
+
+interface CasePanels {
+	workspace: {
+		workspaceId: string;
+		name: string;
+		initial: WorkspaceInitFile[];
+		keyframes: WorkspaceKeyframe[];
+	} | null;
+	wiki: { keyframes: WikiKeyframe[] };
+	profile: {
+		firstEventAt: number | null;
+		events: ProfileEvent[];
+		profile: unknown | null;
+	};
+}
+
+const MAX_KEYFRAME_CONTENT = 60_000;
+const MAX_INLINE_TEXT_FILE = 100_000;
+const MAX_ASSET_FILE = 8 * 1024 * 1024;
+const TEXT_EXTENSIONS = new Set([
+	".md", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".py", ".js", ".mjs", ".ts",
+	".html", ".css", ".sh", ".yaml", ".yml", ".xml", ".svg", ".tex", ".log",
+]);
+
+function readSessionCwd(filePath: string): { cwd: string; startedAt: number } | null {
+	const raw = readFileSync(filePath, "utf-8");
+	for (const line of raw.split("\n")) {
+		if (!line.trim()) continue;
+		const entry = JSON.parse(line) as Record<string, unknown>;
+		if (entry.type === "session" && typeof entry.cwd === "string") {
+			return { cwd: entry.cwd, startedAt: Date.parse(String(entry.timestamp ?? "")) || 0 };
+		}
+	}
+	return null;
+}
+
+/** Extract workspace write/edit keyframes from tool calls. */
+function extractWorkspaceKeyframes(
+	messages: ShowcaseMessage[],
+	cwd: string,
+	rewrites: Array<[RegExp, string]>,
+): WorkspaceKeyframe[] {
+	const keyframes: WorkspaceKeyframe[] = [];
+	const virtualFs = new Map<string, string>();
+	messages.forEach((message, atMessage) => {
+		if (message.role !== "assistant" || !message.tools) return;
+		for (const tool of message.tools) {
+			if (tool.isError) continue;
+			const args = tool.args as Record<string, unknown> | undefined;
+			if (!args || typeof args.path !== "string") continue;
+			const absPath = args.path;
+			if (!absPath.startsWith(cwd)) continue;
+			const relPath = absPath.slice(cwd.length).replace(/^[/\\]+/, "");
+			if (!relPath) continue;
+
+			if (tool.toolName === "write" && typeof args.content === "string") {
+				const content = truncateText(sanitizeText(args.content, rewrites), MAX_KEYFRAME_CONTENT);
+				keyframes.push({ atMessage, path: relPath, content, change: virtualFs.has(relPath) ? "modified" : "created" });
+				virtualFs.set(relPath, content);
+			} else if (tool.toolName === "edit" && Array.isArray(args.edits)) {
+				const prior = virtualFs.get(relPath);
+				if (prior === undefined) continue; // can't reconstruct a diff against unknown base
+				let next = prior;
+				for (const edit of args.edits as Array<Record<string, unknown>>) {
+					const oldText = typeof edit.oldText === "string" ? edit.oldText : "";
+					const newText = typeof edit.newText === "string" ? edit.newText : "";
+					if (oldText && next.includes(oldText)) next = next.replace(oldText, newText);
+				}
+				const content = truncateText(sanitizeText(next, rewrites), MAX_KEYFRAME_CONTENT);
+				keyframes.push({ atMessage, path: relPath, content, change: "modified" });
+				virtualFs.set(relPath, content);
+			}
+		}
+	});
+	return keyframes;
+}
+
+/** Snapshot files that existed in the workspace BEFORE the session started. */
+function collectInitialFiles(
+	cwd: string,
+	sessionStartMs: number,
+	keyframedPaths: Set<string>,
+	caseAssetsDir: string,
+	caseId: string,
+	rewrites: Array<[RegExp, string]>,
+	excludePaths: Set<string> = new Set(),
+): WorkspaceInitFile[] {
+	if (!existsSync(cwd)) return [];
+	const files: WorkspaceInitFile[] = [];
+	const cutoff = sessionStartMs - 30_000;
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				walk(full);
+				continue;
+			}
+			const stat = statSync(full);
+			if (stat.mtimeMs > cutoff) continue; // created/modified during the session
+			const relPath = relative(cwd, full).split("\\").join("/");
+			if (keyframedPaths.has(relPath) || excludePaths.has(relPath)) continue;
+			const ext = extname(entry.name).toLowerCase();
+			const record: WorkspaceInitFile = {
+				path: relPath,
+				size: stat.size,
+				updatedAt: stat.mtime.toISOString(),
+			};
+			if (TEXT_EXTENSIONS.has(ext) && stat.size <= MAX_INLINE_TEXT_FILE) {
+				record.content = sanitizeText(readFileSync(full, "utf-8"), rewrites);
+			} else if (stat.size <= MAX_ASSET_FILE) {
+				const assetRel = join(caseAssetsDir, relPath);
+				mkdirSync(dirname(assetRel), { recursive: true });
+				copyFileSync(full, assetRel);
+				record.asset = `cases/${caseId}/assets/${relPath}`;
+			} else {
+				continue; // too large — skip entirely
+			}
+			files.push(record);
+		}
+	};
+	walk(cwd);
+	return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** Wiki keyframes: each successful l2_archive call contributes one page. */
+function extractWikiKeyframes(messages: ShowcaseMessage[], rewrites: Array<[RegExp, string]>): WikiKeyframe[] {
+	const keyframes: WikiKeyframe[] = [];
+	messages.forEach((message, atMessage) => {
+		if (message.role !== "assistant" || !message.tools) return;
+		for (const tool of message.tools) {
+			if (tool.toolName !== "l2_archive" || tool.isError) continue;
+			const args = tool.args as Record<string, unknown> | undefined;
+			if (!args || typeof args.title !== "string" || typeof args.content !== "string") continue;
+			const resultText = typeof tool.result === "string" ? tool.result : "";
+			const pathMatch = /Wiki 页面[::]\s*(\S+\.md)/.exec(resultText);
+			const slug = args.title.toLowerCase().replace(/[^\p{Letter}\p{Number}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+			keyframes.push({
+				atMessage,
+				page: {
+					path: pathMatch?.[1] ?? `wiki/sources/${slug}.md`,
+					title: sanitizeText(args.title, rewrites),
+					content: truncateText(sanitizeText(args.content, rewrites), MAX_KEYFRAME_CONTENT),
+				},
+			});
+		}
+	});
+	return keyframes;
+}
+
+/** Profile events + a sanitized snapshot of the current learner profile. */
+function extractProfilePanel(
+	messages: ShowcaseMessage[],
+	dataDir: string,
+	rewrites: Array<[RegExp, string]>,
+): CasePanels["profile"] {
+	const events: ProfileEvent[] = [];
+	messages.forEach((message, atMessage) => {
+		if (message.role !== "assistant" || !message.tools) return;
+		for (const tool of message.tools) {
+			if (tool.toolName !== "record_learning_event" || tool.isError) continue;
+			const args = tool.args as Record<string, unknown> | undefined;
+			const payload = (args?.payload ?? {}) as Record<string, unknown>;
+			const topic = typeof payload.milestone === "string" ? payload.milestone
+				: typeof payload.topic === "string" ? payload.topic
+				: typeof args?.event_type === "string" ? args.event_type : "learning event";
+			events.push({ atMessage, summary: sanitizeText(topic, rewrites) });
+		}
+	});
+	let profile: unknown | null = null;
+	if (events.length > 0) {
+		const profilePath = join(dataDir, "learner", "profile.json");
+		if (existsSync(profilePath)) {
+			const raw = JSON.parse(readFileSync(profilePath, "utf-8")) as Record<string, unknown>;
+			raw.learner_id = "demo-learner";
+			profile = sanitizeValue(raw, rewrites);
+		}
+	}
+	return {
+		firstEventAt: events.length > 0 ? events[0].atMessage : null,
+		events,
+		profile,
+	};
+}
+
 // --- Export pipeline ---------------------------------------------------------
 
 function trimToUserTurns(messages: ShowcaseMessage[], maxUserTurns: number): ShowcaseMessage[] {
@@ -320,6 +541,7 @@ function main(): void {
 		return idx >= 0 && args[idx + 1] ? args[idx + 1] : fallback;
 	};
 	const sessionsDir = resolve(flag("sessions-dir", join(repoRoot, "runtime/data/sessions")));
+	const dataDir = resolve(flag("data-dir", join(repoRoot, "runtime/data")));
 	const outDir = resolve(flag("out", join(repoRoot, "apps/showcase/public/cases")));
 	const only = flag("only", "").split(",").map((s) => s.trim()).filter(Boolean);
 
@@ -334,9 +556,36 @@ function main(): void {
 			console.warn(`[skip] ${spec.id}: session file not found: ${sessionPath}`);
 			continue;
 		}
-		let messages = parseSessionMessages(sessionPath);
-		if (spec.maxUserTurns) messages = trimToUserTurns(messages, spec.maxUserTurns);
-		messages = polishMessages(messages, rewrites);
+		let rawMessages = parseSessionMessages(sessionPath);
+		if (spec.maxUserTurns) rawMessages = trimToUserTurns(rawMessages, spec.maxUserTurns);
+
+		// Panels first — keyframe indices must align with the trimmed message
+		// list, and file contents must be captured before polishMessages
+		// truncates tool args.
+		const sessionInfo = readSessionCwd(sessionPath);
+		let workspacePanel: CasePanels["workspace"] = null;
+		if (sessionInfo) {
+			const wsKeyframes = extractWorkspaceKeyframes(rawMessages, sessionInfo.cwd, rewrites);
+			const initial = collectInitialFiles(
+				sessionInfo.cwd,
+				sessionInfo.startedAt,
+				new Set(wsKeyframes.map((k) => k.path)),
+				join(outDir, spec.id, "assets"),
+				spec.id,
+				rewrites,
+				new Set(spec.excludePaths ?? []),
+			);
+			workspacePanel = {
+				workspaceId: `ws-${spec.id}`,
+				name: spec.workspaceName ?? basename(sessionInfo.cwd),
+				initial,
+				keyframes: wsKeyframes,
+			};
+		}
+		const wikiPanel = { keyframes: extractWikiKeyframes(rawMessages, rewrites) };
+		const profilePanel = extractProfilePanel(rawMessages, dataDir, rewrites);
+
+		const messages = polishMessages(rawMessages, rewrites);
 
 		const recordedAt = spec.sessionFile.slice(0, 10);
 		const caseDoc = {
@@ -348,6 +597,11 @@ function main(): void {
 			recordedAt,
 			messageCount: messages.length,
 			messages,
+			panels: {
+				workspace: workspacePanel,
+				wiki: wikiPanel,
+				profile: profilePanel,
+			},
 		};
 		const outPath = join(outDir, `${spec.id}.json`);
 		writeFileSync(outPath, JSON.stringify(caseDoc));

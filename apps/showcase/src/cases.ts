@@ -10,8 +10,44 @@ export interface CaseMeta {
 	messageCount: number;
 }
 
+export interface WorkspaceInitFile {
+	path: string;
+	content?: string;
+	asset?: string;
+	size: number;
+	updatedAt: string;
+}
+
+export interface WorkspaceKeyframe {
+	atMessage: number;
+	path: string;
+	content: string;
+	change: "created" | "modified";
+}
+
+export interface WikiKeyframe {
+	atMessage: number;
+	page: { path: string; title: string; content: string };
+}
+
+export interface CasePanels {
+	workspace: {
+		workspaceId: string;
+		name: string;
+		initial: WorkspaceInitFile[];
+		keyframes: WorkspaceKeyframe[];
+	} | null;
+	wiki: { keyframes: WikiKeyframe[] };
+	profile: {
+		firstEventAt: number | null;
+		events: Array<{ atMessage: number; summary: string }>;
+		profile: unknown | null;
+	};
+}
+
 export interface CaseDoc extends CaseMeta {
 	messages: ChatMessage[];
+	panels: CasePanels;
 }
 
 export async function fetchCaseIndex(): Promise<CaseMeta[]> {
