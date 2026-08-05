@@ -1,0 +1,48 @@
+/* Showcase-only styles. Product look & feel comes from @inno-web/app.css. */
+
+.inno-replay-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 9999px;
+	background: currentColor;
+	animation: inno-replay-bounce 1s infinite ease-in-out;
+}
+
+@keyframes inno-replay-bounce {
+	0%,
+	100% {
+		opacity: 0.25;
+		transform: translateY(0);
+	}
+	50% {
+		opacity: 1;
+		transform: translateY(-2px);
+	}
+}
+
+.inno-replay-slider {
+	appearance: none;
+	height: 4px;
+	border-radius: 9999px;
+	background: var(--inno-surface-muted);
+	outline: none;
+	cursor: pointer;
+}
+
+.inno-replay-slider::-webkit-slider-thumb {
+	appearance: none;
+	width: 14px;
+	height: 14px;
+	border-radius: 9999px;
+	background: var(--inno-accent);
+	border: 2px solid var(--inno-surface);
+	box-shadow: var(--inno-shadow-soft);
+}
+
+.inno-replay-slider::-moz-range-thumb {
+	width: 12px;
+	height: 12px;
+	border-radius: 9999px;
+	background: var(--inno-accent);
+	border: 2px solid var(--inno-surface);
+}
