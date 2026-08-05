@@ -20,6 +20,7 @@ export interface WorkspaceInitFile {
 
 export interface WorkspaceKeyframe {
 	atMessage: number;
+	toolCallId: string;
 	path: string;
 	content: string;
 	change: "created" | "modified";
@@ -27,8 +28,32 @@ export interface WorkspaceKeyframe {
 
 export interface WikiKeyframe {
 	atMessage: number;
+	toolCallId: string;
 	page: { path: string; title: string; content: string };
 }
+
+/**
+ * One ordered piece of an assistant turn. The mock backend walks a turn's
+ * segments to synthesize a live-like SSE stream (text/thinking deltas, tool
+ * start/end); `at`/`endAt` are absolute ms from the session log and only
+ * relative gaps matter (they get clamped for pacing).
+ */
+export type CaseStreamSegment =
+	| { kind: "thinking"; text: string; at: number }
+	| { kind: "text"; text: string; at: number }
+	| {
+			kind: "tool";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result?: unknown;
+			isError?: boolean;
+			at: number;
+			endAt: number;
+	  };
+
+/** ChatMessage as exported by scripts/export-showcase-cases.ts. */
+export type CaseMessage = ChatMessage & { stream?: CaseStreamSegment[] };
 
 export interface CasePanels {
 	workspace: {
@@ -40,13 +65,13 @@ export interface CasePanels {
 	wiki: { keyframes: WikiKeyframe[] };
 	profile: {
 		firstEventAt: number | null;
-		events: Array<{ atMessage: number; summary: string }>;
+		events: Array<{ atMessage: number; toolCallId: string; summary: string }>;
 		profile: unknown | null;
 	};
 }
 
 export interface CaseDoc extends CaseMeta {
-	messages: ChatMessage[];
+	messages: CaseMessage[];
 	panels: CasePanels;
 }
 

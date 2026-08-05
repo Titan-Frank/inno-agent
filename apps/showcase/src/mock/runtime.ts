@@ -1,14 +1,21 @@
 import type { CaseDoc, CaseMeta } from "../cases.js";
 import type { WorkspaceFileDetail, WorkspaceFileKind, WorkspaceTree, WorkspaceTreeNode } from "@inno-web/types/workspace.js";
+import { createTurnStream, revisionFor } from "./streaming.js";
 
 /**
  * Step-aware mock backend for the showcase. The real product UI (stores +
  * components) talks to the backend exclusively through apiFetch → fetch;
  * installMockFetch routes every /api/* call here, and this class answers from
- * the exported case fixtures. Panel data (workspace tree, wiki pages, learner
- * profile) is reconstructed as of the current replay step, so driving the
- * step forward and asking the stores to reload reproduces the live
- * chat → panel 联动 of a real session.
+ * the exported case fixtures.
+ *
+ * Two faces:
+ * - REST (sessions/workspaces/wiki/learner) answers as-of the replay pointer
+ *   plus per-tool reveal state, so panel data appears the moment the tool
+ *   call that produced it finishes streaming.
+ * - POST /api/chat/stream returns a paced SSE stream synthesized from the
+ *   recorded turn (see streaming.ts) — the real chatStore drives the whole
+ *   live rendering path off it, including the final canonical-history reload
+ *   against GET /api/sessions/:id.
  */
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -93,7 +100,11 @@ export class MockBackend {
 	cases: CaseMeta[] = [];
 	private docs = new Map<string, CaseDoc>();
 	currentCaseId: string | null = null;
-	step = 0;
+	/** Canonical messages revealed so far (== the prefix GET /api/sessions/:id returns). */
+	pointer = 0;
+	/** Tool calls whose tool_end has been streamed — keyframes keyed to them
+	 *  become visible immediately, mid-turn. */
+	private revealedTools = new Set<string>();
 	private warnedRoutes = new Set<string>();
 
 	setCases(cases: CaseMeta[]): void {
@@ -104,9 +115,62 @@ export class MockBackend {
 		this.docs.set(doc.id, doc);
 	}
 
-	setCurrent(caseId: string | null, step: number): void {
+	setCurrent(caseId: string | null, pointer: number): void {
 		this.currentCaseId = caseId;
-		this.step = step;
+		this.pointer = pointer;
+		this.rebuildRevealedTools();
+	}
+
+	/** Keyframes revealed on a fresh case load / seek: everything before the pointer. */
+	private rebuildRevealedTools(): void {
+		this.revealedTools.clear();
+		const doc = this.currentDoc();
+		if (!doc) return;
+		const before = (atMessage: number) => atMessage < this.pointer;
+		for (const k of doc.panels.workspace?.keyframes ?? []) {
+			if (before(k.atMessage)) this.revealedTools.add(k.toolCallId);
+		}
+		for (const k of doc.panels.wiki.keyframes) {
+			if (before(k.atMessage)) this.revealedTools.add(k.toolCallId);
+		}
+		for (const e of doc.panels.profile.events) {
+			if (before(e.atMessage)) this.revealedTools.add(e.toolCallId);
+		}
+	}
+
+	markToolRevealed(toolCallId: string): void {
+		this.revealedTools.add(toolCallId);
+	}
+
+	completeTurn(turnEnd: number): void {
+		this.pointer = turnEnd;
+	}
+
+	/** A keyframe is visible once its message is canonical OR its tool finished streaming. */
+	private isRevealed(keyframe: { atMessage: number; toolCallId: string }): boolean {
+		return keyframe.atMessage < this.pointer || this.revealedTools.has(keyframe.toolCallId);
+	}
+
+	/** Bounds of the turn that starts at `from` (a user message index). */
+	turnBounds(from: number): { turnStart: number; turnEnd: number } | null {
+		const doc = this.currentDoc();
+		if (!doc || from >= doc.messages.length) return null;
+		if (doc.messages[from].role !== "user") return null;
+		let turnEnd = from + 1;
+		while (turnEnd < doc.messages.length && doc.messages[turnEnd].role !== "user") turnEnd++;
+		return { turnStart: from, turnEnd };
+	}
+
+	wikiVisibleCount(): number {
+		const doc = this.currentDoc();
+		return doc ? doc.panels.wiki.keyframes.filter((k) => this.isRevealed(k)).length : 0;
+	}
+
+	profileVisible(): boolean {
+		const doc = this.currentDoc();
+		if (!doc) return false;
+		const panel = doc.panels.profile;
+		return panel.firstEventAt !== null && panel.events.some((e) => this.isRevealed(e));
 	}
 
 	private currentDoc(): CaseDoc | undefined {
@@ -122,7 +186,7 @@ export class MockBackend {
 			files.set(f.path, { content: f.content, asset: f.asset, size: f.size, updatedAt: f.updatedAt });
 		}
 		for (const k of ws.keyframes) {
-			if (k.atMessage >= this.step) continue;
+			if (!this.isRevealed(k)) continue;
 			const prev = files.get(k.path);
 			files.set(k.path, {
 				content: k.content,
@@ -168,12 +232,31 @@ export class MockBackend {
 	}
 
 	private wikiPagesAtStep(doc: CaseDoc) {
-		return doc.panels.wiki.keyframes.filter((k) => k.atMessage < this.step).map((k) => k.page);
+		return doc.panels.wiki.keyframes.filter((k) => this.isRevealed(k)).map((k) => k.page);
 	}
 
 	private handleWorkspaceFile(doc: CaseDoc, params: URLSearchParams): Response {
-		const path = params.get("path") ?? "";
-		const state = this.workspaceFiles(doc).get(path);
+		const rawPath = params.get("path") ?? "";
+		// During streaming the store calls selectFile() with the path lifted
+		// from the tool args — an ABSOLUTE sanitized path (/workspace/work/x.md)
+		// — while tree nodes and keyframes are workspace-relative (work/x.md).
+		// Normalize so both forms resolve.
+		const candidates = [
+			rawPath,
+			rawPath.replace(/^\/+/, ""),
+			rawPath.replace(/^\/+/, "").replace(/^workspace\//, ""),
+		];
+		const files = this.workspaceFiles(doc);
+		let path = rawPath;
+		let state: WorkspaceFileState | undefined;
+		for (const candidate of candidates) {
+			const hit = files.get(candidate);
+			if (hit) {
+				path = candidate;
+				state = hit;
+				break;
+			}
+		}
 		if (!state) return jsonResponse({ error: "File not found" }, 404);
 		const ext = extOf(path);
 		const kind = kindOf(path);
@@ -255,20 +338,22 @@ export class MockBackend {
 			}
 			if (sub === "" && method === "GET") {
 				if (!meta) return jsonResponse({ error: "Session not found" }, 404);
-				// History is intentionally empty — the replay driver owns the
-				// message list and pushes prefixes via chatStore.loadHistory.
+				// Canonical history = revealed prefix. The chatStore reloads this
+				// after every streamed turn (done carries the matching revision).
+				const sessionDoc = this.docs.get(id);
+				const pointer = id === this.currentCaseId ? this.pointer : 0;
 				return jsonResponse({
 					id: meta.id,
 					name: meta.title,
 					createdAt: meta.recordedAt,
 					updatedAt: meta.recordedAt,
-					messageCount: meta.messageCount,
+					messageCount: pointer,
 					preview: meta.description,
 					channels: ["web"],
 					origin: "web",
 					hasTopic: true,
-					messages: [],
-					sessionRevision: "showcase-1",
+					messages: sessionDoc ? sessionDoc.messages.slice(0, pointer) : [],
+					sessionRevision: revisionFor(pointer),
 				});
 			}
 			return jsonResponse({ ok: true });
@@ -339,11 +424,10 @@ export class MockBackend {
 			});
 		}
 
-		// --- learner profile (L1) ---
+	// --- learner profile (L1) ---
 		if (pathname === "/api/learner/profile" && doc) {
 			const panel = doc.panels.profile;
-			const visible = panel.firstEventAt !== null && this.step > panel.firstEventAt;
-			return jsonResponse(visible && panel.profile ? panel.profile : this.emptyProfile());
+			return jsonResponse(this.profileVisible() && panel.profile ? panel.profile : this.emptyProfile());
 		}
 
 		// --- settings / misc collections ---
@@ -367,7 +451,40 @@ export class MockBackend {
 		if (pathname.startsWith("/api/chat/status/")) {
 			return jsonResponse({ found: false });
 		}
-		if (pathname === "/api/chat/stream" || pathname === "/api/chat") {
+		if (pathname === "/api/chat/stream" && method === "POST") {
+			const turn = this.turnBounds(this.pointer);
+			if (!doc || !turn) {
+				return jsonResponse({ error: "这段回放已经播完啦，点击重新开始再看一遍。" }, 503);
+			}
+			let clientRequestId = "showcase";
+			try {
+				const body = typeof init?.body === "string" ? (JSON.parse(init.body) as { clientRequestId?: string }) : null;
+				if (body?.clientRequestId) clientRequestId = body.clientRequestId;
+			} catch {
+				// fall back to the default id
+			}
+			const ws = doc.panels.workspace;
+			return createTurnStream({
+				doc,
+				turnStart: turn.turnStart,
+				turnEnd: turn.turnEnd,
+				sessionId: this.currentCaseId ?? doc.id,
+				clientRequestId,
+				onToolEnd: (segment) => this.markToolRevealed(segment.toolCallId),
+				onTurnDone: (turnEnd) => this.completeTurn(turnEnd),
+				fileChangeFor: (toolCallId) => {
+					const keyframe = ws?.keyframes.find((k) => k.toolCallId === toolCallId);
+					return keyframe ? { path: keyframe.path, change: keyframe.change } : undefined;
+				},
+			});
+		}
+		if (/^\/api\/chat\/[^/]+\/[^/]+\/abort$/.test(pathname)) {
+			return jsonResponse({ ok: true });
+		}
+		if (pathname === "/api/chat/question-response" && method === "POST") {
+			return jsonResponse({ accepted: true });
+		}
+		if (pathname === "/api/chat") {
 			return jsonResponse({ error: "这是回放演示环境，无法发送新消息。下载 Inno Agent 亲自体验 →" }, 503);
 		}
 		if (pathname === "/health") return jsonResponse({ ok: true });

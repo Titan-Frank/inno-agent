@@ -2,44 +2,49 @@ import { EventEmitter } from "@inno-web/stores/event-emitter.js";
 import { appStore } from "@inno-web/stores/app-store.js";
 import { chatStore } from "@inno-web/stores/chat-store.js";
 import { learnerStore } from "@inno-web/stores/learner-store.js";
-import { notebookStore } from "@inno-web/stores/notebook-store.js";
 import { sessionsStore } from "@inno-web/stores/sessions-store.js";
-import { workspaceStore } from "@inno-web/stores/workspace-store.js";
 import type { CaseDoc } from "../cases.js";
 import { fetchCase } from "../cases.js";
 import { mockBackend } from "../mock/runtime.js";
+import { replayControl } from "../mock/streaming.js";
 
 const SPEEDS = [1, 2, 4] as const;
 type Speed = (typeof SPEEDS)[number];
 
-// Reveal pacing: honor the real time gap between messages, clamped so short
+// Inter-turn pacing: honor the real time gap between turns, clamped so short
 // bursts stay readable and long thinking gaps don't bore the viewer.
-const MIN_STEP_MS = 350;
-const MAX_STEP_MS = 2500;
-const FIRST_STEP_MS = 400;
+const TURN_GAP_MIN = 800;
+const TURN_GAP_MAX = 4000;
 
 interface ReplayDriverEvents {
 	change: void;
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
- * Drives a recorded case through the REAL product stores: each step appends
- * one more message to chatStore (the real ChatCenter renders it) and, when a
- * panel keyframe is crossed, nudges the workspace/notebook/learner stores to
- * reload — the mock backend answers as-of the new step, so the right panel
- * updates in sync with the conversation, exactly like a live session.
+ * Drives a recorded case through the REAL product chat pipeline: for each
+ * recorded user turn it calls chatStore.send(), and the mock backend answers
+ * /api/chat/stream with a paced SSE stream rebuilt from the recording. Every
+ * pixel of the streaming experience (typing text, thinking, tool chips, the
+ * "正在生成内容" file preview, workspace panel auto-open, wiki refresh on
+ * l2_archive, canonical history swap on done) is the unmodified product code
+ * path reacting to those events.
+ *
+ * The driver only orchestrates: turn sequencing, pause/speed (via the shared
+ * replayControl the SSE producer reads), seek (detach + canonical prefix),
+ * and one-time right-panel tab reveals for the notebook/profile panels —
+ * the preview panel reveals itself through the store's file-tool machinery.
  */
 export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 	caseId: string | null = null;
 	doc: CaseDoc | null = null;
-	step = 0;
 	playing = false;
 	speed: Speed = 2;
 
-	private timer: ReturnType<typeof setTimeout> | null = null;
+	private playToken = 0;
 	private attachRequestId = 0;
-	private lastWsCount = -1;
-	private lastWikiCount = -1;
+	private lastWikiCount = 0;
 	private lastProfileVisible = false;
 	private autoOpenedTabs = new Set<string>();
 
@@ -53,6 +58,10 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 		});
 	}
 
+	get step(): number {
+		return mockBackend.pointer;
+	}
+
 	get total(): number {
 		return this.doc?.messages.length ?? 0;
 	}
@@ -61,26 +70,17 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 		return this.doc !== null && this.step >= this.total;
 	}
 
-	private stepDelay(nextStep: number): number {
-		if (!this.doc) return FIRST_STEP_MS;
-		if (nextStep <= 0) return FIRST_STEP_MS / this.speed;
-		const prev = this.doc.messages[nextStep - 1]?.timestamp ?? 0;
-		const curr = this.doc.messages[nextStep]?.timestamp ?? prev;
-		const gap = Math.max(0, curr - prev);
-		return Math.min(MAX_STEP_MS, Math.max(MIN_STEP_MS, gap)) / this.speed;
-	}
-
 	async attach(caseId: string): Promise<void> {
 		const requestId = ++this.attachRequestId;
-		this.stopTimer();
+		this.playToken++;
 		this.playing = false;
-		this.step = 0;
+		replayControl.paused = false;
 		this.doc = null;
-		this.lastWsCount = -1;
-		this.lastWikiCount = -1;
+		this.lastWikiCount = 0;
 		this.lastProfileVisible = false;
 		this.autoOpenedTabs.clear();
 		this.caseId = caseId;
+		chatStore.detach();
 		mockBackend.setCurrent(caseId, 0);
 		this.emit("change", undefined);
 
@@ -89,7 +89,7 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 			if (requestId !== this.attachRequestId) return;
 			mockBackend.registerDoc(loaded);
 			this.doc = loaded;
-			this.applyStep(0);
+			chatStore.loadHistory([], caseId);
 			this.play();
 		} catch (err) {
 			console.error(`[showcase] failed to load case ${caseId}`, err);
@@ -97,48 +97,79 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 		this.emit("change", undefined);
 	}
 
-	/** Push the replay to step i: chat history prefix + panel store reloads. */
-	private applyStep(i: number): void {
-		const doc = this.doc;
-		if (!doc || !this.caseId) return;
-		mockBackend.setCurrent(this.caseId, i);
-		chatStore.loadHistory(doc.messages.slice(0, i), this.caseId);
-
-		const ws = doc.panels.workspace;
-		const wsCount = ws ? ws.initial.length + ws.keyframes.filter((k) => k.atMessage < i).length : 0;
-		const crossedWs = this.lastWsCount >= 0 && wsCount > this.lastWsCount && this.step < i;
-		if (wsCount !== this.lastWsCount) {
-			this.lastWsCount = wsCount;
-			if (workspaceStore.activeWorkspaceId) void workspaceStore.loadTree();
-			if (crossedWs) this.autoOpenPanel("preview");
+	/** Wait `ms` of scaled time, honoring pause/speed and play invalidation. */
+	private async waitGap(ms: number, token: number): Promise<void> {
+		let remaining = ms;
+		while (remaining > 0 && token === this.playToken) {
+			if (replayControl.paused) {
+				await sleep(100);
+				continue;
+			}
+			const slice = Math.min(remaining, 100);
+			await sleep(slice / replayControl.speed);
+			remaining -= slice;
 		}
-
-		const wikiCount = doc.panels.wiki.keyframes.filter((k) => k.atMessage < i).length;
-		const crossedWiki = this.lastWikiCount >= 0 && wikiCount > this.lastWikiCount && this.step < i;
-		if (wikiCount !== this.lastWikiCount) {
-			this.lastWikiCount = wikiCount;
-			void notebookStore.loadAll();
-			if (crossedWiki) this.autoOpenPanel("notebook");
-		}
-
-		const profileVisible = doc.panels.profile.firstEventAt !== null && i > doc.panels.profile.firstEventAt;
-		const crossedProfile = profileVisible && !this.lastProfileVisible && this.step < i;
-		if (profileVisible !== this.lastProfileVisible) {
-			this.lastProfileVisible = profileVisible;
-			void learnerStore.load();
-			if (crossedProfile) this.autoOpenPanel("profile");
-		}
-
-		this.step = i;
-		this.emit("change", undefined);
 	}
 
-	/** Reveal the right panel for a fresh keyframe, mimicking how the product
-	 *  opens the workspace preview when the agent writes files. Opens a
-	 *  collapsed panel; when the panel is already open, switches the active
-	 *  tab once per panel type so the viewer sees each 联动 exactly once —
-	 *  after that first reveal the viewer's own tab choice is respected. */
-	private autoOpenPanel(tab: "preview" | "notebook" | "profile"): void {
+	/** Sequential turn loop — each send() resolves after the turn's canonical
+	 *  history reload, at which point the mock pointer has advanced. */
+	private async runLoop(token: number): Promise<void> {
+		while (this.playing && token === this.playToken) {
+			const doc = this.doc;
+			if (!doc || !this.caseId) break;
+			const pointer = mockBackend.pointer;
+			if (pointer >= doc.messages.length) {
+				this.playing = false;
+				this.emit("change", undefined);
+				break;
+			}
+			const message = doc.messages[pointer];
+			if (message.role !== "user") {
+				// Assistant message without a preceding user turn (edge): fold it
+				// into the canonical prefix directly instead of streaming.
+				mockBackend.setCurrent(this.caseId, pointer + 1);
+				chatStore.loadHistory(doc.messages.slice(0, pointer + 1), this.caseId);
+				this.syncPanels();
+				continue;
+			}
+			if (pointer > 0) {
+				const gap = message.timestamp - (doc.messages[pointer - 1]?.timestamp ?? message.timestamp);
+				await this.waitGap(Math.min(TURN_GAP_MAX, Math.max(TURN_GAP_MIN, gap)), token);
+				if (!this.playing || token !== this.playToken) break;
+			}
+			try {
+				await chatStore.send(message.content, undefined, this.caseId);
+			} catch (err) {
+				console.warn("[showcase] turn stream failed", err);
+				break;
+			}
+			if (token !== this.playToken) break;
+			this.syncPanels();
+			this.emit("change", undefined);
+		}
+	}
+
+	/** One-time right-panel reveals for the panels that don't open themselves:
+	 *  the preview panel opens via the store's file-tool machinery; the wiki
+	 *  list refresh is triggered by the store on l2_archive completion — the
+	 *  driver only switches the tab so the viewer notices. */
+	private syncPanels(): void {
+		const wikiCount = mockBackend.wikiVisibleCount();
+		if (wikiCount > this.lastWikiCount) {
+			this.lastWikiCount = wikiCount;
+			this.autoOpenPanel("notebook");
+		}
+		const profileVisible = mockBackend.profileVisible();
+		if (profileVisible !== this.lastProfileVisible) {
+			this.lastProfileVisible = profileVisible;
+			if (profileVisible) {
+				void learnerStore.load();
+				this.autoOpenPanel("profile");
+			}
+		}
+	}
+
+	private autoOpenPanel(tab: "notebook" | "profile"): void {
 		if (this.autoOpenedTabs.has(tab)) return;
 		this.autoOpenedTabs.add(tab);
 		if (appStore.workspaceMode === "collapsed") {
@@ -148,33 +179,21 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 		appStore.setRightPanelTab(tab);
 	}
 
-	private stopTimer(): void {
-		if (this.timer !== null) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-	}
-
-	private scheduleNext(): void {
-		this.stopTimer();
-		if (!this.playing || !this.doc || this.step >= this.total) return;
-		this.timer = setTimeout(() => {
-			this.applyStep(this.step + 1);
-			this.scheduleNext();
-		}, this.stepDelay(this.step));
-	}
-
 	play(): void {
 		if (!this.doc) return;
-		if (this.finished) this.applyStep(0);
+		if (this.finished) this.resetTo(0);
 		this.playing = true;
+		replayControl.paused = false;
+		replayControl.speed = this.speed;
 		this.emit("change", undefined);
-		this.scheduleNext();
+		// If a turn stream is mid-flight (stalled by pause), unpausing resumes
+		// it and the awaiting loop continues on its own.
+		if (!chatStore.isSending) void this.runLoop(++this.playToken);
 	}
 
 	pause(): void {
 		this.playing = false;
-		this.stopTimer();
+		replayControl.paused = true;
 		this.emit("change", undefined);
 	}
 
@@ -183,14 +202,25 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 		else this.play();
 	}
 
+	private resetTo(pointer: number): void {
+		this.playToken++;
+		chatStore.detach();
+		mockBackend.setCurrent(this.caseId, pointer);
+		chatStore.loadHistory(this.doc?.messages.slice(0, pointer) ?? [], this.caseId ?? undefined);
+		this.lastWikiCount = mockBackend.wikiVisibleCount();
+		this.lastProfileVisible = mockBackend.profileVisible();
+		this.emit("change", undefined);
+	}
+
 	restart(): void {
-		this.applyStep(0);
+		this.autoOpenedTabs.clear();
+		this.resetTo(0);
 		this.play();
 	}
 
 	seek(i: number): void {
 		this.pause();
-		this.applyStep(Math.max(0, Math.min(i, this.total)));
+		this.resetTo(Math.max(0, Math.min(i, this.total)));
 	}
 
 	skipToEnd(): void {
@@ -199,7 +229,7 @@ export class ReplayDriver extends EventEmitter<ReplayDriverEvents> {
 
 	cycleSpeed(): void {
 		this.speed = SPEEDS[(SPEEDS.indexOf(this.speed) + 1) % SPEEDS.length];
-		if (this.playing) this.scheduleNext();
+		replayControl.speed = this.speed;
 		this.emit("change", undefined);
 	}
 }

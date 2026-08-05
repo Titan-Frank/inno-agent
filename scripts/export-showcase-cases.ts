@@ -164,12 +164,34 @@ interface ShowcaseToolRecord {
 	isError?: boolean;
 }
 
+/**
+ * One ordered piece of an assistant turn, used by the showcase to synthesize
+ * a live-like SSE stream (text/thinking deltas, tool start/end). `at`/`endAt`
+ * are absolute ms timestamps from the session log; the replayer clamps the
+ * gaps so pacing feels real without dead air.
+ */
+type ShowcaseStreamSegment =
+	| { kind: "thinking"; text: string; at: number }
+	| { kind: "text"; text: string; at: number }
+	| {
+			kind: "tool";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result?: unknown;
+			isError?: boolean;
+			at: number;
+			endAt: number;
+	  };
+
 interface ShowcaseMessage {
 	role: "user" | "assistant";
 	content: string;
 	timestamp: number;
 	thinking?: string;
 	tools?: ShowcaseToolRecord[];
+	/** Ordered blocks of this turn (assistant messages only). */
+	stream?: ShowcaseStreamSegment[];
 }
 
 function textFromContent(content: unknown): string {
@@ -192,10 +214,13 @@ function parseSessionMessages(filePath: string): ShowcaseMessage[] {
 	const messages: ShowcaseMessage[] = [];
 
 	let pendingAssistant: ShowcaseMessage | null = null;
+	let pendingStream: ShowcaseStreamSegment[] = [];
 	const finalizeAssistant = () => {
 		if (pendingAssistant) {
+			if (pendingStream.length > 0) pendingAssistant.stream = pendingStream;
 			messages.push(pendingAssistant);
 			pendingAssistant = null;
+			pendingStream = [];
 		}
 	};
 	const ensureAssistant = (timestamp: number): ShowcaseMessage => {
@@ -227,19 +252,28 @@ function parseSessionMessages(filePath: string): ShowcaseMessage[] {
 					const block = part as Record<string, unknown>;
 					if (block.type === "text" && typeof block.text === "string") {
 						pending.content = pending.content ? `${pending.content}\n${block.text}` : block.text;
+						pendingStream.push({ kind: "text", text: block.text, at: ts });
 					} else if (block.type === "thinking" && typeof block.thinking === "string") {
 						pending.thinking = pending.thinking ? `${pending.thinking}\n${block.thinking}` : block.thinking;
+						pendingStream.push({ kind: "thinking", text: block.thinking, at: ts });
 					} else if (block.type === "toolCall") {
+						const toolCallId = typeof block.id === "string" ? block.id : "";
+						const toolName = typeof block.name === "string" ? block.name : "tool";
 						pending.tools = pending.tools ?? [];
-						pending.tools.push({
-							toolCallId: typeof block.id === "string" ? block.id : "",
-							toolName: typeof block.name === "string" ? block.name : "tool",
+						pending.tools.push({ toolCallId, toolName, args: block.arguments });
+						pendingStream.push({
+							kind: "tool",
+							toolCallId,
+							toolName,
 							args: block.arguments,
+							at: ts,
+							endAt: ts,
 						});
 					}
 				}
 			} else if (typeof content === "string" && content) {
 				pending.content = pending.content ? `${pending.content}\n${content}` : content;
+				pendingStream.push({ kind: "text", text: content, at: ts });
 			}
 			pending.timestamp = ts;
 			if (typeof message.stopReason === "string" && message.stopReason !== "toolUse") {
@@ -261,6 +295,16 @@ function parseSessionMessages(filePath: string): ShowcaseMessage[] {
 				existing.isError = isError;
 			} else {
 				pending.tools.push({ toolCallId, toolName, args: undefined, result, isError });
+			}
+			const segment = pendingStream.find((s) => s.kind === "tool" && s.toolCallId === toolCallId && s.result === undefined);
+			if (segment && segment.kind === "tool") {
+				segment.result = result;
+				segment.isError = isError;
+				segment.endAt = ts;
+			} else if (!existing) {
+				// toolCall block missing from the log (e.g. compacted away) — still
+				// stream the result so the replay stays in order.
+				pendingStream.push({ kind: "tool", toolCallId, toolName, args: undefined, result, isError, at: ts, endAt: ts });
 			}
 			continue;
 		}
@@ -287,6 +331,9 @@ interface WorkspaceInitFile {
 
 interface WorkspaceKeyframe {
 	atMessage: number;
+	/** Tool call that produced this file state — the mock backend reveals the
+	 *  file the moment that tool's tool_end is streamed. */
+	toolCallId: string;
 	path: string;
 	content: string;
 	change: "created" | "modified";
@@ -294,11 +341,13 @@ interface WorkspaceKeyframe {
 
 interface WikiKeyframe {
 	atMessage: number;
+	toolCallId: string;
 	page: { path: string; title: string; content: string };
 }
 
 interface ProfileEvent {
 	atMessage: number;
+	toolCallId: string;
 	summary: string;
 }
 
@@ -358,11 +407,22 @@ function extractWorkspaceKeyframes(
 
 			if (tool.toolName === "write" && typeof args.content === "string") {
 				const content = truncateText(sanitizeText(args.content, rewrites), MAX_KEYFRAME_CONTENT);
-				keyframes.push({ atMessage, path: relPath, content, change: virtualFs.has(relPath) ? "modified" : "created" });
+				keyframes.push({ atMessage, toolCallId: tool.toolCallId, path: relPath, content, change: virtualFs.has(relPath) ? "modified" : "created" });
 				virtualFs.set(relPath, content);
 			} else if (tool.toolName === "edit" && Array.isArray(args.edits)) {
-				const prior = virtualFs.get(relPath);
-				if (prior === undefined) continue; // can't reconstruct a diff against unknown base
+				let prior = virtualFs.get(relPath);
+				if (prior === undefined) {
+					// Edit targets a file the session didn't write (e.g. a
+					// pre-existing .skills file excluded from the initial
+					// snapshot). Seed the virtual FS from the current on-disk
+					// content so the file preview resolves during replay; the
+					// recorded edits typically no longer apply (their oldText
+					// is already gone), which degrades gracefully to "final
+					// state shown from the first edit".
+					const abs = join(cwd, relPath);
+					if (!existsSync(abs) || statSync(abs).size > MAX_KEYFRAME_CONTENT) continue;
+					prior = readFileSync(abs, "utf-8");
+				}
 				let next = prior;
 				for (const edit of args.edits as Array<Record<string, unknown>>) {
 					const oldText = typeof edit.oldText === "string" ? edit.oldText : "";
@@ -370,7 +430,7 @@ function extractWorkspaceKeyframes(
 					if (oldText && next.includes(oldText)) next = next.replace(oldText, newText);
 				}
 				const content = truncateText(sanitizeText(next, rewrites), MAX_KEYFRAME_CONTENT);
-				keyframes.push({ atMessage, path: relPath, content, change: "modified" });
+				keyframes.push({ atMessage, toolCallId: tool.toolCallId, path: relPath, content, change: "modified" });
 				virtualFs.set(relPath, content);
 			}
 		}
@@ -440,6 +500,7 @@ function extractWikiKeyframes(messages: ShowcaseMessage[], rewrites: Array<[RegE
 			const slug = args.title.toLowerCase().replace(/[^\p{Letter}\p{Number}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 			keyframes.push({
 				atMessage,
+				toolCallId: tool.toolCallId,
 				page: {
 					path: pathMatch?.[1] ?? `wiki/sources/${slug}.md`,
 					title: sanitizeText(args.title, rewrites),
@@ -467,7 +528,7 @@ function extractProfilePanel(
 			const topic = typeof payload.milestone === "string" ? payload.milestone
 				: typeof payload.topic === "string" ? payload.topic
 				: typeof args?.event_type === "string" ? args.event_type : "learning event";
-			events.push({ atMessage, summary: sanitizeText(topic, rewrites) });
+			events.push({ atMessage, toolCallId: tool.toolCallId, summary: sanitizeText(topic, rewrites) });
 		}
 	});
 	let profile: unknown | null = null;
@@ -505,29 +566,54 @@ function polishMessages(messages: ShowcaseMessage[], rewrites: Array<[RegExp, st
 			timestamp: m.timestamp,
 		};
 		if (m.thinking) out.thinking = truncateText(sanitizeText(m.thinking, rewrites), LIMITS.thinking);
+		const polishArgs = (args: unknown): unknown => {
+			const clean = sanitizeValue(args, rewrites);
+			const argsJson = JSON.stringify(clean);
+			if (argsJson && argsJson.length > LIMITS.toolArgs && clean && typeof clean === "object") {
+				// Shrink oversized string fields inside args (usually file contents).
+				for (const [k, v] of Object.entries(clean as Record<string, unknown>)) {
+					if (typeof v === "string" && v.length > 2000) {
+						(clean as Record<string, unknown>)[k] = truncateText(v, 2000);
+					}
+				}
+			}
+			return clean;
+		};
+		const polishResult = (result: unknown): unknown =>
+			typeof result === "string"
+				? truncateText(sanitizeText(result, rewrites), LIMITS.toolResult)
+				: sanitizeValue(result, rewrites);
 		if (m.tools?.length) {
 			out.tools = m.tools.map((tool) => {
 				const record: ShowcaseToolRecord = {
 					toolCallId: tool.toolCallId,
 					toolName: tool.toolName,
-					args: sanitizeValue(tool.args, rewrites),
+					args: polishArgs(tool.args),
 				};
-				const argsJson = JSON.stringify(record.args);
-				if (argsJson && argsJson.length > LIMITS.toolArgs && record.args && typeof record.args === "object") {
-					// Shrink oversized string fields inside args (usually file contents).
-					for (const [k, v] of Object.entries(record.args as Record<string, unknown>)) {
-						if (typeof v === "string" && v.length > 400) {
-							(record.args as Record<string, unknown>)[k] = truncateText(v, 400);
-						}
-					}
-				}
-				if (tool.result !== undefined) {
-					record.result = typeof tool.result === "string"
-						? truncateText(sanitizeText(tool.result, rewrites), LIMITS.toolResult)
-						: sanitizeValue(tool.result, rewrites);
-				}
+				if (tool.result !== undefined) record.result = polishResult(tool.result);
 				if (tool.isError) record.isError = true;
 				return record;
+			});
+		}
+		if (m.stream?.length) {
+			out.stream = m.stream.map((seg) => {
+				if (seg.kind === "thinking") {
+					return { kind: "thinking", text: truncateText(sanitizeText(seg.text, rewrites), LIMITS.thinking), at: seg.at };
+				}
+				if (seg.kind === "text") {
+					return { kind: "text", text: truncateText(sanitizeText(seg.text, rewrites), 20000), at: seg.at };
+				}
+				const tool: ShowcaseStreamSegment = {
+					kind: "tool",
+					toolCallId: seg.toolCallId,
+					toolName: seg.toolName,
+					args: polishArgs(seg.args),
+					at: seg.at,
+					endAt: seg.endAt,
+				};
+				if (seg.result !== undefined) tool.result = polishResult(seg.result);
+				if (seg.isError) tool.isError = true;
+				return tool;
 			});
 		}
 		return out;
