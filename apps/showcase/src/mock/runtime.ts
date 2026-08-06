@@ -190,7 +190,8 @@ export class MockBackend {
 			const prev = files.get(k.path);
 			files.set(k.path, {
 				content: k.content,
-				size: k.content.length,
+				asset: k.asset,
+				size: k.size ?? k.content?.length ?? 0,
 				updatedAt: doc.messages[Math.min(k.atMessage, doc.messages.length - 1)]?.timestamp
 					? new Date(doc.messages[Math.min(k.atMessage, doc.messages.length - 1)].timestamp).toISOString()
 					: (prev?.updatedAt ?? doc.recordedAt),

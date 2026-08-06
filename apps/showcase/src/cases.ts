@@ -22,7 +22,12 @@ export interface WorkspaceKeyframe {
 	atMessage: number;
 	toolCallId: string;
 	path: string;
-	content: string;
+	/** Inline text content. Absent for binary files, which carry `asset`. */
+	content?: string;
+	/** Static asset path (cases/<id>/assets/...) for binary files. */
+	asset?: string;
+	/** On-disk size; needed for asset keyframes (no content to measure). */
+	size?: number;
 	change: "created" | "modified";
 }
 

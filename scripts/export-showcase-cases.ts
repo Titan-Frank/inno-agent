@@ -335,7 +335,12 @@ interface WorkspaceKeyframe {
 	 *  file the moment that tool's tool_end is streamed. */
 	toolCallId: string;
 	path: string;
-	content: string;
+	/** Inline text content. Absent for binary files, which carry `asset`. */
+	content?: string;
+	/** Static asset path (cases/<id>/assets/...) for binary files. */
+	asset?: string;
+	/** On-disk size; needed for asset keyframes (no content to measure). */
+	size?: number;
 	change: "created" | "modified";
 }
 
@@ -368,10 +373,14 @@ interface CasePanels {
 
 const MAX_KEYFRAME_CONTENT = 60_000;
 const MAX_INLINE_TEXT_FILE = 100_000;
+/** Swept HTML gets a higher inline cap: generated handouts/slides are the
+ *  showcase's headline artifacts, and the product's HtmlPreview only renders
+ *  inline content (srcdoc) — an asset-only HTML file would preview blank. */
+const MAX_INLINE_HTML_FILE = 600_000;
 const MAX_ASSET_FILE = 8 * 1024 * 1024;
 const TEXT_EXTENSIONS = new Set([
 	".md", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".py", ".js", ".mjs", ".ts",
-	".html", ".css", ".sh", ".yaml", ".yml", ".xml", ".svg", ".tex", ".log",
+	".html", ".css", ".sh", ".yaml", ".yml", ".xml", ".svg", ".tex", ".log", ".typ",
 ]);
 
 function readSessionCwd(filePath: string): { cwd: string; startedAt: number } | null {
@@ -384,6 +393,37 @@ function readSessionCwd(filePath: string): { cwd: string; startedAt: number } | 
 		}
 	}
 	return null;
+}
+
+/** Execution window of every tool call: assistant-message ts → toolResult ts. */
+interface ToolWindow {
+	toolCallId: string;
+	startMs: number;
+	endMs: number;
+}
+
+function readToolWindows(filePath: string): ToolWindow[] {
+	const raw = readFileSync(filePath, "utf-8");
+	const windows = new Map<string, ToolWindow>();
+	for (const line of raw.split("\n")) {
+		if (!line.trim()) continue;
+		const entry = JSON.parse(line) as Record<string, unknown>;
+		if (entry.type !== "message") continue;
+		const ts = Date.parse(String(entry.timestamp ?? "")) || 0;
+		const msg = entry.message as Record<string, unknown> | undefined;
+		if (!msg) continue;
+		if (msg.role === "assistant" && Array.isArray(msg.content)) {
+			for (const part of msg.content as Array<Record<string, unknown>>) {
+				if (part?.type === "toolCall" && typeof part.id === "string" && !windows.has(part.id)) {
+					windows.set(part.id, { toolCallId: part.id, startMs: ts, endMs: ts });
+				}
+			}
+		} else if (msg.role === "toolResult" && typeof msg.toolCallId === "string") {
+			const win = windows.get(msg.toolCallId);
+			if (win && ts >= win.startMs) win.endMs = ts;
+		}
+	}
+	return [...windows.values()].sort((a, b) => a.startMs - b.startMs);
 }
 
 /** Extract workspace write/edit keyframes from tool calls. */
@@ -484,6 +524,96 @@ function collectInitialFiles(
 	};
 	walk(cwd);
 	return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Sweep files the session produced WITHOUT write/edit tool calls — typically
+ * via bash (pandoc, generate.py, typst, …). The write/edit keyframe extractor
+ * only sees tool args, so these files would never appear in the replayed
+ * workspace. We attribute each such file to the tool call whose execution
+ * window contains its creation time (birthtime, falling back to mtime), so
+ * the mock backend reveals it at roughly the moment it was really produced.
+ *
+ * Caveat: content is read from disk NOW, i.e. the file's final state — if a
+ * later session rewrote it, the replay shows the newer content (same
+ * degradation as edit-keyframe seeding).
+ */
+function sweepGeneratedFiles(
+	cwd: string,
+	sessionStartMs: number,
+	sessionEndMs: number,
+	windows: ToolWindow[],
+	toolMessageIndex: Map<string, number>,
+	keyframedPaths: Set<string>,
+	caseAssetsDir: string,
+	caseId: string,
+	rewrites: Array<[RegExp, string]>,
+	excludePaths: Set<string> = new Set(),
+): WorkspaceKeyframe[] {
+	if (!existsSync(cwd) || sessionEndMs <= 0) return [];
+	const inSession = (t: number) => t >= sessionStartMs - 30_000 && t <= sessionEndMs + 120_000;
+	const swept: WorkspaceKeyframe[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				walk(full);
+				continue;
+			}
+			const relPath = relative(cwd, full).split("\\").join("/");
+			if (keyframedPaths.has(relPath) || excludePaths.has(relPath)) continue;
+			const stat = statSync(full);
+			const createdMs = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
+			const createdInSession = inSession(createdMs);
+			if (!createdInSession && !inSession(stat.mtimeMs)) continue;
+			const ts = createdInSession ? createdMs : stat.mtimeMs;
+
+			// Attribute to the tool call that was running when the file appeared;
+			// fall back to the most recent call that finished just before it.
+			let owner = windows.find((w) => ts >= w.startMs - 1_000 && ts <= w.endMs + 4_000);
+			if (!owner) {
+				const prior = windows.filter((w) => w.endMs <= ts + 1_000);
+				owner = prior[prior.length - 1];
+			}
+			if (!owner) continue;
+			const atMessage = toolMessageIndex.get(owner.toolCallId);
+			if (atMessage === undefined) continue; // tool call trimmed away (maxUserTurns)
+
+			const ext = extname(entry.name).toLowerCase();
+			const inlineCap = ext === ".html" || ext === ".htm" ? MAX_INLINE_HTML_FILE : MAX_INLINE_TEXT_FILE;
+			const keyframe: WorkspaceKeyframe = {
+				atMessage,
+				toolCallId: owner.toolCallId,
+				path: relPath,
+				size: stat.size,
+				change: createdInSession ? "created" : "modified",
+			};
+			if (TEXT_EXTENSIONS.has(ext) && stat.size <= inlineCap) {
+				keyframe.content = truncateText(sanitizeText(readFileSync(full, "utf-8"), rewrites), inlineCap);
+			} else if (stat.size <= MAX_ASSET_FILE) {
+				const assetRel = join(caseAssetsDir, relPath);
+				mkdirSync(dirname(assetRel), { recursive: true });
+				copyFileSync(full, assetRel);
+				keyframe.asset = `cases/${caseId}/assets/${relPath}`;
+			} else {
+				continue; // too large — skip entirely
+			}
+			swept.push(keyframe);
+		}
+	};
+	walk(cwd);
+	// The streaming driver auto-selects the FIRST keyframe of a tool call when
+	// its tool_end lands — prefer viewer-friendly files so e.g. the generated
+	// handout HTML opens instead of a build intermediate.
+	const EXT_PRIORITY = [".html", ".md", ".pdf", ".pptx"];
+	return swept.sort((a, b) => {
+		if (a.atMessage !== b.atMessage) return a.atMessage - b.atMessage;
+		if (a.toolCallId !== b.toolCallId) return a.toolCallId.localeCompare(b.toolCallId);
+		const pa = EXT_PRIORITY.indexOf(extname(a.path).toLowerCase());
+		const pb = EXT_PRIORITY.indexOf(extname(b.path).toLowerCase());
+		return (pa < 0 ? 99 : pa) - (pb < 0 ? 99 : pb) || a.path.localeCompare(b.path);
+	});
 }
 
 /** Wiki keyframes: each successful l2_archive call contributes one page. */
@@ -652,10 +782,33 @@ function main(): void {
 		let workspacePanel: CasePanels["workspace"] = null;
 		if (sessionInfo) {
 			const wsKeyframes = extractWorkspaceKeyframes(rawMessages, sessionInfo.cwd, rewrites);
+			// Files produced via bash (generated HTML/PDF/PPTX, downloaded
+			// assets, …) leave no write/edit args — sweep them from disk and
+			// attribute each to the tool call running when it appeared. The
+			// window ends at the last TRIMMED message: a session JSONL can keep
+			// accumulating entries for weeks (reopens, model switches), which
+			// would wrongly swallow files later sessions created in the same
+			// workspace.
+			const toolMessageIndex = new Map<string, number>();
+			rawMessages.forEach((m, i) => m.tools?.forEach((t) => toolMessageIndex.set(t.toolCallId, i)));
+			const lastMessageMs = rawMessages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+			const swept = sweepGeneratedFiles(
+				sessionInfo.cwd,
+				sessionInfo.startedAt,
+				lastMessageMs,
+				readToolWindows(sessionPath),
+				toolMessageIndex,
+				new Set(wsKeyframes.map((k) => k.path)),
+				join(outDir, spec.id, "assets"),
+				spec.id,
+				rewrites,
+				new Set(spec.excludePaths ?? []),
+			);
+			const keyframes = [...wsKeyframes, ...swept];
 			const initial = collectInitialFiles(
 				sessionInfo.cwd,
 				sessionInfo.startedAt,
-				new Set(wsKeyframes.map((k) => k.path)),
+				new Set(keyframes.map((k) => k.path)),
 				join(outDir, spec.id, "assets"),
 				spec.id,
 				rewrites,
@@ -665,7 +818,7 @@ function main(): void {
 				workspaceId: `ws-${spec.id}`,
 				name: spec.workspaceName ?? basename(sessionInfo.cwd),
 				initial,
-				keyframes: wsKeyframes,
+				keyframes,
 			};
 		}
 		const wikiPanel = { keyframes: extractWikiKeyframes(rawMessages, rewrites) };
