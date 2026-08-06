@@ -21,9 +21,20 @@ npm run showcase:build    # 类型检查 + 构建静态产物到 apps/showcase/d
 
 ## 新增一个案例
 
-1. 在 `scripts/export-showcase-cases.ts` 的 `CASES` 数组里加一条记录（session 文件名 + 标题/描述/标签，可选 `maxUserTurns` 截断长会话、`excludePaths` 排除不想公开的文件）。
-2. 跑 `npm run showcase:export`。
-3. **务必人工 review 生成的 JSON**（脱敏脚本处理路径/用户名/常见密钥形态，但消息正文是原文）。
+**自助导入（无需改代码）**:
+
+```bash
+npm run showcase:list        # 列出所有录制的 session(时间/工作区/回合数/首条消息)
+npm run showcase:export -- --session 16-59-40 --title 如何生成教案 --tags 教案,备课
+```
+
+- `--session` 接受 jsonl 文件名的任意子串（匹配多个会报错并列出候选）；不带 `--id` 时自动用「日期-uuid 前缀」当案例 id。可选 `--title-en` `--description` `--max-user-turns N`(截断长会话）`--workspace-name` `--exclude path1,path2`（排除不想公开的文件）。不带 `--title` 时用首条用户消息当标题。
+- `--only id1,id2` 与 `--session` 都是**增量 upsert** index.json，不会冲掉其他案例。
+- 案例数据 = 消息流 + 面板关键帧（workspace 文件/wiki 页面/画像事件）。`write`/`edit` 工具写入的文件从工具参数重建；**bash 命令生成的文件**(HTML/PDF/PPTX 等）按创建时间归属到当时运行的工具调用，回放时在相同时刻出现。
+
+**正式案例（长期维护、需要精心打磨标题/标签的）**：在 `scripts/export-showcase-cases.ts` 的 `CASES` 数组里加一条记录，然后跑 `npm run showcase:export`。
+
+**无论哪种方式,务必人工 review 生成的 JSON**（脱敏脚本处理路径/用户名/常见密钥形态，但消息正文是原文）。
 
 ## 部署
 

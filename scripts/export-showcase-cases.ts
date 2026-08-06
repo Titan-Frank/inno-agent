@@ -8,8 +8,17 @@
  *
  * Usage:
  *   npx tsx scripts/export-showcase-cases.ts [--sessions-dir <dir>] [--out <dir>] [--only <id,id>]
+ *   npx tsx scripts/export-showcase-cases.ts --list
+ *   npx tsx scripts/export-showcase-cases.ts --session <file-or-substring> \
+ *     [--id my-case] [--title 标题] [--title-en Title] [--description ...] \
+ *     [--tags a,b] [--max-user-turns N] [--workspace-name x] [--exclude p1,p2]
  *
  * Defaults: --sessions-dir runtime/data/sessions --out apps/showcase/public/cases
+ *
+ * `--list` prints every recorded session (time, workspace, turns, first user
+ * message) so you can pick one; `--session` exports it without editing the
+ * CASES registry below. Both `--only` and `--session` UPSERT into index.json
+ * instead of replacing it, so partial runs don't clobber other cases.
  *
  * IMPORTANT: exported cases are meant to be published. Always review the
  * output JSON before committing — the sanitizer rewrites paths and common
@@ -750,6 +759,43 @@ function polishMessages(messages: ShowcaseMessage[], rewrites: Array<[RegExp, st
 	});
 }
 
+/** `--list`: one line per recorded session so you can pick one to export. */
+function listSessions(sessionsDir: string): void {
+	const files = readdirSync(sessionsDir)
+		.filter((f) => f.endsWith(".jsonl"))
+		.sort();
+	for (const file of files) {
+		let started = "";
+		let cwd = "";
+		let userTurns = 0;
+		let toolCalls = 0;
+		let firstUser = "";
+		for (const line of readFileSync(join(sessionsDir, file), "utf-8").split("\n")) {
+			if (!line.trim()) continue;
+			const entry = JSON.parse(line) as Record<string, unknown>;
+			if (entry.type === "session" && !cwd) {
+				cwd = String(entry.cwd ?? "");
+				started = String(entry.timestamp ?? "").slice(0, 16).replace("T", " ");
+				continue;
+			}
+			if (entry.type !== "message") continue;
+			const msg = entry.message as Record<string, unknown> | undefined;
+			if (msg?.role === "user") {
+				const text = textFromContent(msg.content);
+				if (text) {
+					userTurns++;
+					if (!firstUser) firstUser = text.replace(/\s+/g, " ").slice(0, 60);
+				}
+			} else if (msg?.role === "assistant" && Array.isArray(msg.content)) {
+				toolCalls += (msg.content as Array<Record<string, unknown>>).filter((c) => c?.type === "toolCall").length;
+			}
+		}
+		console.log(
+			`${file}\n  ${started}  ${cwd ? basename(cwd) : "?"}  ${userTurns} user turns, ${toolCalls} tool calls\n  ${firstUser}`,
+		);
+	}
+}
+
 function main(): void {
 	const args = process.argv.slice(2);
 	const flag = (name: string, fallback: string): string => {
@@ -761,11 +807,49 @@ function main(): void {
 	const outDir = resolve(flag("out", join(repoRoot, "apps/showcase/public/cases")));
 	const only = flag("only", "").split(",").map((s) => s.trim()).filter(Boolean);
 
+	if (args.includes("--list")) {
+		listSessions(sessionsDir);
+		return;
+	}
+
+	// Ad-hoc export without editing CASES:
+	//   --session <file-or-substring> [--id x] [--title x] [--title-en x]
+	//   [--description x] [--tags a,b] [--max-user-turns N]
+	//   [--workspace-name x] [--exclude path1,path2]
+	let specs: CaseSpec[] = CASES;
+	const sessionFlag = flag("session", "");
+	if (sessionFlag) {
+		const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+		const matches = files.filter((f) => f.includes(sessionFlag));
+		if (matches.length === 0) {
+			console.error(`[error] no session file matches "${sessionFlag}" in ${sessionsDir} (try --list)`);
+			process.exit(1);
+		}
+		if (matches.length > 1) {
+			console.error(`[error] "${sessionFlag}" matches ${matches.length} sessions, be more specific:\n  ${matches.join("\n  ")}`);
+			process.exit(1);
+		}
+		const sessionFile = matches[0];
+		const id = flag("id", "") ||
+			`${sessionFile.slice(0, 10)}-${sessionFile.match(/_([0-9a-f]{8})/)?.[1] ?? "session"}`;
+		specs = [{
+			id,
+			sessionFile,
+			title: flag("title", ""), // falls back to the first user message below
+			titleEn: flag("title-en", ""),
+			description: flag("description", ""),
+			tags: flag("tags", "").split(",").map((s) => s.trim()).filter(Boolean),
+			maxUserTurns: Number(flag("max-user-turns", "0")) || undefined,
+			workspaceName: flag("workspace-name", "") || undefined,
+			excludePaths: flag("exclude", "").split(",").map((s) => s.trim()).filter(Boolean),
+		}];
+	}
+
 	const rewrites = buildPathRewrites();
 	mkdirSync(outDir, { recursive: true });
 
-	const index: Array<Record<string, unknown>> = [];
-	for (const spec of CASES) {
+	const exported: Array<Record<string, unknown>> = [];
+	for (const spec of specs) {
 		if (only.length > 0 && !only.includes(spec.id)) continue;
 		const sessionPath = join(sessionsDir, spec.sessionFile);
 		if (!existsSync(sessionPath)) {
@@ -827,9 +911,12 @@ function main(): void {
 		const messages = polishMessages(rawMessages, rewrites);
 
 		const recordedAt = spec.sessionFile.slice(0, 10);
+		const title = spec.title ||
+			rawMessages.find((m) => m.role === "user")?.content.replace(/\s+/g, " ").slice(0, 40) ||
+			spec.id;
 		const caseDoc = {
 			id: spec.id,
-			title: spec.title,
+			title,
 			titleEn: spec.titleEn,
 			description: spec.description,
 			tags: spec.tags,
@@ -845,9 +932,9 @@ function main(): void {
 		const outPath = join(outDir, `${spec.id}.json`);
 		writeFileSync(outPath, JSON.stringify(caseDoc));
 		const sizeKb = Math.round(JSON.stringify(caseDoc).length / 1024);
-		index.push({
+		exported.push({
 			id: spec.id,
-			title: spec.title,
+			title,
 			titleEn: spec.titleEn,
 			description: spec.description,
 			tags: spec.tags,
@@ -856,8 +943,21 @@ function main(): void {
 		});
 		console.log(`[ok] ${spec.id}: ${messages.length} messages, ${sizeKb} KB -> ${basename(outPath)}`);
 	}
-	writeFileSync(join(outDir, "index.json"), JSON.stringify({ cases: index }, null, 2));
-	console.log(`[done] ${index.length} case(s) exported to ${outDir}`);
+	// Upsert into the existing index rather than replacing it, so `--only` /
+	// `--session` runs don't clobber cases that weren't part of this run.
+	const indexPath = join(outDir, "index.json");
+	const byId = new Map<string, Record<string, unknown>>();
+	if (existsSync(indexPath)) {
+		try {
+			const prior = JSON.parse(readFileSync(indexPath, "utf-8")) as { cases?: Array<Record<string, unknown>> };
+			for (const entry of prior.cases ?? []) {
+				if (typeof entry.id === "string") byId.set(entry.id, entry);
+			}
+		} catch { /* unreadable index — start fresh */ }
+	}
+	for (const entry of exported) byId.set(String(entry.id), entry);
+	writeFileSync(indexPath, JSON.stringify({ cases: [...byId.values()] }, null, 2));
+	console.log(`[done] ${exported.length} case(s) exported to ${outDir}`);
 	console.log("REMINDER: review the exported JSON for sensitive content before publishing.");
 }
 
