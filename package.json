@@ -29,7 +29,8 @@
 		"showcase:export": "tsx scripts/export-showcase-cases.ts",
 		"showcase:dev": "npm run dev --workspace inno-agent-showcase",
 		"showcase:build": "npm run build --workspace inno-agent-showcase",
-		"showcase:list": "tsx scripts/export-showcase-cases.ts --list"
+		"showcase:list": "tsx scripts/export-showcase-cases.ts --list",
+		"showcase:view": "node scripts/view-showcase-export.mjs"
 	},
 	"engines": {
 		"node": ">=20.6.0"

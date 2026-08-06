@@ -63,7 +63,10 @@
 		}
 	},
 	"sessions": {
-		"export": "导出为 Markdown"
+		"export": "导出为 Markdown",
+		"exportShowcase": "导出为回放案例",
+		"exportShowcaseDone": "已导出回放案例「{{title}}」\n\n案例目录：{{dir}}\n运行 npm run showcase:view 打开回放界面。",
+		"exportShowcaseFailed": "导出回放案例失败：{{message}}"
 	},
 	"notebook": {
 		"title": "笔记本",
