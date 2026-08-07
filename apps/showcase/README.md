@@ -21,31 +21,25 @@ npm run showcase:build    # 类型检查 + 构建静态产物到 apps/showcase/d
 
 ## 新增一个案例
 
-**方式一：产品内一键导出（推荐）**——在真实 Inno Agent 的会话列表里，悬停某条会话 → 点击场记板图标「导出为回放案例」。后端把该会话的消息流 + 工作区文件（含 bash 生成的 HTML/PDF 等）+ wiki/画像关键帧打包到 `runtime/data/showcase-exports/cases/`（多次导出自动合并 index)。然后：
+详细操作手册见 **[EXPORTING.md](./EXPORTING.md)**(导出内容、参数参考、脱敏规则、限制与排查)。三种方式速览:
+
+**方式一:产品内一键导出(推荐)**——会话列表悬停某条会话 → 点场记板图标「导出为回放案例」,案例写入 `runtime/data/showcase-exports/cases/`。然后:
 
 ```bash
 npm run showcase:view     # 起本地服务直接看回放,自动开浏览器(:4175)
 ```
 
-viewer 把已发布的案例（dist/cases）和你导出的案例（overlay）合并展示，无需改动 public/cases、无需重新 build 案例。常用参数：`--cases <dir>` 换 overlay 目录、`--port`、`--build` 强制重建、`--no-open`。
-
-**方式二：CLI 自助导出**（适合批量/脚本化，同样无需改代码）:
+**方式二:CLI 自助导出**:
 
 ```bash
-npm run showcase:list        # 列出所有录制的 session(时间/工作区/回合数/首条消息)
-npm run showcase:export -- --session 16-59-40 --title 如何生成教案 --tags 教案,备课
-# 导到 overlay 目录而不是发布目录:
-npm run showcase:export -- --session 16-59-40 --out runtime/data/showcase-exports/cases
+npm run showcase:list        # 列出所有录制的 session
+npm run showcase:export -- --session <文件名子串> --title 标题 --tags 标签1,标签2 \
+  --out runtime/data/showcase-exports/cases
 ```
 
-- `--session` 接受 jsonl 文件名的任意子串（匹配多个会报错并列出候选）；不带 `--id` 时自动用「日期-uuid 前缀」当案例 id。可选 `--title-en` `--description` `--max-user-turns N`(截断长会话）`--workspace-name` `--exclude path1,path2`（排除不想公开的文件）。不带 `--title` 时用首条用户消息当标题。
-- `--only id1,id2` 与 `--session` 都是**增量 upsert** index.json，不会冲掉其他案例。
+**方式三:发布正式案例**——在 `scripts/export-showcase-cases.ts` 的 `CASES` 数组注册,跑 `npm run showcase:export`(输出到 `public/cases/`),review 后提交。
 
-**方式三：正式案例（要发布上线、精心打磨标题/标签的）**：在 `scripts/export-showcase-cases.ts` 的 `CASES` 数组里加一条记录，然后跑 `npm run showcase:export`。
-
-导出内容说明：案例数据 = 消息流 + 面板关键帧（workspace 文件/wiki 页面/画像事件）。`write`/`edit` 工具写入的文件从工具参数重建；**bash 命令生成的文件**(HTML/PDF/PPTX 等）按创建时间归属到当时运行的工具调用，回放时在相同时刻出现。注意 bash 产物依赖**导出时的工作区磁盘现状**——会话结束后又改过文件的话，回放里看到的是新内容；工作区删了就只剩消息流。
-
-**无论哪种方式,务必人工 review 生成的 JSON**（脱敏脚本处理路径/用户名/常见密钥形态，但消息正文是原文）。
+**无论哪种方式,务必人工 review 生成的 JSON**(脱敏脚本处理路径/用户名/常见密钥形态,但消息正文是原文)。
 
 ## 部署
 
