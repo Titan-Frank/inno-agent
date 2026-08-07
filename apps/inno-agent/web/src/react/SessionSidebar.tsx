@@ -1051,7 +1051,7 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 
 				{/* Channel filters + workspace ordering — hidden in Simple Mode. */}
 				{!simpleMode && (
-					<div className="relative flex items-center gap-1">
+					<div className="relative flex h-6 items-center gap-1">
 						{state.availableChannels.length > 1 ? (
 							<div className="chip-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
 								<button
