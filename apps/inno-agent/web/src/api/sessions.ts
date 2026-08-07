@@ -90,6 +90,20 @@ export async function generateSessionName(id: string): Promise<SessionMeta> {
 	});
 }
 
+export interface ShowcaseExportResult {
+	ok: boolean;
+	caseId: string;
+	title: string;
+	/** Server-side dir the case JSON + assets + index.json were written to. */
+	casesDir: string;
+}
+
+export async function exportSessionShowcase(id: string): Promise<ShowcaseExportResult> {
+	return apiFetch<ShowcaseExportResult>(`/api/sessions/${encodeURIComponent(id)}/showcase-export`, {
+		method: "POST",
+	});
+}
+
 export interface DeleteSessionResult {
 	id: string;
 	deleted: boolean;

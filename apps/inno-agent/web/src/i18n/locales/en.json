@@ -63,7 +63,10 @@
 		}
 	},
 	"sessions": {
-		"export": "Export as Markdown"
+		"export": "Export as Markdown",
+		"exportShowcase": "Export as replay case",
+		"exportShowcaseDone": "Replay case \"{{title}}\" exported.\n\nCases dir: {{dir}}\nRun npm run showcase:view to open the replay.",
+		"exportShowcaseFailed": "Failed to export replay case: {{message}}"
 	},
 	"notebook": {
 		"title": "Notebook",

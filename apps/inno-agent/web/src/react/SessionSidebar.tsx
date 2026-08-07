@@ -12,6 +12,7 @@ import {
 	Archive,
 	ArchiveRestore,
 	Download,
+	Clapperboard,
 	ChevronRight,
 	Search,
 	X,
@@ -30,6 +31,7 @@ import { workspaceStore } from "../stores/workspace-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import type { WorkspaceMeta } from "../api/workspaces.js";
 import { triggerDownload } from "../api/workspace.js";
+import { exportSessionShowcase } from "../api/sessions.js";
 import type { SessionChannel, SessionMeta } from "../api/sessions.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { Spinner } from "./ui/Spinner.js";
@@ -347,6 +349,7 @@ function SessionCard({
 	onArchive,
 	onDelete,
 	onExport,
+	onExportShowcase,
 }: {
 	session: SessionMeta;
 	active: boolean;
@@ -363,6 +366,7 @@ function SessionCard({
 	onArchive: () => void;
 	onDelete: () => void;
 	onExport: () => void;
+	onExportShowcase: () => void;
 }) {
 	const { t } = useTranslation();
 	return (
@@ -453,6 +457,13 @@ function SessionCard({
 						onClick={(e) => { e.stopPropagation(); onExport(); }}
 					>
 						<Download size={12} />
+					</button>
+					<button
+						className="rounded p-0.5 text-[var(--inno-text-subtle)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]"
+						title={t("sessions.exportShowcase", "导出为回放案例")}
+						onClick={(e) => { e.stopPropagation(); onExportShowcase(); }}
+					>
+						<Clapperboard size={12} />
 					</button>
 					<button
 						className="rounded p-0.5 text-[var(--inno-text-subtle)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]"
@@ -771,6 +782,17 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 		// follows the Content-Disposition header to name the file.
 		triggerDownload(`/api/sessions/${encodeURIComponent(session.id)}/export.md`);
 	}, []);
+
+	const handleExportShowcase = useCallback((session: SessionMeta) => {
+		void (async () => {
+			try {
+				const result = await exportSessionShowcase(session.id);
+				window.alert(t("sessions.exportShowcaseDone", { title: result.title, dir: result.casesDir }));
+			} catch (err) {
+				window.alert(t("sessions.exportShowcaseFailed", { message: err instanceof Error ? err.message : String(err) }));
+			}
+		})();
+	}, [t]);
 
 	const handleDelete = useCallback((session: SessionMeta) => {
 		const confirmed = typeof window === "undefined" ? true : window.confirm(t("sidebar.confirmDeleteSession", { name: session.name }));
@@ -1194,6 +1216,7 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 													onArchive={() => handleArchive(session)}
 													onDelete={() => handleDelete(session)}
 													onExport={() => handleExport(session)}
+												onExportShowcase={() => handleExportShowcase(session)}
 												/>
 											))}
 										</motion.div>

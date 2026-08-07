@@ -15,6 +15,14 @@ import { buildWikiGraph } from "./memory/l2/wiki-graph.js";
 import { loadConfig, saveConfig, setDefaultModel, upsertProvider, deleteProvider, deleteModel, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig, type InnoModelConfig, type InnoProviderConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
+import {
+	buildPathRewrites,
+	deriveCaseId,
+	exportShowcaseCase,
+	readSessionCwd,
+	upsertShowcaseIndex,
+	type CaseSpec,
+} from "./showcase/case-exporter.js";
 import { probeProviderModels } from "./agent/model-probe.js";
 import { ensureDir, readJson, readText, writeJson, writeText } from "./storage/file-store.js";
 import {
@@ -3106,8 +3114,56 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
-		const sessionMatch = matchRoute("GET", method, url, "/api/sessions/:id");
-		if (sessionMatch) {
+		// One-click showcase export: bundle the session (messages + workspace
+		// files + wiki/profile keyframes) as a replayable case under
+		// <dataDir>/showcase-exports/cases. View it with `npm run showcase:view`.
+		const showcaseExportMatch = matchRoute("POST", method, url, "/api/sessions/:id/showcase-export");
+		if (showcaseExportMatch) {
+			const sessionsDir = join(dataDir, "sessions");
+			const sessionPath = sessionFileFromId(sessionsDir, decodeURIComponent(showcaseExportMatch.id));
+			if (!sessionPath || !existsSync(sessionPath)) {
+				json(res, 404, { error: "Session not found" });
+				return;
+			}
+			const body = await readBody(req).catch(() => ({})) as Record<string, unknown>;
+			const sessionFile = basename(sessionPath);
+			const sessionInfo = readSessionCwd(sessionPath);
+			const parsed = parseSessionFile(sessionPath);
+			const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+			const spec: CaseSpec = {
+				id: str(body.id) || deriveCaseId(sessionFile),
+				sessionFile,
+				// Falls back to the session's custom/generated name, then to the
+				// first user message (inside exportShowcaseCase).
+				title: str(body.title) || parsed?.summary.name?.trim() || "",
+				titleEn: str(body.titleEn),
+				description: str(body.description),
+				tags: Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : [],
+				maxUserTurns: typeof body.maxUserTurns === "number" && body.maxUserTurns > 0 ? body.maxUserTurns : undefined,
+				workspaceName: str(body.workspaceName) || undefined,
+				excludePaths: Array.isArray(body.excludePaths)
+					? body.excludePaths.filter((p): p is string => typeof p === "string")
+					: undefined,
+			};
+			const rewrites = buildPathRewrites({
+				workspaceContainers: sessionInfo ? [dirname(sessionInfo.cwd)] : [],
+			});
+			const outDir = join(dataDir, "showcase-exports", "cases");
+			try {
+				const entry = exportShowcaseCase(spec, { sessionsDir, dataDir, outDir }, rewrites);
+				if (!entry) {
+					json(res, 422, { error: "Unable to export session" });
+					return;
+				}
+				upsertShowcaseIndex(outDir, [entry]);
+				json(res, 200, { ok: true, caseId: entry.id, title: entry.title, casesDir: outDir });
+			} catch (err) {
+				json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+			}
+			return;
+		}
+
+		const sessionMatch = matchRoute("GET", method, url, "/api/sessions/:id");		if (sessionMatch) {
 			const sessionPath = sessionFileFromId(join(dataDir, "sessions"), decodeURIComponent(sessionMatch.id));
 			if (!sessionPath || !existsSync(sessionPath)) {
 				json(res, 404, { error: "Session not found" });

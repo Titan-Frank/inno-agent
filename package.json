@@ -7,7 +7,8 @@
 	"type": "module",
 	"workspaces": [
 		"apps/inno-agent",
-		"apps/inno-agent/web"
+		"apps/inno-agent/web",
+		"apps/showcase"
 	],
 	"main": "electron/main.js",
 	"scripts": {
@@ -24,7 +25,12 @@
 		"restart:fast": "bash restart-dev.sh --skip-build",
 		"electron": "electron .",
 		"electron:build": "npm run build && electron-builder --mac",
-		"electron:build:win": "npm run build && electron-builder --win"
+		"electron:build:win": "npm run build && electron-builder --win",
+		"showcase:export": "tsx scripts/export-showcase-cases.ts",
+		"showcase:dev": "npm run dev --workspace inno-agent-showcase",
+		"showcase:build": "npm run build --workspace inno-agent-showcase",
+		"showcase:list": "tsx scripts/export-showcase-cases.ts --list",
+		"showcase:view": "node scripts/view-showcase-export.mjs"
 	},
 	"engines": {
 		"node": ">=20.6.0"
