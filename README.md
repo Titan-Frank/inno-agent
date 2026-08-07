@@ -45,6 +45,7 @@ General-purpose coding agents optimize for open-ended software engineering. Educ
 - 🧩 **Skill system + content hub** — browse and import skills/presets from a remote hub (GitHub repo or self-hosted bundle service).
 - 🔌 **Pluggable providers** — any `openai-completions` or `anthropic-messages` endpoint (Anthropic, OpenAI, DeepSeek, Ollama, local models); switch models live in the UI.
 - 🌍 **i18n & themes** — Chinese/English UI, four themes.
+- 🎬 **Session replay showcase** — export any real session (button or CLI) and replay it in a standalone site built from the real product UI, with streaming messages, workspace/notebook/profile panels, and generated artifacts.
 - 🛡️ **Optional OS-level sandbox** — gate bash/file operations via [pi-sandbox](https://github.com/carderne/pi-sandbox); optional subagents via `pi-subagents`.
 
 ## Quick Start
@@ -170,6 +171,7 @@ Layered Memory       L1 learner profile · L2 native wiki · L3 session records
 apps/inno-agent/           Backend (CLI + HTTP server), TypeScript → dist/
 apps/inno-agent/web/       Frontend (React 19 + Tailwind 4 + Vite)
 apps/inno-agent/presets/   Bundled preset workspaces (offline fallback)
+apps/showcase/             Session replay showcase site (real product UI + recorded cases)
 electron/                  Electron main process (desktop app)
 scripts/content-hub-server/  Self-hosted Content Hub bundle service
 runtime/                   Local runtime state (config, data, skills) — gitignored
@@ -190,6 +192,22 @@ npm run server
 ```
 
 A [`Dockerfile`](./Dockerfile) and [`docker-compose.yml`](./docker-compose.yml) are provided as starting points; see [`docs/SYSTEM_DEPENDENCIES.md`](./docs/SYSTEM_DEPENDENCIES.md) for the full dependency reference. Desktop packaging notes are in [`ELECTRON_BUILD.md`](./ELECTRON_BUILD.md).
+
+## Showcase — Session Replay Site
+
+[`apps/showcase/`](./apps/showcase) is a standalone site that replays recorded Inno Agent sessions through the **real product UI** (via a Vite alias into `apps/inno-agent/web/src`) — no backend, no model calls. A replay reproduces the streaming chat turn by turn and keeps the right-hand panels in sync: workspace files appear as tools write them (including bash-generated artifacts like HTML/PDF/PPTX), wiki notes accumulate in the notebook, and the learner profile lights up as learning events are recorded.
+
+**Export a real session** from inside the product (hover a session in the sidebar → clapperboard icon) or from the CLI:
+
+```bash
+npm run showcase:export -- --session <substring>   # pick one recorded session
+npm run showcase:view                              # build + serve + open the replay site
+```
+
+Exported cases land in `runtime/data/showcase-exports/cases/` with automatic path/username/secret sanitization; the viewer overlays them on top of the published cases without a rebuild.
+
+- [apps/showcase/README.md](./apps/showcase/README.md) — architecture, mock backend, and the constraints for keeping the replay UI in sync with product code.
+- [apps/showcase/EXPORTING.md](./apps/showcase/EXPORTING.md) — full export handbook (中文): button flow, CLI reference, sanitization rules, troubleshooting.
 
 ## Use Cases & Docs
 
