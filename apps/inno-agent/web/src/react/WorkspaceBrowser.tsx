@@ -638,6 +638,10 @@ function Node({ node, style, dragHandle }: NodeRendererProps<ArboristNode>) {
 						multiSelect.toggleFile(node.data.path);
 						return;
 					}
+					if (node.isSelected) {
+						node.deselect();
+						return;
+					}
 					node.select();
 					workspaceStore.clearStreamingPreview();
 					if (appStore.workspaceWidth < CONTENT_REVEAL_WIDTH) {
@@ -932,10 +936,16 @@ export function WorkspaceBrowser() {
 	}, [deleteConfirm]);
 
 	const toggleMultiSelectMode = useCallback(() => {
+		const currentPath = workspaceStore.currentFile?.path;
 		treeRef.current?.deselectAll();
-		setSelectedFileIds([]);
+		if (multiSelectMode) {
+			setSelectedFileIds([]);
+			if (currentPath) treeRef.current?.get(currentPath)?.select();
+		} else {
+			setSelectedFileIds(currentPath ? [currentPath] : []);
+		}
 		setMultiSelectMode((enabled) => !enabled);
-	}, []);
+	}, [multiSelectMode]);
 
 	const toggleSelectedFile = useCallback((path: string) => {
 		setSelectedFileIds((current) => current.includes(path)
