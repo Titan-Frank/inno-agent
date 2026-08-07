@@ -650,15 +650,17 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 
 	const beginCustomSort = useCallback(() => {
 		setCustomOrderDraft(sortableGroupIds);
+		setCollapsedGroups(new Set(groups.map((group) => group.id)));
 		setDraggingWorkspaceId(null);
 		setIsCustomSorting(true);
 		setSortMenuOpen(false);
-	}, [sortableGroupIds]);
+	}, [groups, sortableGroupIds]);
 
 	const finishCustomSort = useCallback(() => {
 		setCustomOrder(customOrderDraft);
 		setWorkspaceSort("custom");
 		setIsCustomSorting(false);
+		setCollapsedGroups(new Set());
 		setDraggingWorkspaceId(null);
 		window.localStorage.setItem(WORKSPACE_SORT_STORAGE_KEY, "custom");
 		window.localStorage.setItem(WORKSPACE_CUSTOM_ORDER_STORAGE_KEY, JSON.stringify(customOrderDraft));
@@ -666,6 +668,7 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 
 	const cancelCustomSort = useCallback(() => {
 		setIsCustomSorting(false);
+		setCollapsedGroups(new Set());
 		setDraggingWorkspaceId(null);
 		setCustomOrderDraft([]);
 	}, []);
@@ -1070,7 +1073,7 @@ export function SessionSidebar({ collapsed }: SessionSidebarProps) {
 
 				{/* Channel filters + workspace ordering — hidden in Simple Mode. */}
 				{!simpleMode && (
-					<div className="relative flex items-center gap-1">
+					<div className="relative flex h-6 items-center gap-1">
 						{state.availableChannels.length > 1 ? (
 							<div className="chip-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
 								<button
