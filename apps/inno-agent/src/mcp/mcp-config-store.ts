@@ -92,6 +92,38 @@ export interface McpOverview {
 
 const EMPTY_CONFIG: McpConfigFile = { mcpServers: {} };
 
+/**
+ * Reference server seeded into a fresh managed config. Weather was chosen as
+ * the built-in example because it is zero-config (Open-Meteo, no API key) and
+ * universally understandable. It ships `disabled: true` — visible in the UI as
+ * a starting point, with zero runtime effect until the user flips it on.
+ */
+const DEFAULT_TEMPLATE: McpConfigFile = {
+	mcpServers: {
+		weather: {
+			command: "npx",
+			args: ["-y", "@mcp-sidekick/weather"],
+			disabled: true,
+		},
+	},
+};
+
+/**
+ * Seed the managed MCP config with a reference template on first run. Only
+ * writes when the file does not exist at all — never overwrites a user's
+ * config, however minimal.
+ */
+export function seedManagedMcpConfig(paths: RuntimePaths): void {
+	const configPath = getManagedMcpConfigPath(paths);
+	if (existsSync(configPath)) return;
+	try {
+		writeManagedMcpConfig(paths, structuredClone(DEFAULT_TEMPLATE));
+		mcpLogger.info({ path: configPath }, "seeded managed MCP config with reference template");
+	} catch (err) {
+		mcpLogger.warn({ err, path: configPath }, "failed to seed managed MCP config");
+	}
+}
+
 /** Read + parse an MCP config file. Returns empty config when missing. */
 function readConfigFile(path: string): McpConfigFile {
 	if (!existsSync(path)) return structuredClone(EMPTY_CONFIG);

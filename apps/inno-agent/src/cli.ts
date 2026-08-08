@@ -8,6 +8,7 @@ import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
 import { createInnoExtension, type ConfigHolder } from "./agent/inno-extension.js";
 import { createMcpStatusExtension, loadMcpAdapterExtension } from "./agent/mcp-extension.js";
 import { ensureDir } from "./storage/file-store.js";
+import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
 import { logger } from "./logger.js";
 
@@ -29,6 +30,10 @@ applyRuntimeEnvironment(paths);
 // Load config
 const config = loadConfig(paths.configPath);
 applyProviderProxyBypass(config);
+
+// First-run MCP template: seeds <configDir>/mcp.json with a disabled
+// reference server when the file doesn't exist yet. No-op afterwards.
+seedManagedMcpConfig(paths);
 
 // Ensure data directories exist
 ensureDir(paths.learnerDataDir);

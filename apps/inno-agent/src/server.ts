@@ -57,6 +57,7 @@ import { JobStore } from "./scheduler/job-store.js";
 import {
 	deleteManagedServer,
 	getMcpOverview,
+	seedManagedMcpConfig,
 	setManagedServerDisabled,
 	upsertManagedServer,
 	type McpServerEntry,
@@ -220,6 +221,10 @@ async function ensureBootstrapped(): Promise<void> {
 		// ---- config (loaded lazily, not at process start) ----
 		config = loadConfig(paths.configPath);
 		applyProviderProxyBypass(config);
+
+		// First-run MCP template: seeds <configDir>/mcp.json with a disabled
+		// reference server when the file doesn't exist yet. No-op afterwards.
+		seedManagedMcpConfig(paths);
 
 		// ---- data directories ----
 		ensureDir(paths.learnerDataDir);
