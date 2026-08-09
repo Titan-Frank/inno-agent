@@ -347,4 +347,27 @@ describe("server smoke", () => {
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).toContain("application/json");
 	});
+
+	it("chat: POST /api/chat 400 without prompt, stream 400 without fields, status 200 found:false", async () => {
+		const noPrompt = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(noPrompt.status).toBe(400);
+
+		const noFields = await fetch(`http://127.0.0.1:${port}/api/chat/stream`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ prompt: "hi" }),
+		});
+		expect(noFields.status).toBe(400);
+
+		const status = await api("/api/chat/status/no-such-session");
+		expect(status.status).toBe(200);
+		expect(await status.json()).toEqual({ found: false });
+
+		const abort = await fetch(`http://127.0.0.1:${port}/api/chat/sess/turn/abort`, { method: "POST" });
+		expect(abort.status).toBe(404);
+	});
 });
