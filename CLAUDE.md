@@ -384,7 +384,7 @@ Full config.json structure (see `config.example.json`):
   "server": { "port": 3000 },
   "channels": {
     "feishu": { "enabled": false, "personalOnly": true, "allowedUserIds": [] },
-    "wechat": { "enabled": false, "mode": "bridge", "personalOnly": true, "allowedUserIds": [], "sidecarBaseUrl": "http://127.0.0.1:4319" }
+    "wechat": { "enabled": false, "mode": "bridge", "allowedUserIds": [], "sidecarBaseUrl": "http://127.0.0.1:4319" }
   },
   "bridge": { "token": "replace-me-with-a-secret" },
   "subagents": { "enabled": false },
@@ -417,7 +417,7 @@ Note: `simpleMode` and `ui.theme` are not in `config.example.json` but are added
 - `memory.l1Enabled` / `l2Enabled` / `l3Enabled` individually gate each memory layer. Simple Mode force-disables all three without overwriting these preferences.
 - `simpleMode.enabled` toggles Simple Mode (hides advanced features, surfaces preset workspaces).
 - `ui.theme` persists the UI theme preference.
-- `bridge.token` is the shared secret for bridge-mode IM channels (QQ, WeChat). Each channel supports `personalOnly` (restrict to specified users) and `allowedUserIds` (whitelist of user IDs).
+- `bridge.token` is the shared secret for bridge-mode IM channels (QQ, WeChat). `personalOnly` (p2p-only) and `allowedUserIds` (whitelist) are enforced by Feishu; WeChat iLink enforces `allowedUserIds` only (its `personalOnly` field was removed as inert); bridge-mode channels (QQ, WeChat bridge) enforce neither — filtering there is the sidecar's responsibility.
 - `ocrApi` configures PaddleOCR-VL for image OCR. Agent uses this via `ocr-tools.ts`. Requires a `token` from Baidu PaddleOCR.
 
 ### Runtime PI SDK settings (`<configDir>/settings.json`)

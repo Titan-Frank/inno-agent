@@ -86,20 +86,24 @@ function QrActionButton({ label, onClick }: { label: string; onClick: () => void
 	);
 }
 
-/** Access control fields shared by all channels: personal-only + allowed user IDs. */
+/** Access control fields shared by channel cards. `personalOnly` is optional:
+ * only channels whose backend enforces it (Feishu) should pass it — WeChat
+ * iLink never read the knob and its backend field was removed. */
 function AccessControl({ personalOnly, onPersonalOnlyChange, userIds, onUserIdsChange }: {
-	personalOnly: boolean;
-	onPersonalOnlyChange: (next: boolean) => void;
+	personalOnly?: boolean;
+	onPersonalOnlyChange?: (next: boolean) => void;
 	userIds: string;
 	onUserIdsChange: (next: string) => void;
 }) {
 	const { t } = useTranslation();
 	return (
 		<div className="grid gap-2">
-			<label className={checkCls}>
-				<input type="checkbox" className={checkboxCls} checked={personalOnly} onChange={(e) => onPersonalOnlyChange(e.target.checked)} />
-				{t("settings.channels.personalOnly")}
-			</label>
+			{personalOnly !== undefined && (
+				<label className={checkCls}>
+					<input type="checkbox" className={checkboxCls} checked={personalOnly} onChange={(e) => onPersonalOnlyChange?.(e.target.checked)} />
+					{t("settings.channels.personalOnly")}
+				</label>
+			)}
 			<div>
 				<label className={labelCls}>{t("settings.channels.allowedUserIds")}</label>
 				<textarea
@@ -250,10 +254,9 @@ function WechatChannel({ settings, state, onStateChange }: {
 	settings: InnoSettings;
 	state: {
 		enabled: boolean;
-		personalOnly: boolean;
 		allowedUsers: string;
 	};
-	onStateChange: (patch: Partial<{ enabled: boolean; personalOnly: boolean; allowedUsers: string }>) => void;
+	onStateChange: (patch: Partial<{ enabled: boolean; allowedUsers: string }>) => void;
 }) {
 	const { t } = useTranslation();
 
@@ -362,8 +365,6 @@ function WechatChannel({ settings, state, onStateChange }: {
 
 			{state.enabled && (
 				<AccessControl
-					personalOnly={state.personalOnly}
-					onPersonalOnlyChange={(v) => onStateChange({ personalOnly: v })}
 					userIds={state.allowedUsers}
 					onUserIdsChange={(v) => onStateChange({ allowedUsers: v })}
 				/>
@@ -405,7 +406,6 @@ export function ChannelsSettings({ settings }: { settings: InnoSettings }) {
 	const wechatConfig = settings.channels?.wechat;
 	const [wechat, setWechat] = useState({
 		enabled: wechatConfig?.enabled ?? false,
-		personalOnly: wechatConfig?.personalOnly ?? true,
 		allowedUsers: (wechatConfig?.allowedUserIds ?? []).join("\n"),
 	});
 	const patchWechat = useCallback((patch: Partial<typeof wechat>) => setWechat((s) => ({ ...s, ...patch })), []);
@@ -439,7 +439,6 @@ export function ChannelsSettings({ settings }: { settings: InnoSettings }) {
 					wechat: {
 						enabled: wechat.enabled,
 						mode: "ilink",
-						personalOnly: wechat.personalOnly,
 						allowedUserIds: parseUserIds(wechat.allowedUsers),
 					},
 				},
