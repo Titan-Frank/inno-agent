@@ -51,9 +51,20 @@ import { JobStore } from "./scheduler/job-store.js";
 import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
 import { json, matchRoute, readBody } from "./server/http-helpers.js";
+import {
+	canonicalTreeRoot,
+	contentTypeForWorkspaceFile,
+	officeFormat,
+	safeJoin,
+	slugifySkillName,
+	workspaceFileKind,
+	WORKSPACE_TREE_MAX_DEPTH,
+	type WorkspaceTreeNode,
+} from "./server/file-helpers.js";
 import { handleChannelsRoutes } from "./server/routes/channels.js";
 import { handleJobsRoutes } from "./server/routes/jobs.js";
 import { handleSettingsRoutes } from "./server/routes/settings.js";
+import { handleSkillsRoutes, type SkillLibraryItem } from "./server/routes/skills.js";
 import { parseFrontmatter, serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { readManifest, removeWikiPathFromManifest } from "./memory/l2/manifest-store.js";
 import { loadProfile, saveProfile } from "./memory/learner/profile-store.js";
@@ -615,14 +626,6 @@ function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBo
 // Local data helpers
 // ---------------------------------------------------------------------------
 
-function safeJoin(baseDir: string, userPath: string): string | null {
-	const resolvedBase = resolve(baseDir);
-	const resolvedPath = resolve(resolvedBase, userPath);
-	const rel = relative(resolvedBase, resolvedPath);
-	if (rel.startsWith("..") || resolve(rel) === rel) return null;
-	return resolvedPath;
-}
-
 function safeWorkspacePath(workspaceId: string | null | undefined, userPath: string): string | null {
 	const root = workspaceRegistry.resolveWorkspaceDir(workspaceId ?? TEMP_WORKSPACE_ID);
 	if (!root) return null;
@@ -723,16 +726,6 @@ function uploadExtension(fileName: string, mimeType: string): string {
 	if (mimeType.startsWith("image/")) return `.${mimeType.slice("image/".length).replace("jpeg", "jpg")}`;
 	if (mimeType.startsWith("text/")) return ".txt";
 	return ".bin";
-}
-
-function slugifySkillName(value: string): string {
-	const slug = value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/-+/g, "-")
-		.replace(/^-|-$/g, "")
-		.slice(0, 64);
-	return slug || "uploaded-skill";
 }
 
 function parseSkillFrontmatter(content: string): Record<string, string | boolean> {
@@ -943,16 +936,6 @@ function installSkillMarkdown(fileName: string, data: Buffer, targetRoot: string
 // without a restart.
 // ---------------------------------------------------------------------------
 
-interface SkillLibraryItem {
-	/** Directory name under the skills path (used as the skill name). */
-	name: string;
-	/** description from SKILL.md frontmatter (may be empty). */
-	description: string;
-	/** Whether a skill with this slug already exists locally. */
-	installed: boolean;
-	/** Optional `category` from SKILL.md frontmatter; surfaces grouping in the UI. */
-	category?: string;
-}
 
 let contentSource: RemoteContentSource | null = null;
 let contentSourceHubKey = "";
@@ -1198,88 +1181,6 @@ const WIKI_PAGE_DIRS = ["sources", "entities", "concepts", "analysis"] as const;
 const WORKSPACE_IGNORES = new Set([".git", "node_modules", "dist", ".DS_Store"]);
 /** Per-workspace private skills directory (matches inno-extension WORKSPACE_SKILLS_DIR). */
 const WORKSPACE_PRIVATE_SKILLS_DIR = ".skills";
-const TEXT_PREVIEW_EXTENSIONS = new Set([
-	".txt",
-	".md",
-	".markdown",
-	".json",
-	".jsonl",
-	".ts",
-	".tsx",
-	".js",
-	".jsx",
-	".mjs",
-	".cjs",
-	".css",
-	".html",
-	".htm",
-	".xml",
-	".yaml",
-	".yml",
-	".csv",
-	".log",
-	".py",
-	".rb",
-	".go",
-	".rs",
-	".java",
-	".kt",
-	".kts",
-	".swift",
-	".c",
-	".cpp",
-	".cc",
-	".cxx",
-	".h",
-	".hpp",
-	".cs",
-	".php",
-	".r",
-	".R",
-	".lua",
-	".pl",
-	".pm",
-	".sh",
-	".bash",
-	".zsh",
-	".fish",
-	".bat",
-	".ps1",
-	".sql",
-	".graphql",
-	".gql",
-	".toml",
-	".ini",
-	".cfg",
-	".conf",
-	".env",
-	".gitignore",
-	".dockerignore",
-	".editorconfig",
-	".prettierrc",
-	".eslintrc",
-	".scss",
-	".sass",
-	".less",
-	".vue",
-	".svelte",
-	".astro",
-	".tf",
-	".proto",
-	".gradle",
-	".cmake",
-	".makefile",
-	".dockerfile",
-]);
-
-interface WorkspaceTreeNode {
-	name: string;
-	path: string;
-	type: "file" | "directory";
-	size?: number;
-	updatedAt?: string;
-	children?: WorkspaceTreeNode[];
-}
 
 function workspaceRelativePath(rootDir: string, filePath: string): string {
 	return relative(rootDir, filePath) || "";
@@ -1401,22 +1302,6 @@ function workspaceSkillNode(root: string, skillName: string): { name: string; pa
 // Deep enough to cover nested output conventions (e.g. skill runs that nest
 // <skill>/<slug>/<timestamp>/<artifact>/<file>), while still bounded so a
 // pathological tree cannot hang the request.
-const WORKSPACE_TREE_MAX_DEPTH = 8;
-
-/**
- * Canonicalize a tree root for containment checks. The root itself may
- * contain symlink components (e.g. macOS /tmp → /private/tmp); children's
- * realpaths never match a non-canonical root, which would silently render
- * every directory empty.
- */
-function canonicalTreeRoot(dir: string): string {
-	try {
-		return realpathSync(dir);
-	} catch {
-		return dir;
-	}
-}
-
 function readWorkspaceTree(rootDir: string, dir: string, depth = 0, seen: ReadonlySet<string> = new Set()): WorkspaceTreeNode[] {
 	if (depth > WORKSPACE_TREE_MAX_DEPTH) return [];
 	const realRoot = canonicalTreeRoot(rootDir);
@@ -1466,39 +1351,6 @@ function readWorkspaceTree(rootDir: string, dir: string, depth = 0, seen: Readon
 			return node;
 		})
 		.filter((node): node is WorkspaceTreeNode => node !== null);
-}
-
-function contentTypeForWorkspaceFile(filePath: string): string {
-	const ext = extname(filePath).toLowerCase();
-	if (ext === ".pdf") return "application/pdf";
-	if (ext === ".html" || ext === ".htm") return "text/html; charset=utf-8";
-	if (ext === ".md" || ext === ".markdown") return "text/markdown; charset=utf-8";
-	if (ext === ".json") return "application/json; charset=utf-8";
-	if (ext === ".png") return "image/png";
-	if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-	if (ext === ".gif") return "image/gif";
-	if (ext === ".svg") return "image/svg+xml";
-	if (ext === ".webp") return "image/webp";
-	if (ext === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-	if (ext === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-	if (ext === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-	if (TEXT_PREVIEW_EXTENSIONS.has(ext)) return "text/plain; charset=utf-8";
-	if (isDotfileText(filePath)) return "text/plain; charset=utf-8";
-	return "application/octet-stream";
-}
-
-const TEXT_NOEXT_NAMES = new Set(["makefile", "dockerfile", "gemfile", "rakefile", "procfile", "vagrantfile"]);
-
-/** Office document extensions previewable via LiteParse text extraction. */
-const OFFICE_PREVIEW_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx"]);
-
-/** Map an office extension to a preview format the frontend dispatches on. */
-function officeFormat(filePath: string): "docx" | "xlsx" | "pptx" | undefined {
-	const ext = extname(filePath).toLowerCase();
-	if (ext === ".docx") return "docx";
-	if (ext === ".xlsx") return "xlsx";
-	if (ext === ".pptx") return "pptx";
-	return undefined;
 }
 
 // --- PPTX → SVG conversion (pure-Python converter, no LibreOffice) ---
@@ -1598,25 +1450,6 @@ async function convertPptxToSvg(filePath: string): Promise<PptxConvertResult> {
 	} finally {
 		rmSync(outDir, { recursive: true, force: true });
 	}
-}
-
-/** Whether a file looks like a dotfile config (almost always text). */
-function isDotfileText(filePath: string): boolean {
-	return basename(filePath).startsWith(".");
-}
-
-function workspaceFileKind(filePath: string): "markdown" | "html" | "pdf" | "image" | "office" | "text" | "binary" {
-	const ext = extname(filePath).toLowerCase();
-	if (ext === ".md" || ext === ".markdown") return "markdown";
-	if (ext === ".html" || ext === ".htm") return "html";
-	if (ext === ".pdf") return "pdf";
-	if ([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"].includes(ext)) return "image";
-	if (OFFICE_PREVIEW_EXTENSIONS.has(ext)) return "office";
-	if (TEXT_PREVIEW_EXTENSIONS.has(ext)) return "text";
-	if (!ext && TEXT_NOEXT_NAMES.has(basename(filePath).toLowerCase())) return "text";
-	// Dotfiles (.env, .env.local, .npmrc, .gitconfig, etc.) are text config files
-	if (isDotfileText(filePath)) return "text";
-	return "binary";
 }
 
 function listWikiPagePaths(): string[] {
@@ -2318,275 +2151,16 @@ const server = createServer(async (req, res) => {
 		})) return;
 
 		// --- Skills API ---
-		if (method === "GET" && url === "/api/skills") {
-			// Do not call reloadResources() here — it is queued behind the agent
-			// loop, so it stalls while an LLM turn is streaming. Listing from
-			// disk is enough for displaying the panel.
-			json(res, 200, listProjectSkills());
-			return;
-		}
-
-		if (method === "POST" && url === "/api/skills/upload") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const fileName = typeof body.fileName === "string" ? body.fileName : "";
-			const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
-			if (!fileName || !dataBase64) {
-				json(res, 400, { error: "Missing fileName or dataBase64" });
-				return;
-			}
-			const data = Buffer.from(dataBase64, "base64");
-			const ext = extname(fileName).toLowerCase();
-			const skill = ext === ".zip"
-				? installSkillZip(fileName, data)
-				: installSkillMarkdown(fileName, data);
-			setSkillEnabled(skill.name, true);
-			const installed = listProjectSkills().find((entry) => (entry as { name: string }).name === skill.name);
-			json(res, 201, installed ?? { name: skill.name });
-			scheduleSkillsReload();
-			return;
-		}
-
-		if (method === "POST" && url === "/api/skills/reload") {
-			scheduleSkillsReload();
-			json(res, 200, { reloaded: true, skills: listProjectSkills() });
-			return;
-		}
-
-		// --- Remote skill library (GitHub) ---
-		if (method === "GET" && url.split("?")[0] === "/api/skill-library") {
-			const forceRefresh = new URL(url, "http://localhost").searchParams.get("refresh") === "1";
-			try {
-				json(res, 200, await listSkillLibrary(forceRefresh));
-			} catch (err) {
-				logger.warn({ err }, "failed to list skill library");
-				json(res, 502, { error: err instanceof Error ? err.message : "Failed to load skill library" });
-			}
-			return;
-		}
-
-		if (method === "POST" && url === "/api/skill-library/import") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const skillName = typeof body.name === "string" ? body.name.trim() : "";
-			if (!skillName) {
-				json(res, 400, { error: "Missing skill name" });
-				return;
-			}
-			try {
-				const installed = await importSkillFromLibrary(skillName);
-				setSkillEnabled(installed.name, true);
-				const entry = listProjectSkills().find((s) => (s as { name: string }).name === installed.name);
-				json(res, 201, entry ?? { name: installed.name });
-				scheduleSkillsReload();
-			} catch (err) {
-				logger.warn({ err }, "failed to import skill from library");
-				json(res, 502, { error: err instanceof Error ? err.message : "Failed to import skill" });
-			}
-			return;
-		}
-
-		const skillToggleMatch = matchRoute("PATCH", method, url, "/api/skills/:name");
-		if (skillToggleMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillToggleMatch.name));
-			const skillFile = join(skillsDir, name, "SKILL.md");
-			if (!existsSync(skillFile)) {
-				json(res, 404, { error: "Skill not found" });
-				return;
-			}
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.enabled === "boolean") {
-				setSkillEnabled(name, body.enabled);
-			}
-			scheduleSkillsReload();
-			json(res, 200, listProjectSkills().find((entry) => (entry as { name: string }).name === name));
-			return;
-		}
-
-		const skillDeleteMatch = matchRoute("DELETE", method, url, "/api/skills/:name");
-		if (skillDeleteMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillDeleteMatch.name));
-			const skillDir = join(skillsDir, name);
-			if (!existsSync(skillDir)) {
-				json(res, 404, { error: "Skill not found" });
-				return;
-			}
-			rmSync(skillDir, { recursive: true, force: true });
-			setSkillEnabled(name, true);
-			scheduleSkillsReload();
-			json(res, 204, null);
-			return;
-		}
-
-		// GET /api/skills/:name/content — read SKILL.md content
-		const skillContentGetMatch = matchRoute("GET", method, url, "/api/skills/:name/content");
-		if (skillContentGetMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillContentGetMatch.name));
-			const filePath = join(skillsDir, name, "SKILL.md");
-			if (!existsSync(filePath)) { json(res, 404, { error: "Skill not found" }); return; }
-			json(res, 200, { name, content: readFileSync(filePath, "utf-8") });
-			return;
-		}
-
-		// PUT /api/skills/:name/content — save SKILL.md content
-		const skillContentPutMatch = matchRoute("PUT", method, url, "/api/skills/:name/content");
-		if (skillContentPutMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillContentPutMatch.name));
-			const filePath = join(skillsDir, name, "SKILL.md");
-			if (!existsSync(filePath)) { json(res, 404, { error: "Skill not found" }); return; }
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const content = typeof body.content === "string" ? body.content : "";
-			writeFileSync(filePath, content, "utf-8");
-			scheduleSkillsReload();
-			json(res, 200, { name, saved: true });
-			return;
-		}
-
-		// GET /api/skills/:name/tree — file tree of a skill directory
-		const skillTreeMatch = matchRoute("GET", method, url, "/api/skills/:name/tree");
-		if (skillTreeMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillTreeMatch.name));
-			const skillDir = join(skillsDir, name);
-			if (!existsSync(skillDir) || !statSync(skillDir).isDirectory()) {
-				json(res, 404, { error: "Skill not found" });
-				return;
-			}
-			const skillRootReal = canonicalTreeRoot(skillDir);
-			function readSkillTree(dir: string, depth = 0, seen: ReadonlySet<string> = new Set()): WorkspaceTreeNode[] {
-				if (depth > WORKSPACE_TREE_MAX_DEPTH) return [];
-				let entries: Dirent<string>[];
-				try {
-					entries = readdirSync(dir, { withFileTypes: true });
-				} catch {
-					return [];
-				}
-				return entries
-					.filter((e) => !e.name.startsWith(".") && e.name !== "__MACOSX" && e.name !== "node_modules")
-					.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, "zh-CN"))
-					.slice(0, 200)
-					.map((entry): WorkspaceTreeNode | null => {
-						const fullPath = join(dir, entry.name);
-						let st: ReturnType<typeof statSync>;
-						try {
-							st = statSync(fullPath);
-						} catch {
-							return null;
-						}
-						const isDir = st.isDirectory();
-						const node: WorkspaceTreeNode = {
-							name: entry.name,
-							path: relative(skillDir, fullPath),
-							type: isDir ? "directory" : "file",
-							size: st.size,
-							updatedAt: st.mtime.toISOString(),
-						};
-						if (isDir) {
-							let real: string;
-							try {
-								real = realpathSync(fullPath);
-							} catch {
-								real = fullPath;
-							}
-							const withinRoot = real === skillRootReal || real.startsWith(skillRootReal + sep);
-							node.children = withinRoot && !seen.has(real)
-								? readSkillTree(fullPath, depth + 1, new Set([...seen, real]))
-								: [];
-						}
-						return node;
-					})
-					.filter((node): node is WorkspaceTreeNode => node !== null);
-			}
-			const st = statSync(skillDir);
-			json(res, 200, {
-				name,
-				path: "",
-				type: "directory",
-				size: st.size,
-				updatedAt: st.mtime.toISOString(),
-				children: readSkillTree(skillDir),
-			});
-			return;
-		}
-
-		// GET /api/skills/:name/file?path=... — read a file inside a skill
-		const skillFileGetMatch = matchRoute("GET", method, url.split("?")[0], "/api/skills/:name/file");
-		if (skillFileGetMatch && method === "GET") {
-			const name = slugifySkillName(decodeURIComponent(skillFileGetMatch.name));
-			const skillDir = join(skillsDir, name);
-			if (!existsSync(skillDir)) { json(res, 404, { error: "Skill not found" }); return; }
-			const params = new URL(url, "http://localhost").searchParams;
-			const relPath = params.get("path") ?? "";
-			const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
-			if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
-				json(res, 404, { error: "File not found" });
-				return;
-			}
-			const st = statSync(fullPath);
-			const kind = workspaceFileKind(fullPath);
-			const forceText = params.get("forceText") === "1";
-			if (!forceText && (kind === "binary" || kind === "pdf" || kind === "image")) {
-				json(res, 200, {
-					path: relative(skillDir, fullPath),
-					name: basename(fullPath),
-					kind,
-					mimeType: contentTypeForWorkspaceFile(fullPath),
-					size: st.size,
-					updatedAt: st.mtime.toISOString(),
-					url: `/api/skills/${encodeURIComponent(name)}/raw?path=${encodeURIComponent(relative(skillDir, fullPath))}`,
-				});
-				return;
-			}
-			if (st.size > 1024 * 1024) { json(res, 413, { error: "File too large" }); return; }
-			json(res, 200, {
-				path: relative(skillDir, fullPath),
-				name: basename(fullPath),
-				kind: forceText ? "text" : kind,
-				mimeType: forceText ? "text/plain; charset=utf-8" : contentTypeForWorkspaceFile(fullPath),
-				size: st.size,
-				updatedAt: st.mtime.toISOString(),
-				content: readFileSync(fullPath, "utf-8"),
-			});
-			return;
-		}
-
-		// PUT /api/skills/:name/file — save a file inside a skill
-		const skillFilePutMatch = matchRoute("PUT", method, url, "/api/skills/:name/file");
-		if (skillFilePutMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillFilePutMatch.name));
-			const skillDir = join(skillsDir, name);
-			if (!existsSync(skillDir)) { json(res, 404, { error: "Skill not found" }); return; }
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const relPath = typeof body.path === "string" ? body.path.trim() : "";
-			const content = typeof body.content === "string" ? body.content : "";
-			if (!relPath) { json(res, 400, { error: "Missing path" }); return; }
-			const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
-			if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
-				json(res, 404, { error: "File not found" });
-				return;
-			}
-			writeFileSync(fullPath, content, "utf-8");
-			if (basename(fullPath) === "SKILL.md") scheduleSkillsReload();
-			const st = statSync(fullPath);
-			json(res, 200, { path: relPath, saved: true, size: st.size, updatedAt: st.mtime.toISOString() });
-			return;
-		}
-
-		// GET /api/skills/:name/raw?path=... — serve raw file bytes
-		const skillRawMatch = matchRoute("GET", method, url.split("?")[0], "/api/skills/:name/raw");
-		if (skillRawMatch) {
-			const name = slugifySkillName(decodeURIComponent(skillRawMatch.name));
-			const skillDir = join(skillsDir, name);
-			if (!existsSync(skillDir)) { json(res, 404, { error: "Skill not found" }); return; }
-			const params = new URL(url, "http://localhost").searchParams;
-			const relPath = params.get("path") ?? "";
-			const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
-			if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
-				json(res, 404, { error: "File not found" });
-				return;
-			}
-			const ct = contentTypeForWorkspaceFile(fullPath);
-			res.writeHead(200, { "Content-Type": ct, "Cache-Control": "no-cache" });
-			res.end(readFileSync(fullPath));
-			return;
-		}
+		if (await handleSkillsRoutes(req, res, method, url, {
+			skillsDir,
+			scheduleSkillsReload,
+			listProjectSkills,
+			setSkillEnabled,
+			installSkillZip,
+			installSkillMarkdown,
+			listSkillLibrary,
+			importSkillFromLibrary,
+		})) return;
 
 		// --- Sessions API ---
 		if (method === "GET" && url === "/api/sessions") {
