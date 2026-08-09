@@ -30,14 +30,14 @@
 
 测试偏科的根因是"只有纯函数好测"。补三层：
 
-1. **web 端 DOM 环境**：`web/vitest.config.ts` 加 `environment: "jsdom"`（或 happy-dom）+ `@testing-library/react`，组件测试从此可行。存量 4 个 web 测试是纯 store/util，不受影响。
+1. **web 端 DOM 环境** ✅（`chore/p1-test-infra`）：`vitest.config.ts` 用 `environmentMatchGlobs` 把 `*.test.tsx` 路由到 jsdom，装了 `@testing-library/react`；`react/ui/Switch.test.tsx` 是首个组件测试示例。纯 store/util 测试留在 node 环境。
 2. **后端补测，按风险排序而非按目录平均分配**：
-   - **scheduler**：cron 解析、runCount 竞态、`normalizePersistedJobs` 迁移——纯逻辑好测，管后台任务正确性
-   - **channels**：`dedupe-store`、`personal-dispatcher` 消息路由——错了就是用户可见的重复/丢消息
-   - **L1 learner**：profile-updater 增量逻辑（与 P2 模型修正一起测）
-   - **L3**：依赖 Node ≥22.5，用 `describe.skipIf(...)` 做条件测试
-   - **terminal**：先只测 `command-resolver` 的扩展名映射和路径引用（纯函数），PTY 交互不测
-3. **server.ts smoke 层**：`listen(0)` 起实例，打 `/health` + 5–6 个关键端点的 200/4xx 断言。**必须先于 P2 拆分落地**，是拆文件的安全网。
+   - **scheduler** ✅：`cron-utils`（解析/校验/due 判定/one-shot 检测）+ `job-store`（create 默认值、update 清 nextRunAt、`normalizePersistedJobs` 迁移、runs、getStatus）
+   - **channels** ✅（部分）：`dedupe-store`（TTL、按渠道隔离、重启持久化）。`personal-dispatcher` 消息路由待补 ⬜
+   - **L1 learner**：profile-updater 增量逻辑（与 P2 模型修正一起测）⬜
+   - **L3**：依赖 Node ≥22.5，用 `describe.skipIf(...)` 做条件测试 ⬜
+   - **terminal** ✅：`command-resolver` 扩展名映射与路径引用。PTY 交互不测
+3. **server.ts smoke 层** ✅：`server.smoke.test.ts` 以子进程方式起真实 server（`--import tsx` + 临时 `--home` + dummy provider），断言 `/health`、`/api/settings`（含 API key 脱敏）、`/api/sessions`、`/api/jobs`、未匹配 `/api/*` 的 JSON 404。**该测试当场抓到一个真 bug**：SPA fallback 对未匹配的 `/api/*` 也返回 200 index.html——已修（fallback 跳过 `/api` 前缀）。
 
 ## P2 · server.ts 拆分（2–3 周，纯搬运零行为变更）
 

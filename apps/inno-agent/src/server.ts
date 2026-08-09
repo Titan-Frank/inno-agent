@@ -5156,8 +5156,10 @@ const server = createServer(async (req, res) => {
 			const sendBody = method === "GET";
 			// Try exact file in web/dist
 			if (staticPath && serveStatic(req, res, staticPath, sendBody)) return;
-			// SPA fallback: serve index.html for non-API paths
-			if (serveStatic(req, res, join(webDistDir, "index.html"), sendBody)) return;
+			// SPA fallback: serve index.html for non-API paths only. An unmatched
+			// /api/* route must fall through to the JSON 404 — returning HTML with
+			// a 200 status breaks API client error handling.
+			if (urlPath !== "/api" && !urlPath.startsWith("/api/") && serveStatic(req, res, join(webDistDir, "index.html"), sendBody)) return;
 		}
 
 		// --- 404 ---
