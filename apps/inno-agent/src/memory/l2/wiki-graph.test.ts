@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeText } from "../../storage/file-store.js";
 import { buildWikiGraph } from "./wiki-graph.js";
 import { ensureL2Directories, serializeFrontmatter } from "./wiki-maintainer.js";
+import { wikiPathJoin } from "./wiki-paths.js";
 
 const tempDirs: string[] = [];
 
@@ -14,7 +15,10 @@ afterEach(() => {
 });
 
 function writePage(root: string, name: string, title: string, sourceId: string, body: string): string {
-	const path = join("wiki", "concepts", `${name}.md`);
+	// The returned path is the page's logical identity and must always use
+	// forward slashes — building it with join() would produce backslashes on
+	// Windows and never match the graph's node/edge ids.
+	const path = wikiPathJoin("wiki", "concepts", `${name}.md`);
 	writeText(
 		join(root, path),
 		`${serializeFrontmatter({
