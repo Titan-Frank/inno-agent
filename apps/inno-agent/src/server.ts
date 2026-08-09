@@ -53,6 +53,7 @@ import { handleWorkspacesRoutes } from "./server/routes/workspaces.js";
 import { handleSessionsRoutes } from "./server/routes/sessions.js";
 import { handleLearnerRoutes } from "./server/routes/learner.js";
 import { handleWikiRoutes } from "./server/routes/wiki.js";
+import { handlePresetsRoutes } from "./server/routes/presets.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -68,7 +69,6 @@ import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "
 import { questionBridge, type QuestionBridgeResult } from "./agent/question-bridge.js";
 import { hasCompleteTurnAfterBaseline, streamRegistry, type SessionStreamState, type StreamPersistence } from "./chat/stream-registry.js";
 import { DEFAULT_WORKSPACE_ID, TEMP_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
-import { listPresets, listRemotePresets } from "./presets/preset-store.js";
 import { createContentSource, type RemoteContentSource } from "./content-source/index.js";
 import { mapWithConcurrency } from "./content-source/types.js";
 import { RunRecordStore } from "./terminal/run-record-store.js";
@@ -1677,33 +1677,8 @@ const server = createServer(async (req, res) => {
 			sessionFileFromId, releaseQueueFromQuestionBlockedTurn, runQueueOpWithTimeout,
 		})) return;
 
-		// --- Presets API (ready-to-use workspace templates) ---
-		// Local cache listing (offline fallback / already-downloaded presets).
-		if (method === "GET" && url === "/api/presets") {
-			json(res, 200, listPresets(paths));
-			return;
-		}
-
-		// Live catalog from the remote content hub (Simple Mode preset cards).
-		// Falls back to the bundled/cached presets when the hub is empty or
-		// unreachable, so the shipped templates always appear.
-		if (method === "GET" && url.split("?")[0] === "/api/preset-library") {
-			const forceRefresh = new URL(url, "http://localhost").searchParams.get("refresh") === "1";
-			try {
-				const remote = await listRemotePresets(getContentSource(), forceRefresh);
-				if (remote.length > 0) {
-					const merged = new Map(listPresets(paths).map((preset) => [preset.id, preset]));
-					for (const preset of remote) merged.set(preset.id, preset);
-					json(res, 200, Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name)));
-				} else {
-					json(res, 200, listPresets(paths));
-				}
-			} catch (err) {
-				logger.warn({ err }, "failed to list preset library; falling back to bundled presets");
-				json(res, 200, listPresets(paths));
-			}
-			return;
-		}
+		// --- Presets API (extracted to server/routes/presets.ts) ---
+		if (await handlePresetsRoutes(req, res, method, url, { paths, getContentSource })) return;
 
 		// --- Terminal sessions ---
 		if (method === "POST" && url === "/api/terminal/sessions") {
