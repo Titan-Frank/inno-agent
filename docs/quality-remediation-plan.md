@@ -51,6 +51,7 @@
 src/server/
   http-helpers.ts     # ✅ readBody / json / matchRoute（原样搬家）
   routes/jobs.ts      # ✅ /api/jobs* 全部 8 个路由块（handleJobsRoutes → boolean）
+  routes/channels.ts  # ✅ /api/channels* + /api/bridge/*（QR 登录的可变状态走 getter/setter ctx）
   routes/chat.ts      # ⬜ /api/chat/* 含 SSE + 事件回放
   routes/wiki.ts      # ⬜ /api/wiki/*
   routes/skills.ts    # ⬜ /api/skills/*
@@ -60,7 +61,7 @@ src/server/
   context.ts          # ⬜ 第二个域需要共享状态时再建，从 JobsRouteContext 长出来
 ```
 
-进度：server.ts 5295 → 5155 行（-140），jobs 域 ~150 行落位 `routes/jobs.ts`。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，server.ts 在原位置留一行委托。
+进度：server.ts 5295 → 4959 行。jobs 域（PR #136）+ channels 域（含 /api/bridge/* 和飞书/微信 QR 登录）已落位。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，可变模块状态（config、wechatChannel）经 getter/setter 注入，server.ts 在原位置留一行委托。
 
 约束：
 - **禁止顺手重构**。每个 PR 只移动一个路由域，diff 应为纯 cut-paste + import 调整。

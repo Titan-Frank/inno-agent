@@ -47,10 +47,8 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { ChannelRegistry } from "./channels/channel.js";
 import type { ChannelStreamEvent } from "./channels/channel.js";
 import { FeishuChannel } from "./channels/feishu/feishu-channel.js";
-import { feishuRegistrationBegin, feishuRegistrationPoll } from "./channels/feishu/feishu-registration.js";
 import { PersonalChannelDispatcher } from "./channels/personal-dispatcher.js";
 import { BridgeChannel } from "./channels/bridge/bridge-channel.js";
-import { handleBridgeMessage } from "./channels/bridge/bridge-server.js";
 import { WeChatChannel } from "./channels/wechat/wechat-channel.js";
 import type { PersonalBridgeChannelConfig } from "./config.js";
 import { JobStore } from "./scheduler/job-store.js";
@@ -64,6 +62,7 @@ import {
 } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
 import { json, matchRoute, readBody } from "./server/http-helpers.js";
+import { handleChannelsRoutes } from "./server/routes/channels.js";
 import { handleJobsRoutes } from "./server/routes/jobs.js";
 import { parseFrontmatter, serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { readManifest, removeWikiPathFromManifest } from "./memory/l2/manifest-store.js";
@@ -2454,214 +2453,19 @@ const server = createServer(async (req, res) => {
 		// --- Jobs CRUD (extracted to server/routes/jobs.ts) ---
 		if (await handleJobsRoutes(req, res, method, url, { jobStore, channelRegistry })) return;
 
-		if (method === "GET" && url === "/api/channels") {
-			json(res, 200, channelRegistry.all().map((channel) => {
-				const isBridge = channel instanceof BridgeChannel;
-				return {
-					name: channel.name,
-					mode: isBridge ? "bridge" : "native",
-					enabled: true,
-					hasDefaultTarget: Boolean(channelRegistry.getDefaultTarget(channel.name)),
-				};
-			}));
-			return;
-		}
-
-		const defaultTargetMatch = matchRoute("POST", method, url, "/api/channels/:name/default-target");
-		if (defaultTargetMatch) {
-			const body = await readBody(req) as Record<string, unknown>;
-			const channel = channelRegistry.get(defaultTargetMatch.name);
-			const chatId = typeof body.chatId === "string" ? body.chatId.trim() : "";
-			if (!channel) {
-				json(res, 404, { error: "Channel not found" });
-				return;
-			}
-			if (!chatId) {
-				json(res, 400, { error: "Missing chatId" });
-				return;
-			}
-			channelRegistry.setDefaultTarget({
-				channel: defaultTargetMatch.name as import("./channels/types.js").ChannelName,
-				chatId,
-			});
-			json(res, 200, { channel: defaultTargetMatch.name, chatId });
-			return;
-		}
-
-		const channelTestMatch = matchRoute("POST", method, url, "/api/channels/:name/test");
-		if (channelTestMatch) {
-			const body = await readBody(req) as Record<string, unknown>;
-			const channel = channelRegistry.get(channelTestMatch.name);
-			const target = channelRegistry.getDefaultTarget(channelTestMatch.name);
-			const text = typeof body.text === "string" && body.text.trim()
-				? body.text.trim()
-				: "Inno Agent 飞书主动推送测试。";
-			if (!channel) {
-				json(res, 404, { error: "Channel not found" });
-				return;
-			}
-			if (!target) {
-				json(res, 400, { error: "No default target configured" });
-				return;
-			}
-			await channel.push(target, text);
-			json(res, 200, { channel: channelTestMatch.name, chatId: target.chatId, pushed: true });
-			return;
-		}
-
-		// Bridge message endpoint
-		if (method === "POST" && url === "/api/bridge/messages") {
-			if (!bridgeToken || !dispatcher) {
-				json(res, 404, { error: "Bridge not configured" });
-				return;
-			}
-			const body = await readBody(req);
-			const authHeader = req.headers.authorization;
-			const result = handleBridgeMessage(
-				{ token: bridgeToken, channelRegistry, dispatcher },
-				authHeader,
-				body,
-			);
-			json(res, result.status, result.body);
-			return;
-		}
-
-		// Channel health endpoint
-		const channelHealthMatch = matchRoute("GET", method, url, "/api/channels/:name/health");
-		if (channelHealthMatch) {
-			const channel = channelRegistry.get(channelHealthMatch.name);
-			if (!channel) {
-				json(res, 404, { error: "Channel not found" });
-				return;
-			}
-			if (channel instanceof BridgeChannel) {
-				const health = await channel.checkHealth();
-				json(res, 200, health);
-			} else {
-				json(res, 200, { channel: channel.name, mode: "native", healthy: true, checkedAt: new Date().toISOString() });
-			}
-			return;
-		}
-
-		// Feishu QR device-flow registration
-		if (method === "POST" && url === "/api/channels/feishu/qr-register") {
-			try {
-				const result = await feishuRegistrationBegin();
-				json(res, 200, {
-					deviceCode: result.deviceCode,
-					qrUrl: result.verificationUri,
-					expiresIn: result.expiresIn,
-					interval: result.interval,
-				});
-			} catch (err) {
-				logger.error({ err }, "[feishu] QR registration begin failed");
-				json(res, 502, { error: err instanceof Error ? err.message : "Failed to start Feishu registration" });
-			}
-			return;
-		}
-
-		if (method === "GET" && url.startsWith("/api/channels/feishu/qr-status")) {
-			const deviceCode = new URL(url, "http://localhost").searchParams.get("deviceCode");
-			if (!deviceCode) {
-				json(res, 400, { error: "Missing deviceCode" });
-				return;
-			}
-			try {
-				const result = await feishuRegistrationPoll(deviceCode);
-				if (result.status === "confirmed" && result.appId && result.appSecret) {
-					// Save credentials to config and start channel
-					config.feishu = { appId: result.appId, appSecret: result.appSecret };
-					if (!config.channels) config.channels = {};
-					config.channels.feishu = {
-						enabled: true,
-						personalOnly: true,
-						allowedUserIds: result.openId ? [result.openId] : [],
-					};
-					config = saveConfig(paths.configPath, config);
-					await reloadFeishuChannel();
-				}
-				json(res, 200, { status: result.status });
-			} catch (err) {
-				logger.error({ err }, "[feishu] QR registration poll failed");
-				json(res, 502, { error: err instanceof Error ? err.message : "Failed to poll Feishu registration" });
-			}
-			return;
-		}
-
-		// WeChat iLink QR login
-		if (method === "POST" && url === "/api/channels/wechat/qr-login") {
-			// Lazily create the WeChat channel if not yet instantiated
-			if (!wechatChannel) {
-				wechatChannel = new WeChatChannel(dataDir, config.channels?.wechat);
-				channelRegistry.register(wechatChannel);
-			}
-			try {
-				const qr = await wechatChannel.getClient().getQrCode();
-				const raw = qr.qrcode_img_content ?? "";
-				logger.info(`[wechat] QR response: qrcode=${qr.qrcode}, img_content length=${raw.length}, prefix=${raw.slice(0, 40)}`);
-				let qrUrl = raw;
-				if (qrUrl && !qrUrl.startsWith("data:") && !qrUrl.startsWith("http")) {
-					qrUrl = `data:image/png;base64,${qrUrl}`;
-				}
-				json(res, 200, { qrId: qr.qrcode, qrUrl });
-			} catch (err) {
-				logger.error({ err }, "WeChat QR login failed");
-				json(res, 500, { error: err instanceof Error ? err.message : "Failed to get QR code" });
-			}
-			return;
-		}
-
-		if (method === "GET" && url.startsWith("/api/channels/wechat/qr-status")) {
-			const qrId = new URL(url, "http://localhost").searchParams.get("qrId");
-			if (!qrId) {
-				json(res, 400, { error: "Missing qrId" });
-				return;
-			}
-			if (!wechatChannel) {
-				json(res, 400, { error: "WeChat channel not initialized" });
-				return;
-			}
-			try {
-				const status = await wechatChannel.getClient().getQrCodeStatus(qrId);
-				if (status.status === "confirmed" && status.bot_token) {
-					wechatChannel.getClient().confirmLogin(status);
-					// Start polling if not already running
-					if (!wechatChannel.isConnected && dispatcher) {
-						wechatChannel.onMessage((msg) => dispatcher!.handle(wechatChannel!, msg));
-						wechatChannel.start();
-					}
-				}
-				json(res, 200, { status: status.status, botId: status.ilink_bot_id });
-			} catch (err) {
-				logger.error({ err }, "WeChat QR status check failed");
-				json(res, 500, { error: err instanceof Error ? err.message : "Failed to check QR status" });
-			}
-			return;
-		}
-
-		if (method === "GET" && url === "/api/channels/wechat/status") {
-			if (!wechatChannel) {
-				json(res, 200, { configured: false, connected: false });
-				return;
-			}
-			json(res, 200, {
-				configured: true,
-				connected: wechatChannel.isConnected,
-				botId: wechatChannel.botId || undefined,
-				loggedIn: wechatChannel.getClient().isLoggedIn,
-			});
-			return;
-		}
-
-		// Channel runs log
-		if (method === "GET" && url === "/api/channels/runs") {
-			if (dispatcher) {
-				json(res, 200, dispatcher.getRunLog().list());
-			} else {
-				json(res, 200, []);
-			}
-			return;
-		}
+		// --- Channels + bridge (extracted to server/routes/channels.ts) ---
+		if (await handleChannelsRoutes(req, res, method, url, {
+			channelRegistry,
+			dataDir,
+			configPath: paths.configPath,
+			getConfig: () => config,
+			setConfig: (next) => { config = next; },
+			getDispatcher: () => dispatcher,
+			getBridgeToken: () => bridgeToken,
+			reloadFeishuChannel,
+			getWechatChannel: () => wechatChannel,
+			setWechatChannel: (channel) => { wechatChannel = channel; },
+		})) return;
 
 		// --- Skills API ---
 		if (method === "GET" && url === "/api/skills") {
