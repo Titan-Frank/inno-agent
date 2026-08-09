@@ -3,7 +3,6 @@ import { Type } from "typebox";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import type { WorkspaceRegistry } from "../workspace/workspace-registry.js";
-import { logger } from "../logger.js";
 
 interface PracticeToolDeps {
 	registry: WorkspaceRegistry;

@@ -1,5 +1,5 @@
 import type { ChatChannel } from "./channel.js";
-import type { IncomingMessage, PushTarget } from "./types.js";
+import type { IncomingMessage } from "./types.js";
 
 /**
  * WeChat Enterprise (WeCom) channel stub — not yet implemented.

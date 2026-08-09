@@ -13,14 +13,12 @@ export class WeChatChannel implements RealtimeChatChannel {
 	private running = false;
 	private pollAbort: AbortController | null = null;
 	private processedMessages = new Set<number>();
-	private personalOnly: boolean;
 	private allowedUserIds: Set<string> | null;
 	private contextTokens = new Map<string, string>();
 
 	constructor(dataDir: string, channelConfig?: PersonalChannelConfig) {
 		const tokenPath = join(dataDir, "channels", "wechat-token.json");
 		this.client = new ILinkClient(tokenPath);
-		this.personalOnly = channelConfig?.personalOnly ?? true;
 		this.allowedUserIds = channelConfig?.allowedUserIds?.length
 			? new Set(channelConfig.allowedUserIds)
 			: null;

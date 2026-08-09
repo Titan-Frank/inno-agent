@@ -5,7 +5,7 @@ import { installFetchLogger } from "./utils/fetch-logger.js";
 import { main, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
-import { createInnoExtension, type ConfigHolder } from "./agent/inno-extension.js";
+import { createInnoExtension } from "./agent/inno-extension.js";
 import { createMcpStatusExtension, loadMcpAdapterExtension } from "./agent/mcp-extension.js";
 import { ensureDir } from "./storage/file-store.js";
 import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
