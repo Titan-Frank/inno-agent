@@ -36,6 +36,18 @@ export function writeJson<T>(filePath: string, data: T): void {
 }
 
 /**
+ * Write records as a JSONL file (one JSON line each), atomically
+ * (tmp + rename). Used to compact live-state logs such as dedupe.jsonl,
+ * where rotation is unsafe (it would drop still-live entries).
+ */
+export function writeJsonl<T>(filePath: string, records: T[]): void {
+	ensureDir(dirname(filePath));
+	const tmp = filePath + ".tmp";
+	writeFileSync(tmp, records.map((r) => JSON.stringify(r)).join("\n") + (records.length > 0 ? "\n" : ""), "utf-8");
+	renameSync(tmp, filePath);
+}
+
+/**
  * Append a single JSON record as a line to a JSONL file.
  *
  * When `options.maxBytes` is set and the file already exceeds that size, the
