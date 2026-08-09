@@ -8,8 +8,6 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statS
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-import { getL2Memory } from "./memory/l2/l2-memory.js";
-import { buildWikiGraph } from "./memory/l2/wiki-graph.js";
 import { loadConfig, saveConfig, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
@@ -54,6 +52,7 @@ import { handleSkillsRoutes, type SkillLibraryItem } from "./server/routes/skill
 import { handleWorkspacesRoutes } from "./server/routes/workspaces.js";
 import { handleSessionsRoutes } from "./server/routes/sessions.js";
 import { handleLearnerRoutes } from "./server/routes/learner.js";
+import { handleWikiRoutes } from "./server/routes/wiki.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -63,8 +62,7 @@ import {
 	type SessionSummary,
 	type SessionTopicMetadata,
 } from "./server/session-model.js";
-import { parseFrontmatter, serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
-import { readManifest, removeWikiPathFromManifest } from "./memory/l2/manifest-store.js";
+import { serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { logger } from "./logger.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
 import { questionBridge, type QuestionBridgeResult } from "./agent/question-bridge.js";
@@ -661,27 +659,6 @@ function imagesFromContent(content: unknown): Array<{ previewUrl: string; mimeTy
 	return result;
 }
 
-function sanitizeUploadName(name: string): string {
-	const cleaned = name
-		.replace(/[/\\?%*:|"<>]/g, "-")
-		.replace(/\s+/g, " ")
-		.trim();
-	return cleaned || "upload";
-}
-
-function uploadExtension(fileName: string, mimeType: string): string {
-	const ext = extname(fileName);
-	if (ext) return ext;
-	if (mimeType === "application/pdf") return ".pdf";
-	if (mimeType.includes("wordprocessingml")) return ".docx";
-	if (mimeType.includes("spreadsheetml")) return ".xlsx";
-	if (mimeType.includes("presentationml")) return ".pptx";
-	if (mimeType === "text/markdown") return ".md";
-	if (mimeType.startsWith("image/")) return `.${mimeType.slice("image/".length).replace("jpeg", "jpg")}`;
-	if (mimeType.startsWith("text/")) return ".txt";
-	return ".bin";
-}
-
 function parseSkillFrontmatter(content: string): Record<string, string | boolean> {
 	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 	const match = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
@@ -1086,9 +1063,6 @@ function scheduleSkillsReload(): void {
 	});
 }
 
-
-const WIKI_PAGE_DIRS = ["sources", "entities", "concepts", "analysis"] as const;
-
 interface WorkspaceFileChange {
 	path: string;
 	change: "created" | "modified" | "deleted";
@@ -1188,32 +1162,6 @@ function createWorkspaceChangeMonitor(
 		},
 	};
 }
-
-function listWikiPagePaths(): string[] {
-	const wikiRoot = join(l2DataDir, "wiki");
-	const paths: string[] = [];
-	for (const dirName of WIKI_PAGE_DIRS) {
-		const dir = join(wikiRoot, dirName);
-		if (!existsSync(dir)) continue;
-		for (const file of readdirSync(dir)) {
-			if (file.endsWith(".md")) {
-				paths.push(join("wiki", dirName, file));
-			}
-		}
-	}
-	return paths.sort((a, b) => a.localeCompare(b, "zh-CN"));
-}
-
-function manifestSourceIdByWikiPath(): Map<string, string> {
-	const map = new Map<string, string>();
-	for (const entry of readManifest(l2DataDir)) {
-		for (const wikiPath of entry.wikiPages) {
-			map.set(wikiPath, entry.id);
-		}
-	}
-	return map;
-}
-
 function sessionTopicMetadataPath(): string {
 	return join(dataDir, "sessions", "meta.json");
 }
@@ -1716,129 +1664,8 @@ const server = createServer(async (req, res) => {
 			sessionFileFromId, releaseQueueFromQuestionBlockedTurn, runQueueOpWithTimeout,
 		})) return;
 
-		// --- Wiki API ---
-		if (method === "GET" && url === "/api/wiki/pages") {
-			try {
-				const sourceIds = manifestSourceIdByWikiPath();
-				const pages: unknown[] = [];
-				for (const wikiPath of listWikiPagePaths()) {
-					const fullPath = join(l2DataDir, wikiPath);
-					if (existsSync(fullPath)) {
-						const content = readText(fullPath);
-						const { frontmatter, body } = parseFrontmatter(content);
-						pages.push({
-							path: wikiPath,
-							frontmatter,
-							bodyPreview: body.slice(0, 200),
-							sourceId: sourceIds.get(wikiPath) ?? "",
-						});
-					}
-				}
-				json(res, 200, pages);
-			} catch (err) {
-				logger.warn({ err }, "failed to list wiki pages");
-				json(res, 200, []);
-			}
-			return;
-		}
-
-		if (method === "GET" && url.startsWith("/api/wiki/page?")) {
-			const params = new URL(url, "http://localhost").searchParams;
-			const path = params.get("path");
-			if (!path) {
-				json(res, 400, { error: "Missing path parameter" });
-				return;
-			}
-			const fullPath = safeJoin(l2DataDir, path);
-			if (!fullPath) {
-				json(res, 400, { error: "Invalid wiki path" });
-				return;
-			}
-			if (!existsSync(fullPath)) {
-				json(res, 404, { error: "Wiki page not found" });
-				return;
-			}
-			const content = readText(fullPath);
-			json(res, 200, { path, content });
-			return;
-		}
-
-		if (method === "PUT" && url === "/api/wiki/page") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const path = body.path as string | undefined;
-			const content = body.content as string | undefined;
-			if (!path || content === undefined) {
-				json(res, 400, { error: "Missing path or content" });
-				return;
-			}
-			const fullPath = safeJoin(l2DataDir, path);
-			if (!fullPath) {
-				json(res, 400, { error: "Invalid wiki path" });
-				return;
-			}
-			writeText(fullPath, content);
-			await getL2Memory(l2DataDir).indexPageByPath(path);
-			json(res, 200, { path, saved: true });
-			return;
-		}
-
-		if (method === "DELETE" && url.startsWith("/api/wiki/page?")) {
-			const params = new URL(url, "http://localhost").searchParams;
-			const path = params.get("path");
-			if (!path) {
-				json(res, 400, { error: "Missing path parameter" });
-				return;
-			}
-			const fullPath = safeJoin(l2DataDir, path);
-			if (!fullPath) {
-				json(res, 400, { error: "Invalid wiki path" });
-				return;
-			}
-			if (!existsSync(fullPath)) {
-				json(res, 404, { error: "Wiki page not found" });
-				return;
-			}
-			try {
-				rmSync(fullPath);
-				removeWikiPathFromManifest(l2DataDir, path);
-				await getL2Memory(l2DataDir).removePage(path);
-				json(res, 200, { path, deleted: true });
-			} catch (err) {
-				logger.warn({ err }, "failed to delete wiki page");
-				json(res, 500, { error: "Failed to delete wiki page" });
-			}
-			return;
-		}
-
-		if (method === "GET" && url === "/api/wiki/graph") {
-			try {
-				json(res, 200, buildWikiGraph(l2DataDir));
-			} catch (err) {
-				logger.warn({ err }, "failed to build wiki graph");
-				json(res, 200, { nodes: [], edges: [] });
-			}
-			return;
-		}
-
-		if (method === "GET" && url === "/api/wiki/stats") {
-			try {
-				const entries = readManifest(l2DataDir);
-				let totalSize = 0;
-				let pageCount = 0;
-				for (const wikiPath of listWikiPagePaths()) {
-					const fullPath = join(l2DataDir, wikiPath);
-					if (existsSync(fullPath)) {
-						totalSize += statSync(fullPath).size;
-						pageCount++;
-					}
-				}
-				json(res, 200, { pageCount, totalSize, entryCount: entries.length });
-			} catch (err) {
-				logger.warn({ err }, "failed to compute wiki stats");
-				json(res, 200, { pageCount: 0, totalSize: 0, entryCount: 0 });
-			}
-			return;
-		}
+		// --- Wiki + L2 raw upload API (extracted to server/routes/wiki.ts) ---
+		if (await handleWikiRoutes(req, res, method, url, { l2DataDir })) return;
 
 		// --- Learner profile API (extracted to server/routes/learner.ts) ---
 		if (await handleLearnerRoutes(req, res, method, url, { paths })) return;
@@ -1995,38 +1822,6 @@ const server = createServer(async (req, res) => {
 			const content = `${frontmatter}\n\n${bodyLines.join("\n")}\n`;
 			writeText(fullPath, content);
 			json(res, 201, { path: wikiRelPath, title, runId: record.id });
-			return;
-		}
-
-
-		// --- L2 Raw Upload API ---
-		if (method === "POST" && url === "/api/l2/raw/upload") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const fileName = typeof body.fileName === "string" ? body.fileName : "";
-			const mimeType = typeof body.mimeType === "string" ? body.mimeType : "application/octet-stream";
-			const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
-			if (!fileName || !dataBase64) {
-				json(res, 400, { error: "Missing fileName or dataBase64" });
-				return;
-			}
-
-			const dir = join(l2DataDir, "raw", "uploads");
-			ensureDir(dir);
-			const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-			const safeName = sanitizeUploadName(fileName);
-			const ext = uploadExtension(safeName, mimeType);
-			const base = basename(safeName, ext).slice(0, 80) || "upload";
-			const outputName = `${timestamp}-${base}${ext}`;
-			const outputPath = join(dir, outputName);
-			const data = Buffer.from(dataBase64, "base64");
-			writeFileSync(outputPath, data);
-			const rawPath = join("raw", "uploads", outputName);
-			json(res, 201, {
-				fileName,
-				mimeType,
-				size: data.length,
-				rawPath,
-			});
 			return;
 		}
 
