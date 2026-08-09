@@ -27,6 +27,20 @@ export function slugifySkillName(value: string): string {
 
 export const WORKSPACE_TREE_MAX_DEPTH = 8;
 
+/** Directories never shown in workspace/skill trees or change monitors. */
+export const WORKSPACE_IGNORES = new Set([".git", "node_modules", "dist", ".DS_Store"]);
+
+/**
+ * Build a `Content-Disposition: attachment` header value that survives
+ * non-ASCII filenames. Falls back to a sanitized ASCII name plus the RFC 5987
+ * `filename*` form so browsers pick the UTF-8 variant when supported.
+ */
+export function contentDispositionAttachment(fileName: string): string {
+	const asciiFallback = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+	const encoded = encodeURIComponent(fileName);
+	return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
 /**
  * Canonicalize a tree root for containment checks. The root itself may
  * contain symlink components (e.g. macOS /tmp → /private/tmp); children's
