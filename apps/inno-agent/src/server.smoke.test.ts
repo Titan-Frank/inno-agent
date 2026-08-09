@@ -188,6 +188,21 @@ describe("server smoke", () => {
 		expect(res.status).toBe(200);
 	});
 
+	it("GET /api/channels returns 200 with an empty list (no channels configured)", async () => {
+		const res = await api("/api/channels");
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual([]);
+	});
+
+	it("POST /api/bridge/messages returns 404 when no bridge is configured", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/bridge/messages`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(res.status).toBe(404);
+	});
+
 	it("GET /api/jobs/:id/runs returns 200 for any id shape", async () => {
 		const res = await api("/api/jobs/job_missing/runs");
 		expect(res.status).toBe(200);
