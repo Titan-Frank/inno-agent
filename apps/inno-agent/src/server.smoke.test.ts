@@ -229,6 +229,30 @@ describe("server smoke", () => {
 		expect(await res.json()).toEqual([]);
 	});
 
+	it("GET /api/workspaces returns 200 with the default workspaces", async () => {
+		const res = await api("/api/workspaces");
+		expect(res.status).toBe(200);
+		expect(Array.isArray(await res.json())).toBe(true);
+	});
+
+	it("GET /api/workspace/tree returns 200 for the shared tmp workspace", async () => {
+		const res = await api("/api/workspace/tree");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { type: string; children: unknown[] };
+		expect(body.type).toBe("directory");
+		expect(Array.isArray(body.children)).toBe(true);
+	});
+
+	it("GET /api/workspace/file returns 404 for a missing file", async () => {
+		const res = await api("/api/workspace/file?path=no-such-file.txt");
+		expect(res.status).toBe(404);
+	});
+
+	it("DELETE /api/workspaces/tmp is rejected with 400", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/workspaces/tmp`, { method: "DELETE" });
+		expect(res.status).toBe(400);
+	});
+
 	it("unknown /api/ route returns a JSON 404 (not the SPA index.html)", async () => {
 		const res = await api("/api/definitely-not-a-route");
 		expect(res.status).toBe(404);
