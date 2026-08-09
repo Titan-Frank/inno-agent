@@ -87,6 +87,43 @@ describe("goal archiving: generic topic matching", () => {
 		expect(profile.knowledge_states[0].next_actions).toEqual([]);
 		expect(profile.knowledge_states[0].diagnosis).toContain("归档");
 	});
+
+	it("matches a single-char CJK topic against a longer goal title", () => {
+		const profile = createDefaultProfile();
+		profile.goals.push(makeGoal("钢琴入门"));
+
+		// "琴" is a lone CJK char after intent stripping — no bigram exists,
+		// so only the unigram fallback can match it.
+		applyLearningEventToProfile(profile, archiveEvent("不学琴"), { updateSummary: false });
+
+		expect(profile.goals[0].status).toBe("archived");
+	});
+
+	it("never matches a goal with an empty title (includes(\"\") is always true)", () => {
+		const profile = createDefaultProfile();
+		profile.goals.push(makeGoal("", { goal_id: "goal_empty" }));
+
+		applyLearningEventToProfile(profile, archiveEvent("不再学习吉他"), { updateSummary: false });
+
+		expect(profile.goals[0].status).toBe("active");
+	});
+
+	it("never matches a knowledge state with an empty concept_id", () => {
+		const profile = createDefaultProfile();
+		applyLearningEventToProfile(
+			profile,
+			createLearningEvent("default", "concept_explained", { concept_ids: [""] }, { topic: "x" }),
+			{ updateSummary: false },
+		);
+		const state = profile.knowledge_states.find((s) => s.concept_id === "");
+		expect(state).toBeDefined();
+		const actionsBefore = state!.next_actions.length;
+
+		applyLearningEventToProfile(profile, archiveEvent("不再学习吉他"), { updateSummary: false });
+
+		// A match would have cleared next_actions; they must be untouched.
+		expect(state!.next_actions).toHaveLength(actionsBefore);
+	});
 });
 
 describe("mastery deltas", () => {

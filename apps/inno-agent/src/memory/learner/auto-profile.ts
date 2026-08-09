@@ -56,7 +56,9 @@ const INTENT_WORDS =
 /**
  * Extract topic keywords from free text: latin tokens (length >= 2, so
  * "c++" / "ts" / "go" survive) and CJK bigrams (so "吉他入门" still matches
- * a goal titled "吉他"). Returns lowercase keywords.
+ * a goal titled "吉他"). A lone CJK character yields no bigrams, so it is
+ * kept as a unigram — otherwise a single-char topic ("琴") could never match
+ * anything. Returns lowercase keywords.
  */
 function extractTopicKeywords(text: string): string[] {
 	const cleaned = text.toLowerCase().replace(INTENT_WORDS, " ");
@@ -66,6 +68,10 @@ function extractTopicKeywords(text: string): string[] {
 	}
 	for (const match of cleaned.matchAll(/[一-鿿]+/g)) {
 		const run = match[0];
+		if (run.length === 1) {
+			keywords.push(run);
+			continue;
+		}
 		for (let i = 0; i < run.length - 1; i++) keywords.push(run.slice(i, i + 2));
 	}
 	return keywords;
@@ -101,8 +107,9 @@ function targetMatchesGoal(goal: LearningGoal, targetText: string, targetGoalId?
 	const haystack = `${goal.goal_id} ${goal.title}`.toLowerCase();
 	const target = targetText.toLowerCase();
 	if (targetGoalId && goal.goal_id === targetGoalId) return true;
-	if (target.includes(goal.goal_id.toLowerCase())) return true;
-	if (target.includes(goal.title.toLowerCase())) return true;
+	// Empty id/title must never match — includes("") is always true.
+	if (goal.goal_id && target.includes(goal.goal_id.toLowerCase())) return true;
+	if (goal.title && target.includes(goal.title.toLowerCase())) return true;
 
 	return topicKeywordsMatch(haystack, target);
 }
@@ -124,7 +131,8 @@ function archiveMatchingGoals(profile: LearnerProfile, targetText: string, times
 function targetMatchesKnowledge(state: KnowledgeState, targetText: string): boolean {
 	const haystack = `${state.concept_id} ${state.concept_name} ${state.domain}`.toLowerCase();
 	const target = targetText.toLowerCase();
-	if (target.includes(state.concept_id.toLowerCase())) return true;
+	// Empty concept_id must never match — includes("") is always true.
+	if (state.concept_id && target.includes(state.concept_id.toLowerCase())) return true;
 	return topicKeywordsMatch(haystack, target);
 }
 
