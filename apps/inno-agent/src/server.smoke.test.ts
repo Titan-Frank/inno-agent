@@ -1,0 +1,153 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+/**
+ * HTTP smoke tests for server.ts — the safety net for the route-domain
+ * extraction in docs/quality-remediation-plan.md (P2).
+ *
+ * server.ts is a side-effect-only entry point (no exports), so these tests
+ * spawn it as a child process against a throwaway --home with a dummy
+ * provider, then assert status codes / redaction on a handful of endpoints.
+ * No LLM calls are made.
+ */
+
+const SERVER_ENTRY = resolve(import.meta.dirname, "server.ts");
+const REPO_ROOT = resolve(import.meta.dirname, "../../..");
+
+const DUMMY_API_KEY = "sk-test-secret-key-12345";
+
+let home: string;
+let workspace: string;
+let port: number;
+let child: ChildProcess;
+let childLog = "";
+
+async function getFreePort(): Promise<number> {
+	return new Promise((resolvePort, reject) => {
+		const srv = createServer();
+		srv.listen(0, "127.0.0.1", () => {
+			const freePort = (srv.address() as AddressInfo).port;
+			srv.close(() => resolvePort(freePort));
+		});
+		srv.on("error", reject);
+	});
+}
+
+function api(path: string): Promise<Response> {
+	return fetch(`http://127.0.0.1:${port}${path}`);
+}
+
+beforeAll(async () => {
+	home = mkdtempSync(join(tmpdir(), "inno-smoke-home-"));
+	workspace = mkdtempSync(join(tmpdir(), "inno-smoke-ws-"));
+	mkdirSync(join(home, "config"), { recursive: true });
+	writeFileSync(
+		join(home, "config", "config.json"),
+		JSON.stringify({
+			defaultProvider: "dummy",
+			defaultModel: "dummy-model",
+			providers: {
+				dummy: {
+					baseUrl: "http://127.0.0.1:9", // nothing listens here; no LLM call is made
+					apiKey: DUMMY_API_KEY,
+					api: "openai-completions",
+					models: [{ id: "dummy-model" }],
+				},
+			},
+		}),
+		"utf-8",
+	);
+
+	port = await getFreePort();
+	child = spawn(
+		process.execPath,
+		["--import", "tsx", SERVER_ENTRY, "--home", home, "--workspace", workspace, "--port", String(port)],
+		{ cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+	);
+	child.stdout?.on("data", (chunk) => (childLog += chunk));
+	child.stderr?.on("data", (chunk) => (childLog += chunk));
+
+	// Wait for readiness: poll /health (it answers before any bootstrap).
+	const deadline = Date.now() + 90_000;
+	let ready = false;
+	let exitCode: number | null = null;
+	child.on("exit", (code) => {
+		exitCode = code;
+	});
+	while (Date.now() < deadline) {
+		if (exitCode !== null) {
+			throw new Error(`server exited early with code ${exitCode}\n--- child log ---\n${childLog}`);
+		}
+		try {
+			const res = await api("/health");
+			if (res.status === 200) {
+				ready = true;
+				break;
+			}
+		} catch {
+			// connection refused while the server is still starting
+		}
+		await new Promise((r) => setTimeout(r, 250));
+	}
+	if (!ready) {
+		throw new Error(`server did not become ready within 90s\n--- child log ---\n${childLog}`);
+	}
+}, 120_000);
+
+afterAll(async () => {
+	if (child && !child.killed) {
+		child.kill("SIGTERM");
+		await new Promise<void>((resolveDone) => {
+			const force = setTimeout(() => {
+				child.kill("SIGKILL");
+				resolveDone();
+			}, 5_000);
+			child.on("exit", () => {
+				clearTimeout(force);
+				resolveDone();
+			});
+		});
+	}
+	rmSync(home, { recursive: true, force: true });
+	rmSync(workspace, { recursive: true, force: true });
+}, 30_000);
+
+describe("server smoke", () => {
+	it("GET /health returns 200 ok without bootstrap side effects", async () => {
+		const res = await api("/health");
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ status: "ok" });
+	});
+
+	it("GET /api/settings returns 200 with provider API keys redacted", async () => {
+		const res = await api("/api/settings");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			providers: Record<string, { apiKey: string }>;
+		};
+		const apiKey = body.providers.dummy.apiKey;
+		expect(apiKey).not.toBe(DUMMY_API_KEY);
+		expect(apiKey).toMatch(/^\*\*\*\*/);
+		expect(apiKey.endsWith(DUMMY_API_KEY.slice(-4))).toBe(true);
+	}, 60_000 /* first /api/* call triggers lazy bootstrap */);
+
+	it("GET /api/sessions returns 200", async () => {
+		const res = await api("/api/sessions");
+		expect(res.status).toBe(200);
+	}, 60_000);
+
+	it("GET /api/jobs returns 200", async () => {
+		const res = await api("/api/jobs");
+		expect(res.status).toBe(200);
+	});
+
+	it("unknown /api/ route returns a JSON 404 (not the SPA index.html)", async () => {
+		const res = await api("/api/definitely-not-a-route");
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).toContain("application/json");
+	});
+});
