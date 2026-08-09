@@ -203,6 +203,26 @@ describe("server smoke", () => {
 		expect(res.status).toBe(404);
 	});
 
+	it("GET /api/skills returns 200 with a list", async () => {
+		const res = await api("/api/skills");
+		expect(res.status).toBe(200);
+		expect(Array.isArray(await res.json())).toBe(true);
+	});
+
+	it("POST /api/skills/upload validates required fields", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/skills/upload`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fileName: "x.zip" }),
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it("GET /api/skills/:name/content returns 404 for a missing skill", async () => {
+		const res = await api("/api/skills/no-such-skill/content");
+		expect(res.status).toBe(404);
+	});
+
 	it("GET /api/jobs/:id/runs returns 200 for any id shape", async () => {
 		const res = await api("/api/jobs/job_missing/runs");
 		expect(res.status).toBe(200);
