@@ -113,7 +113,14 @@ export async function loadMcpAdapterExtension(
 		mcpLogger.info({ configPath }, "MCP adapter extension loaded");
 		return mod.createMcpAdapter({ configPath });
 	} catch (err) {
-		mcpLogger.warn({ err }, "MCP enabled but pi-mcp-adapter failed to load — continuing without MCP");
+		// pi-mcp-adapter ships TypeScript source only (exports → ./index.ts) and
+		// is loaded through jiti, so a new upstream version can break loading at
+		// any time — the dependency is pinned in package.json for that reason.
+		mcpLogger.warn(
+			{ err },
+			"MCP enabled but pi-mcp-adapter failed to load — continuing without MCP. " +
+			"If pi-mcp-adapter was just upgraded, its TS-source entry point may have changed; it is pinned in package.json for this reason.",
+		);
 		return null;
 	}
 }

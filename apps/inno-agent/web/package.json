@@ -46,7 +46,7 @@
 		"react-arborist": "^3.7.0",
 		"react-dom": "19.2.5",
 		"react-i18next": "^17.0.3",
-		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+		"xlsx": "file:../../../vendor/xlsx-0.20.3.tgz"
 	},
 	"devDependencies": {
 		"@types/cytoscape": "^3.21.9",
