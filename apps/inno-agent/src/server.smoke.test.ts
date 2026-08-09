@@ -208,6 +208,14 @@ describe("server smoke", () => {
 		expect(await res.json()).toEqual([]);
 	});
 
+	it("GET /api/presets returns 200 with the bundled presets", async () => {
+		const res = await api("/api/presets");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Array<{ id: string }>;
+		expect(Array.isArray(body)).toBe(true);
+		expect(body.length).toBeGreaterThan(0);
+	});
+
 	it("POST /api/bridge/messages returns 404 when no bridge is configured", async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/api/bridge/messages`, {
 			method: "POST",
