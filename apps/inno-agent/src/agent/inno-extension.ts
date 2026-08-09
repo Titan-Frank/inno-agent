@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { saveConfig, setDefaultModel, type InnoConfig } from "../config.js";
 import { createLearnerTools } from "../memory/learner/learner-tools.js";
-import { isProfileEmpty, loadEvents, loadProfile } from "../memory/learner/profile-store.js";
+import { isProfileEmpty, loadProfile, loadRecentEvents } from "../memory/learner/profile-store.js";
 import { buildContextPack, formatContextPackForPrompt } from "../memory/learner/context-pack.js";
 import { JobStore } from "../scheduler/job-store.js";
 import { createSchedulerTools } from "../scheduler/scheduler-tools.js";
@@ -364,7 +364,7 @@ export function createInnoExtension(
 						sections.push(ONBOARDING_GUIDE);
 					}
 
-					const recentEvents = loadEvents(paths.learnerDataDir).slice(-8);
+					const recentEvents = loadRecentEvents(paths.learnerDataDir, 8);
 					const contextPack = buildContextPack(profile, recentEvents);
 					const contextSection = formatContextPackForPrompt(contextPack);
 					sections.push(contextSection);

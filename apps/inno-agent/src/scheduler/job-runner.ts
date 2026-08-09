@@ -2,7 +2,7 @@ import type { ScheduledJob } from "./types.js";
 import type { JobStore } from "./job-store.js";
 import type { ChannelRegistry } from "../channels/channel.js";
 import { appendAssistantNotification, getCurrentSessionChannelHint, runPromptSerialized } from "../agent/pi-runner.js";
-import { computeNextRunAt, isOneShotCron } from "./cron-utils.js";
+import { isOneShotCron } from "./cron-utils.js";
 import { randomUUID } from "node:crypto";
 import { logger } from "../logger.js";
 
@@ -98,9 +98,10 @@ export async function executeJob(
 			// mutate() re-reads fresh state inside a per-job chain — counters are
 			// incremented from the latest persisted values, not this run's stale
 			// `job` snapshot (overlapping runs would otherwise lose increments).
+			// nextRunAt is intentionally omitted: mutate() recomputes it from
+			// cron/timezone/enabled, so any value passed here would be dead code.
 			await jobStore.mutate(job.id, (current) => ({
 				lastRunAt: finishedAt.toISOString(),
-				nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 				lastStatus: "error",
 				lastError: error,
 				enabled: oneShot ? false : current.enabled,
@@ -125,7 +126,6 @@ export async function executeJob(
 		});
 		await jobStore.mutate(job.id, (current) => ({
 			lastRunAt: finishedAt.toISOString(),
-			nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 			lastStatus: "success",
 			lastError: undefined,
 			enabled: oneShot ? false : current.enabled,
@@ -151,7 +151,6 @@ export async function executeJob(
 		});
 		await jobStore.mutate(job.id, (current) => ({
 			lastRunAt: finishedAt.toISOString(),
-			nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 			lastStatus: "error",
 			lastError: error,
 			enabled: oneShot ? false : current.enabled,
