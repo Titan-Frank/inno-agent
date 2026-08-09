@@ -32,7 +32,6 @@
 		"wechat": {
 			"enabled": false,
 			"mode": "bridge",
-			"personalOnly": true,
 			"allowedUserIds": [],
 			"sidecarBaseUrl": "http://127.0.0.1:4319"
 		}
