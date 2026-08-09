@@ -203,7 +203,7 @@ export function createInnoExtension(
 		}
 
 		// 3. Register scheduler tools
-		const jobStore = new JobStore(paths.jobsDir);
+		const jobStore = new JobStore(paths.jobsDir, configHolder.current.scheduler?.timezone);
 		const schedulerTools = createSchedulerTools(jobStore, channelRegistry);
 		for (const tool of schedulerTools) {
 			pi.registerTool(tool);

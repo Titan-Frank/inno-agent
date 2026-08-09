@@ -65,6 +65,9 @@
 		"theme": "light",
 		"closeBehavior": "ask"
 	},
+	"scheduler": {
+		"timezone": "Asia/Shanghai"
+	},
 	"ocrApi": {
 		"token": "",
 		"model": "PaddleOCR-VL-1.6",

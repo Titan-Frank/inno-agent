@@ -90,9 +90,9 @@ src/server/
 
 ## P4 · 小坑批量修（各随所属模块的 PR 带走）
 
-- **时区**：`config.json` 加 `scheduler.timezone`，默认 `Asia/Shanghai`，`cron-utils.ts` 三处改读配置。默认中国时区合理，问题是不可配。
-- **runCount 竞态**：`JobStore` 读-改-写加 per-job promise chain 串行化。
-- **jsonl 只增不减**：`events.jsonl`/`runs.jsonl` 加 size 阈值（如 10MB）滚动归档，启动时 tail 读最近 N KB 而非全量解析。
+- ✅ **时区**：`config.json` 加 `scheduler.timezone`（`normalizeSchedulerConfig`，默认 `Asia/Shanghai` 收敛为 `cron-utils.ts` 的 `DEFAULT_SCHEDULER_TIMEZONE` 常量）；`JobStore` 构造参数 `defaultTimezone`（public readonly），server.ts / inno-extension.ts / scheduler-tools.ts 三处全部改读配置。
+- ✅ **runCount 竞态**：`JobStore.mutate(id, mutator)` —— per-job promise chain 串行化，mutator 拿链内重读的最新状态；语义（updatedAt、nextRunAt 重算）与 `update()` 完全一致。job-runner.ts 三处计数器更新全部改用 mutate。
+- ✅ **jsonl 只增不减**：`appendJsonl(path, record, { maxBytes })` 超阈值先滚动为时间戳 `.archive` 再追加（best-effort，失败不掉记录）；新增 `readJsonlTail(path, maxBytes)`（窗口首行残缺即丢）。runs.jsonl / events.jsonl / channel run-log 10MB 滚动；listRuns / run-log list 改 1MB tail 读。dedupe.jsonl（TTL 活状态，滚动会丢去重）与 manifest 不动。
 - **jiti 加载他包内部 .ts（定时炸弹）**：短期钉死 `pi-mcp-adapter` 版本（去 `^`）+ jiti 调用处 try-catch 报明确错误；中期给上游提 PR 加 `exports` 入口或 vendoring。
 - **xlsx**：评估 `exceljs`（npm 官方源）或把 tarball vendor 进 `vendor/`，消除离线安装即挂。
 
@@ -109,7 +109,8 @@ src/server/
 ✅ P1.1 web DOM 环境 + P1.3 server.ts smoke 测试 + P1.2 首批（PR #134）
 ✅ P3 语言正则修复 + 命名诚实性（PR #135）
 ✅ P2 server.ts 按域拆完（PR #136–#146,一次性连续完成）
-下一站: P1 尾巴（personal-dispatcher / L3 条件测试）+ P4 小坑批量修 + P5 README Non-goals
+✅ P4 时区可配 + runCount 竞态 + jsonl 滚动（chore/p4-scheduler-robustness）
+下一站: P4 依赖卫生（jiti 钉版本 + xlsx）+ P1 尾巴（personal-dispatcher / L3 条件测试）+ P5 README Non-goals
 ```
 
 依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。

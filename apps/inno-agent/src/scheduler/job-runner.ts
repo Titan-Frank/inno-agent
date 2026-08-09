@@ -95,15 +95,18 @@ export async function executeJob(
 				pushSkippedReason,
 				trigger,
 			});
-			jobStore.update(job.id, {
+			// mutate() re-reads fresh state inside a per-job chain — counters are
+			// incremented from the latest persisted values, not this run's stale
+			// `job` snapshot (overlapping runs would otherwise lose increments).
+			await jobStore.mutate(job.id, (current) => ({
 				lastRunAt: finishedAt.toISOString(),
 				nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 				lastStatus: "error",
 				lastError: error,
-				enabled: oneShot ? false : job.enabled,
-				runCount: job.runCount + 1,
-				failureCount: job.failureCount + 1,
-			});
+				enabled: oneShot ? false : current.enabled,
+				runCount: current.runCount + 1,
+				failureCount: current.failureCount + 1,
+			}));
 			return { jobId: job.id, runId, success: false, error };
 		}
 
@@ -120,14 +123,14 @@ export async function executeJob(
 			pushSkippedReason,
 			trigger,
 		});
-		jobStore.update(job.id, {
+		await jobStore.mutate(job.id, (current) => ({
 			lastRunAt: finishedAt.toISOString(),
 			nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 			lastStatus: "success",
 			lastError: undefined,
-			enabled: oneShot ? false : job.enabled,
-			runCount: job.runCount + 1,
-		});
+			enabled: oneShot ? false : current.enabled,
+			runCount: current.runCount + 1,
+		}));
 
 		return { jobId: job.id, runId, success: true, output, pushedToChannel };
 	} catch (err) {
@@ -146,15 +149,15 @@ export async function executeJob(
 			error,
 			trigger,
 		});
-		jobStore.update(job.id, {
+		await jobStore.mutate(job.id, (current) => ({
 			lastRunAt: finishedAt.toISOString(),
 			nextRunAt: oneShot ? undefined : computeNextRunAt(job.cron, job.timezone, finishedAt),
 			lastStatus: "error",
 			lastError: error,
-			enabled: oneShot ? false : job.enabled,
-			runCount: job.runCount + 1,
-			failureCount: job.failureCount + 1,
-		});
+			enabled: oneShot ? false : current.enabled,
+			runCount: current.runCount + 1,
+			failureCount: current.failureCount + 1,
+		}));
 		return { jobId: job.id, runId, success: false, error };
 	}
 }

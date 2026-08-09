@@ -40,6 +40,33 @@ describe("JobStore.create", () => {
 		expect(new Date(job.nextRunAt!).getTime()).toBeGreaterThan(Date.now() - 60_000);
 	});
 
+	it("uses the constructor defaultTimezone when the job doesn't pin one", () => {
+		const utcStore = new JobStore(dir, "UTC");
+		expect(utcStore.defaultTimezone).toBe("UTC");
+		const job = utcStore.create({
+			name: "utc job",
+			cron: "0 9 * * *",
+			timezone: "",
+			enabled: true,
+			taskType: "custom_prompt",
+			prompt: "hi",
+		});
+		expect(job.timezone).toBe("UTC");
+	});
+
+	it("an explicit job timezone always wins over the store default", () => {
+		const utcStore = new JobStore(dir, "UTC");
+		const job = utcStore.create({
+			name: "pinned",
+			cron: "0 9 * * *",
+			timezone: "America/New_York",
+			enabled: true,
+			taskType: "custom_prompt",
+			prompt: "hi",
+		});
+		expect(job.timezone).toBe("America/New_York");
+	});
+
 	it("persists jobs to jobs.json so a fresh store sees them", () => {
 		const job = createJob();
 		const reloaded = new JobStore(dir);
@@ -63,6 +90,49 @@ describe("JobStore.update", () => {
 
 	it("returns undefined for an unknown id", () => {
 		expect(store.update("job_missing", { name: "x" })).toBeUndefined();
+	});
+});
+
+describe("JobStore.mutate", () => {
+	it("serializes concurrent counter increments against fresh state", async () => {
+		const job = createJob();
+		// Simulate overlapping runs finishing at the same time: each increment
+		// must observe the previous one, so all 5 land.
+		await Promise.all(
+			Array.from({ length: 5 }, () =>
+				store.mutate(job.id, (current) => ({ runCount: current.runCount + 1 })),
+			),
+		);
+		expect(store.get(job.id)?.runCount).toBe(5);
+	});
+
+	it("replicates update() semantics: clears nextRunAt when disabled", async () => {
+		const job = createJob();
+		const updated = await store.mutate(job.id, () => ({ enabled: false }));
+		expect(updated?.enabled).toBe(false);
+		expect(updated?.nextRunAt).toBeUndefined();
+	});
+
+	it("replicates update() semantics: recomputes nextRunAt on cron change", async () => {
+		const job = createJob();
+		const updated = await store.mutate(job.id, () => ({ cron: "*/5 * * * *" }));
+		expect(updated?.nextRunAt).toBeDefined();
+	});
+
+	it("keeps the chain alive after a mutator throws", async () => {
+		const job = createJob();
+		await expect(
+			store.mutate(job.id, () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
+		// A later mutation still runs and sees the un-modified state.
+		const updated = await store.mutate(job.id, (current) => ({ runCount: current.runCount + 1 }));
+		expect(updated?.runCount).toBe(1);
+	});
+
+	it("returns undefined for an unknown id", async () => {
+		await expect(store.mutate("job_missing", () => ({}))).resolves.toBeUndefined();
 	});
 });
 
