@@ -156,6 +156,38 @@ describe("server smoke", () => {
 		expect(body.error).toContain("Invalid cron");
 	});
 
+	it("PUT /api/settings/theme accepts a valid theme and rejects an invalid one", async () => {
+		const ok = await fetch(`http://127.0.0.1:${port}/api/settings/theme`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ theme: "ocean" }),
+		});
+		expect(ok.status).toBe(200);
+		const body = (await ok.json()) as { ui: { theme: string } };
+		expect(body.ui.theme).toBe("ocean");
+
+		const bad = await fetch(`http://127.0.0.1:${port}/api/settings/theme`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ theme: "neon" }),
+		});
+		expect(bad.status).toBe(400);
+	});
+
+	it("PUT /api/settings/memory validates boolean fields", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/settings/memory`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ l2Enabled: "yes" }),
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it("GET /api/mcp returns 200 with the adapter overview", async () => {
+		const res = await api("/api/mcp");
+		expect(res.status).toBe(200);
+	});
+
 	it("GET /api/jobs/:id/runs returns 200 for any id shape", async () => {
 		const res = await api("/api/jobs/job_missing/runs");
 		expect(res.status).toBe(200);
