@@ -202,6 +202,17 @@ describe("server smoke", () => {
 		expect(res.status).toBe(200);
 	});
 
+	it("practice: runs list 400 without sessionId, run detail 404, terminal create 400 without sessionId", async () => {
+		expect((await api("/api/runs?limit=5")).status).toBe(400);
+		expect((await api("/api/runs/run_missing")).status).toBe(404);
+		const term = await fetch(`http://127.0.0.1:${port}/api/terminal/sessions`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(term.status).toBe(400);
+	});
+
 	it("GET /api/channels returns 200 with an empty list (no channels configured)", async () => {
 		const res = await api("/api/channels");
 		expect(res.status).toBe(200);

@@ -54,6 +54,7 @@ import { handleSessionsRoutes } from "./server/routes/sessions.js";
 import { handleLearnerRoutes } from "./server/routes/learner.js";
 import { handleWikiRoutes } from "./server/routes/wiki.js";
 import { handlePresetsRoutes } from "./server/routes/presets.js";
+import { handlePracticeRoutes } from "./server/routes/practice.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -63,7 +64,6 @@ import {
 	type SessionSummary,
 	type SessionTopicMetadata,
 } from "./server/session-model.js";
-import { serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { logger } from "./logger.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
 import { questionBridge, type QuestionBridgeResult } from "./agent/question-bridge.js";
@@ -1680,125 +1680,10 @@ const server = createServer(async (req, res) => {
 		// --- Presets API (extracted to server/routes/presets.ts) ---
 		if (await handlePresetsRoutes(req, res, method, url, { paths, getContentSource })) return;
 
-		// --- Terminal sessions ---
-		if (method === "POST" && url === "/api/terminal/sessions") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-			if (!sessionId) { json(res, 400, { error: "Missing sessionId" }); return; }
-			const requestedWs = typeof body.workspaceId === "string" && body.workspaceId.trim()
-				? body.workspaceId.trim()
-				: workspaceRegistry.getSessionWorkspaceId(sessionId);
-			const cols = typeof body.cols === "number" ? body.cols : 100;
-			const rows = typeof body.rows === "number" ? body.rows : 24;
-			try {
-				const ts = terminalManager.create({ sessionId, workspaceId: requestedWs, cols, rows });
-				json(res, 201, { id: ts.id, sessionId: ts.sessionId, workspaceId: ts.workspaceId, cwd: ts.cwd, status: "ready" });
-			} catch (err) {
-				logger.error({ err }, "failed to create terminal session");
-				json(res, 400, { error: err instanceof Error ? err.message : "Failed to create terminal" });
-			}
-			return;
-		}
-
-		const terminalCloseMatch = matchRoute("POST", method, url, "/api/terminal/sessions/:id/close");
-		if (terminalCloseMatch) {
-			terminalManager.close(decodeURIComponent(terminalCloseMatch.id));
-			json(res, 200, { closed: true });
-			return;
-		}
-
-		// --- Runs ---
-		if (method === "GET" && url.startsWith("/api/runs?")) {
-			const params = new URL(url, "http://localhost").searchParams;
-			const sessionId = params.get("sessionId") ?? "";
-			const limit = Math.min(Number.parseInt(params.get("limit") ?? "20", 10) || 20, 100);
-			if (!sessionId) { json(res, 400, { error: "Missing sessionId" }); return; }
-			json(res, 200, runRecordStore.listForSession(sessionId, limit));
-			return;
-		}
-
-		const runDetailMatch = matchRoute("GET", method, url.split("?")[0], "/api/runs/:id");
-		if (runDetailMatch) {
-			const record = runRecordStore.get(decodeURIComponent(runDetailMatch.id));
-			if (!record) { json(res, 404, { error: "Run not found" }); return; }
-			const params = new URL(url, "http://localhost").searchParams;
-			const lines = Math.min(Number.parseInt(params.get("lines") ?? "200", 10) || 200, 2000);
-			const tail = runRecordStore.getOutputTail(record, lines);
-			json(res, 200, { ...record, outputTail: tail });
-			return;
-		}
-
-		const runArchiveMatch = matchRoute("POST", method, url, "/api/runs/:id/archive");
-		if (runArchiveMatch) {
-			const record = runRecordStore.get(decodeURIComponent(runArchiveMatch.id));
-			if (!record) { json(res, 404, { error: "Run not found" }); return; }
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const title = typeof body.title === "string" && body.title.trim()
-				? body.title.trim()
-				: `Run: ${record.command.slice(0, 40)}`;
-			const note = typeof body.note === "string" ? body.note.trim() : "";
-			const outputTail = runRecordStore.getOutputTail(record, 500);
-			const ws = workspaceRegistry.getWorkspace(record.workspaceId);
-
-			const now = new Date().toISOString();
-			const wikiRelPath = join("wiki", "analysis", `run-${record.id}.md`);
-			const fullPath = join(l2DataDir, wikiRelPath);
-			if (existsSync(fullPath)) {
-				json(res, 409, { error: "Run already archived", path: wikiRelPath });
-				return;
-			}
-			ensureDir(dirname(fullPath));
-
-			const tags = ["run", "code-execution"];
-			if (ws) tags.push(`workspace:${ws.name}`);
-			if (record.sourceFile) {
-				const ext = extname(record.sourceFile).slice(1);
-				if (ext) tags.push(`lang:${ext}`);
-			}
-			const exitCodeText = record.exitCode === null || record.exitCode === undefined
-				? "(unknown)"
-				: String(record.exitCode);
-			const exitStatus = record.exitCode === 0 ? "成功" : record.exitCode !== null && record.exitCode !== undefined ? "失败" : "未完成";
-
-			const frontmatter = serializeFrontmatter({
-				title,
-				created: record.startedAt,
-				updated: now,
-				type: "analysis",
-				tags,
-				sources: record.sourceFile ? [record.sourceFile] : [],
-				source_ids: [],
-				status: "draft",
-				confidence: "high",
-			});
-
-			const bodyLines = [
-				`# ${title}`,
-				"",
-				"## 元信息",
-				`- 命令: \`${record.command}\``,
-				`- 工作区: ${ws?.name ?? record.workspaceId} (\`${record.cwd}\`)`,
-				record.sourceFile ? `- 源文件: \`${record.sourceFile}\`` : "",
-				`- 开始: ${record.startedAt}`,
-				record.endedAt ? `- 结束: ${record.endedAt}` : "",
-				`- 退出码: ${exitCodeText} (${exitStatus})`,
-				record.signal ? `- 信号: ${record.signal}` : "",
-				`- run id: ${record.id}`,
-				"",
-				"## 输出",
-				"```",
-				outputTail || "(无输出)",
-				"```",
-			].filter(Boolean);
-			if (note) {
-				bodyLines.push("", "## 备注", note);
-			}
-
-			const content = `${frontmatter}\n\n${bodyLines.join("\n")}\n`;
-			writeText(fullPath, content);
-			json(res, 201, { path: wikiRelPath, title, runId: record.id });
-			return;
-		}
+		// --- Terminal sessions + Runs (extracted to server/routes/practice.ts) ---
+		if (await handlePracticeRoutes(req, res, method, url, {
+			workspaceRegistry, l2DataDir, terminalManager, runRecordStore,
+		})) return;
 
 		// --- Settings + MCP API (extracted to server/routes/settings.ts) ---
 		if (await handleSettingsRoutes(req, res, method, url, {
