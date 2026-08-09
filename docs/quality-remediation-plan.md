@@ -4,7 +4,7 @@
 >
 > 状态图例：✅ 已完成 / 🚧 进行中 / ⬜ 未开始
 >
-> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134），P3 已合并（PR #135），P2 ✅ 完成（11 个域全部拆出：#136–#146，server.ts 5295→1608 行，-70%）**。
+> 进度速览：**全部完成 ✅** —— P0（#133）、P1 主体+尾巴（#134、#149）、P3（#135）、P2（11 个域：#136–#146，server.ts 5295→1608 行，-70%）、P4（#147、#148）、P5（Non-goals + session_busy 覆盖审计）。测试 17→27 文件 / 221 用例。
 
 ## 总体原则
 
@@ -96,9 +96,10 @@ src/server/
 - ✅ **jiti 加载他包内部 .ts（定时炸弹）**：`pi-mcp-adapter` 与 `pi-sandbox` 都是 TS-source-only 包（exports → `./index.ts`），全部钉死精确版本（去 `^`）；三处 jiti 调用点本就有 try-catch 降级，警告文案补上"版本被改动是首要嫌疑"的提示。中期给上游提 PR 加编译产物入口仍是根治方向。
 - ✅ **xlsx**：CDN tarball 下载后 vendor 进 `vendor/xlsx-0.20.3.tgz`（sha512 与 lockfile 原记录逐字节一致），root devDependencies + overrides `$xlsx`、web `file:../../../vendor/...` 指向本地，离线安装不再即挂。exceljs 迁移（API 不同、preview 代码要改）不做。
 
-## P5 · 明确不修，但要写下来
+## P5 · 明确不修，但要写下来 ✅
 
-- **单进程单 AgentSession**：README「设计哲学」加 "Non-goals" 一节：不追求多用户并发、不水平扩展、会话切换靠文件换载。同时确认 #124 的 409 `session_busy` 机制覆盖所有跨会话切换路径。
+- ✅ README「Why Inno Agent」下加 **Non-goals** 一节：单进程单 AgentSession（内存队列串行化所有工作）、不追求多用户并发/水平扩展（无 auth、无租户隔离，团队部署 = 每人一个实例）、背压即特性（409 `session_busy` 带 blocker 详情立即返回，不静默排队）。
+- ✅ `session_busy` 覆盖审计（2026-08-09)：全部跨会话切换路径都已走 `releaseQueueFromQuestionBlockedTurn` + `runQueueOpWithTimeout`（8s 硬上限 → 409）——`POST /api/sessions/:id/activate`（sessions.ts:449-450）、`POST /api/sessions` 新建（sessions.ts:460-461）、工作区切换 `applyWorkspaceCwd`（workspaces.ts:783-784）、`POST /api/chat/stream` 换会话发消息（chat.ts:514，另有 per-session 活跃 turn 的 409)。渠道侧经 `runPromptSerialized` 共用同一队列。无遗漏路径。
 
 ---
 
@@ -111,8 +112,9 @@ src/server/
 ✅ P2 server.ts 按域拆完（PR #136–#146,一次性连续完成）
 ✅ P4 时区可配 + runCount 竞态 + jsonl 滚动（PR #147）
 ✅ P4 依赖卫生：pi-mcp-adapter/pi-sandbox 钉版本 + xlsx vendoring（PR #148）
-✅ P1 尾巴：personal-dispatcher 路由测试 + L3 条件测试（test/p1-tail）
-下一站: P5 README Non-goals（L1 profile-updater 增量测试随 L1 规则演进另行安排）
+✅ P1 尾巴：personal-dispatcher 路由测试 + L3 条件测试（PR #149）
+✅ P5 README Non-goals + session_busy 覆盖审计（docs/p5-non-goals）
+整改计划全部完成 🎉（L1 profile-updater 增量测试随 L1 规则演进另行安排）
 ```
 
 依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。
