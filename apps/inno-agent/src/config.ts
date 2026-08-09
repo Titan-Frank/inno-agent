@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { RuntimePaths } from "./runtime.js";
+import { writeJson } from "./storage/file-store.js";
 
 export type InnoProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | string;
 export type InnoModelInput = "text" | "image";
@@ -381,9 +382,9 @@ export function saveConfig(configPathOrDir: string, config: InnoConfig): InnoCon
 		? configPathOrDir
 		: join(configPathOrDir, "config.json");
 	const normalized = normalizeConfig(config);
-	const dir = dirname(configPath);
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	writeFileSync(configPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+	// Atomic write (tmp + rename): a crash mid-write must not leave a truncated
+	// config.json — the server hot-rewrites this file on every model switch.
+	writeJson(configPath, normalized);
 	return normalized;
 }
 
