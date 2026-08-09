@@ -3,6 +3,8 @@
 > 来源：2026-08-09 全仓库质量审核。审核结论经逐项核实（server.ts 实际 5,295 行、17 个测试文件中 9 个集中于 memory/l2、CI 只 build 不跑测试、xlsx 走 CDN tarball、axios 直接依赖零 import、jiti 出现在 4 个文件、scheduler 三处时区硬编码）。
 >
 > 状态图例：✅ 已完成 / 🚧 进行中 / ⬜ 未开始
+>
+> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134，测试 17 文件/101 用例 → 23 文件/144 用例）**。下一站 P3（L1 语言正则 + 命名诚实性），然后 P2 拆 server.ts。
 
 ## 总体原则
 
@@ -15,7 +17,7 @@
 
 ---
 
-## P0 · 低成本立即修（本分支 `chore/p0-remediation`）
+## P0 · 低成本立即修 ✅ 已合并（PR #133，`chore/p0-remediation`）
 
 | 项 | 动作 | 状态 |
 |---|---|---|
@@ -26,7 +28,7 @@
 | CI 跑测试 | release-mac.yml / release-win.yml 在 `npm ci` 后加 `npm test`，17 个存量测试从装饰品变门禁 | ✅ |
 | xlsx CDN tarball | 本 PR 不动（根 overrides 已钉死版本）；记录风险，中期换 `exceljs` 或 vendor 进仓库 | ⬜ 见 P4 |
 
-## P1 · 测试基建（1–2 周，不改业务代码）
+## P1 · 测试基建（主体 ✅ 已合并 PR #134，`chore/p1-test-infra`；尾巴见下）
 
 测试偏科的根因是"只有纯函数好测"。补三层：
 
@@ -94,11 +96,11 @@ src/server/
 ## 执行顺序
 
 ```
-Week 1:  P0 全部（chore/p0-remediation，本分支）✅
-Week 2:  P1.1 web DOM 环境 + P1.3 server.ts smoke 测试
-Week 3:  P3 语言正则修复 + 命名诚实性（用户可感知，优先级高于拆文件）
-Week 4+: P2 server.ts 按域拆（每周 1–2 个域，穿插正常 feature 开发）
-随手:    P4 各项跟随所属模块的 PR
+✅ P0 全部（PR #133）
+✅ P1.1 web DOM 环境 + P1.3 server.ts smoke 测试 + P1.2 首批（PR #134）
+下一站: P3 语言正则修复 + 命名诚实性（用户可感知，优先级高于拆文件）
+之后:   P2 server.ts 按域拆（每周 1–2 个域，穿插正常 feature 开发）
+随手:   P1 尾巴（personal-dispatcher / L3 条件测试）+ P4 各项跟随所属模块的 PR
 ```
 
-依赖关系：P2 拆分必须等 P1.3 smoke 测试落地；P3 语言正则是唯一正在静默失效的用户可见 bug，提前于拆分。
+依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则是唯一正在静默失效的用户可见 bug，提前于拆分。
