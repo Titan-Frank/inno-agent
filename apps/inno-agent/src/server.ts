@@ -180,7 +180,7 @@ async function ensureBootstrapped(): Promise<void> {
 		ensureDir(paths.workspaceDir);
 
 		// ---- stores ----
-		jobStore = new JobStore(paths.jobsDir);
+		jobStore = new JobStore(paths.jobsDir, config.scheduler?.timezone);
 		jobStore.normalizePersistedJobs();
 
 		channelRegistry = new ChannelRegistry(join(dataDir, "channels", "default-targets.json"));

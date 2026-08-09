@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RuntimePaths } from "./runtime.js";
+import { DEFAULT_SCHEDULER_TIMEZONE } from "./scheduler/cron-utils.js";
 import { writeJson } from "./storage/file-store.js";
 
 export type InnoProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | string;
@@ -73,6 +74,15 @@ export interface InnoSimpleModeConfig {
  */
 export interface InnoMcpConfig {
 	enabled: boolean;
+}
+
+/**
+ * Scheduler defaults. `timezone` is the fallback IANA timezone for scheduled
+ * jobs that don't pin their own — previously hardcoded to Asia/Shanghai in
+ * several spots; now configurable for users in other regions.
+ */
+export interface InnoSchedulerConfig {
+	timezone: string;
 }
 
 /** What should happen when the desktop window's close button is clicked. */
@@ -175,6 +185,7 @@ export interface InnoConfig {
 	simpleMode?: InnoSimpleModeConfig;
 	mcp?: InnoMcpConfig;
 	ui?: InnoUiConfig;
+	scheduler?: InnoSchedulerConfig;
 	/**
 	 * Optional OCR API config (Baidu PaddleOCR-VL). When the configured model
 	 * cannot recognize images, the agent calls the `ocr_image` tool which uses
@@ -283,6 +294,13 @@ export function normalizeMcpConfig(mcp: Partial<InnoMcpConfig> | undefined): Inn
 	};
 }
 
+export function normalizeSchedulerConfig(scheduler: Partial<InnoSchedulerConfig> | undefined): InnoSchedulerConfig {
+	const timezone = typeof scheduler?.timezone === "string" && scheduler.timezone.trim()
+		? scheduler.timezone.trim()
+		: DEFAULT_SCHEDULER_TIMEZONE;
+	return { timezone };
+}
+
 export function normalizeUiConfig(ui: Partial<InnoUiConfig> | undefined): InnoUiConfig {
 	const theme = typeof ui?.theme === "string" && ui.theme.trim() ? ui.theme.trim() : "light";
 	const closeBehavior: InnoCloseBehavior = ui?.closeBehavior === "hide" || ui?.closeBehavior === "quit"
@@ -355,6 +373,7 @@ export function normalizeConfig(config: LegacyInnoConfig): InnoConfig {
 		simpleMode: normalizeSimpleModeConfig(config.simpleMode),
 		mcp: normalizeMcpConfig(config.mcp),
 		ui: normalizeUiConfig(config.ui),
+		scheduler: normalizeSchedulerConfig(config.scheduler),
 		ocrApi: config.ocrApi,
 		tavily: config.tavily,
 	} as InnoConfig;

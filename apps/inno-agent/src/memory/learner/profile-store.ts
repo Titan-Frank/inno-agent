@@ -6,6 +6,9 @@ import { applyLearningEventToProfile } from "./auto-profile.js";
 const PROFILE_FILE = "profile.json";
 const EVENTS_FILE = "events.jsonl";
 
+/** events.jsonl is rolled to a timestamped archive once it exceeds this size. */
+const EVENTS_MAX_BYTES = 10 * 1024 * 1024;
+
 /**
  * Load the learner profile. Returns a default empty profile if not found.
  */
@@ -23,10 +26,12 @@ export function saveProfile(dataDir: string, profile: LearnerProfile): void {
 }
 
 /**
- * Record a learning event by appending to events.jsonl.
+ * Record a learning event by appending to events.jsonl. The log is rotated at
+ * EVENTS_MAX_BYTES; `loadEvents` (and therefore `rebuildProfileFromEvents`)
+ * only replays the current segment — older segments stay on disk as archives.
  */
 export function recordEvent(dataDir: string, event: LearningEvent): void {
-	appendJsonl(join(dataDir, EVENTS_FILE), event);
+	appendJsonl(join(dataDir, EVENTS_FILE), event, { maxBytes: EVENTS_MAX_BYTES });
 }
 
 /**

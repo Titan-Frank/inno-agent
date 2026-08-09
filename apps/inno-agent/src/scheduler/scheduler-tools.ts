@@ -58,7 +58,7 @@ export function createSchedulerTools(jobStore: JobStore, channelRegistry?: Chann
 			const job = jobStore.create({
 				name: params.name,
 				cron: params.cron,
-				timezone: "Asia/Shanghai",
+				timezone: jobStore.defaultTimezone,
 				enabled: true,
 				taskType: params.taskType,
 				prompt: params.prompt,

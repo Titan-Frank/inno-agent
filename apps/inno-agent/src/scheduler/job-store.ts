@@ -1,11 +1,16 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { appendJsonl, readJson, readJsonl, writeJson, ensureDir } from "../storage/file-store.js";
+import { appendJsonl, readJson, readJsonlTail, writeJson, ensureDir } from "../storage/file-store.js";
 import type { JobRunRecord, ScheduledJob } from "./types.js";
-import { computeNextRunAt } from "./cron-utils.js";
+import { computeNextRunAt, DEFAULT_SCHEDULER_TIMEZONE } from "./cron-utils.js";
 
 const JOBS_FILE = "jobs.json";
 const RUNS_FILE = "runs.jsonl";
+
+/** runs.jsonl is rolled to a timestamped archive once it exceeds this size. */
+const RUNS_MAX_BYTES = 10 * 1024 * 1024;
+/** listRuns only needs recent history, so it reads just the tail of the file. */
+const LIST_RUNS_TAIL_BYTES = 1024 * 1024;
 
 export type ScheduledJobCreateInput =
 	Omit<ScheduledJob, "id" | "createdAt" | "updatedAt" | "runCount" | "failureCount" | "lastStatus" | "lastError">
@@ -14,11 +19,21 @@ export type ScheduledJobCreateInput =
 export class JobStore {
 	private filePath: string;
 	private runsFilePath: string;
+	/** Fallback timezone for jobs that don't pin their own. */
+	readonly defaultTimezone: string;
+	/**
+	 * Per-job serialization chains for `mutate`: each mutation re-reads the
+	 * current state inside the chain, so concurrent runs (cron + manual + the
+	 * agent's run_scheduled_job tool) can't lose counter increments by writing
+	 * back values computed from a stale snapshot.
+	 */
+	private mutationChains = new Map<string, Promise<void>>();
 
-	constructor(jobsDir: string) {
+	constructor(jobsDir: string, defaultTimezone: string = DEFAULT_SCHEDULER_TIMEZONE) {
 		ensureDir(jobsDir);
 		this.filePath = join(jobsDir, JOBS_FILE);
 		this.runsFilePath = join(jobsDir, RUNS_FILE);
+		this.defaultTimezone = defaultTimezone;
 	}
 
 	list(): ScheduledJob[] {
@@ -38,7 +53,7 @@ export class JobStore {
 	create(input: ScheduledJobCreateInput): ScheduledJob {
 		const jobs = this.list();
 		const now = new Date().toISOString();
-		const timezone = input.timezone || "Asia/Shanghai";
+		const timezone = input.timezone || this.defaultTimezone;
 		const job: ScheduledJob = {
 			...input,
 			id: `job_${randomUUID().slice(0, 8)}`,
@@ -68,6 +83,36 @@ export class JobStore {
 		return jobs[idx];
 	}
 
+	/**
+	 * Serialized read-modify-write for one job. The mutator receives the job's
+	 * *fresh* state (re-read inside the per-job promise chain), so increments
+	 * like `runCount + 1` are computed from the latest persisted values instead
+	 * of a snapshot captured before a possibly minutes-long run. Semantics
+	 * (updatedAt bump, nextRunAt recompute) mirror `update()`.
+	 */
+	mutate(id: string, mutator: (current: ScheduledJob) => Partial<ScheduledJob>): Promise<ScheduledJob | undefined> {
+		const prev = this.mutationChains.get(id) ?? Promise.resolve();
+		const next = prev.then((): ScheduledJob | undefined => {
+			const jobs = this.list();
+			const idx = jobs.findIndex((j) => j.id === id);
+			if (idx < 0) return undefined;
+			const current = jobs[idx];
+			const patch = mutator(current);
+			const merged = { ...current, ...patch, updatedAt: new Date().toISOString() };
+			if (patch.cron || patch.timezone || patch.lastRunAt || patch.enabled !== undefined) {
+				merged.nextRunAt = merged.enabled ? computeNextRunAt(merged.cron, merged.timezone) : undefined;
+			}
+			jobs[idx] = merged;
+			writeJson(this.filePath, jobs);
+			return merged;
+		});
+		// Keep the chain alive even if this mutation rejects; swallow in the
+		// stored link so later mutations still run. The caller gets the real
+		// promise (with its rejection) as the return value.
+		this.mutationChains.set(id, next.then(() => undefined, () => undefined));
+		return next;
+	}
+
 	delete(id: string): boolean {
 		const jobs = this.list();
 		const filtered = jobs.filter((j) => j.id !== id);
@@ -77,11 +122,11 @@ export class JobStore {
 	}
 
 	appendRun(record: JobRunRecord): void {
-		appendJsonl(this.runsFilePath, record);
+		appendJsonl(this.runsFilePath, record, { maxBytes: RUNS_MAX_BYTES });
 	}
 
 	listRuns(jobId?: string, limit = 50): JobRunRecord[] {
-		const runs = readJsonl<JobRunRecord>(this.runsFilePath);
+		const runs = readJsonlTail<JobRunRecord>(this.runsFilePath, LIST_RUNS_TAIL_BYTES);
 		const filtered = jobId ? runs.filter((run) => run.jobId === jobId) : runs;
 		return filtered.slice(-limit).reverse();
 	}
@@ -112,7 +157,7 @@ export class JobStore {
 
 	private normalizeJob(job: Partial<ScheduledJob>): ScheduledJob {
 		const now = new Date().toISOString();
-		const timezone = job.timezone || "Asia/Shanghai";
+		const timezone = job.timezone || this.defaultTimezone;
 		const enabled = job.enabled ?? true;
 		return {
 			id: job.id ?? `job_${randomUUID().slice(0, 8)}`,

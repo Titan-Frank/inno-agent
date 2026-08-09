@@ -1,6 +1,12 @@
 import { logger } from "../logger.js";
 import { CronExpressionParser } from "cron-parser";
 
+/**
+ * Default timezone for scheduled jobs when neither the job nor the global
+ * `scheduler.timezone` config specifies one.
+ */
+export const DEFAULT_SCHEDULER_TIMEZONE = "Asia/Shanghai";
+
 export function computeNextRunAt(
 	cron: string,
 	timezone: string,
@@ -9,7 +15,7 @@ export function computeNextRunAt(
 	try {
 		const expr = CronExpressionParser.parse(cron, {
 			currentDate,
-			tz: timezone || "Asia/Shanghai",
+			tz: timezone || DEFAULT_SCHEDULER_TIMEZONE,
 		});
 		return expr.next().toDate().toISOString();
 	} catch (err) {
@@ -27,7 +33,7 @@ export function isCronDue(
 	try {
 		const expr = CronExpressionParser.parse(cron, {
 			currentDate: now,
-			tz: timezone || "Asia/Shanghai",
+			tz: timezone || DEFAULT_SCHEDULER_TIMEZONE,
 		});
 		const prev = expr.prev().toDate();
 
@@ -47,7 +53,7 @@ export function isCronDue(
  * Validate a cron expression. Returns { ok: true } if parseable,
  * otherwise { ok: false, error: string }.
  */
-export function validateCron(cron: string, timezone = "Asia/Shanghai"): { ok: true } | { ok: false; error: string } {
+export function validateCron(cron: string, timezone = DEFAULT_SCHEDULER_TIMEZONE): { ok: true } | { ok: false; error: string } {
 	const value = (cron ?? "").trim();
 	if (!value) return { ok: false, error: "Cron expression is required" };
 	const fields = value.split(/\s+/);
@@ -55,7 +61,7 @@ export function validateCron(cron: string, timezone = "Asia/Shanghai"): { ok: tr
 		return { ok: false, error: `Cron must have 5 fields (minute hour day month weekday), got ${fields.length}` };
 	}
 	try {
-		CronExpressionParser.parse(value, { tz: timezone || "Asia/Shanghai" });
+		CronExpressionParser.parse(value, { tz: timezone || DEFAULT_SCHEDULER_TIMEZONE });
 		return { ok: true };
 	} catch (err) {
 		return { ok: false, error: err instanceof Error ? err.message : String(err) };
