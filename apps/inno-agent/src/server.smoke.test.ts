@@ -273,6 +273,32 @@ describe("server smoke", () => {
 		expect(await res.json()).toEqual([]);
 	});
 
+	it("wiki: pages/graph/stats return 200, missing page 404, traversal 400", async () => {
+		expect((await api("/api/wiki/pages")).status).toBe(200);
+		expect((await api("/api/wiki/graph")).status).toBe(200);
+		expect((await api("/api/wiki/stats")).status).toBe(200);
+		expect((await api("/api/wiki/page?path=wiki/concepts/nope.md")).status).toBe(404);
+		expect((await api("/api/wiki/page?path=../escape.md")).status).toBe(400);
+	});
+
+	it("POST /api/l2/raw/upload stores a file and rejects empty payloads", async () => {
+		const bad = await fetch(`http://127.0.0.1:${port}/api/l2/raw/upload`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fileName: "x.md" }),
+		});
+		expect(bad.status).toBe(400);
+
+		const ok = await fetch(`http://127.0.0.1:${port}/api/l2/raw/upload`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fileName: "notes.md", mimeType: "text/markdown", dataBase64: Buffer.from("# hi").toString("base64") }),
+		});
+		expect(ok.status).toBe(201);
+		const body = (await ok.json()) as { rawPath: string };
+		expect(body.rawPath).toMatch(/^raw[\\/]uploads[\\/].*\.md$/);
+	});
+
 	it("GET /api/workspaces returns 200 with the default workspaces", async () => {
 		const res = await api("/api/workspaces");
 		expect(res.status).toBe(200);
