@@ -16,6 +16,7 @@
 
 import { readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
+import { wikiPathJoin } from "./wiki-paths.js";
 import { UndirectedGraph } from "graphology";
 import louvainImport from "graphology-communities-louvain";
 
@@ -39,7 +40,7 @@ const MIN_COMMUNITY_SIZE = 3;
  * "connects everything" super-node AND inflate the degree of exactly the nodes
  * it ranks — a feedback loop. It is therefore excluded from the graph.
  */
-export const OVERVIEW_PATH = join("wiki", "analysis", "overview.md");
+export const OVERVIEW_PATH = wikiPathJoin("wiki", "analysis", "overview.md");
 
 export interface WikiGraphNode {
 	id: string;
@@ -128,7 +129,7 @@ function readAllPages(l2DataDir: string): PageRecord[] {
 		}
 		for (const file of files) {
 			if (!file.endsWith(".md")) continue;
-			const wikiPath = join("wiki", sub, file);
+			const wikiPath = wikiPathJoin("wiki", sub, file);
 			if (wikiPath === OVERVIEW_PATH) continue;
 			const { frontmatter, body } = parseFrontmatter(readText(join(l2DataDir, wikiPath)));
 			if (!frontmatter) continue;

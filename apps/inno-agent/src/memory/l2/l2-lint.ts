@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { wikiPathJoin } from "./wiki-paths.js";
 import { parse as parseYaml } from "yaml";
 
 import { fileExists, readText } from "../../storage/file-store.js";
@@ -74,7 +75,7 @@ function wikiPagePaths(l2DataDir: string): string[] {
 		const absolute = join(l2DataDir, "wiki", directory);
 		if (!fileExists(absolute)) continue;
 		for (const file of readdirSync(absolute).filter((candidate) => candidate.endsWith(".md")).sort()) {
-			paths.push(join("wiki", directory, file));
+			paths.push(wikiPathJoin("wiki", directory, file));
 		}
 	}
 	return paths;

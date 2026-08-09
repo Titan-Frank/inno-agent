@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
+import { wikiPathJoin } from "./wiki-paths.js";
 
 import { complete } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
@@ -270,7 +271,7 @@ function pageDirForType(type: LinkablePageType): string {
 }
 
 function relativePagePath(type: LinkablePageType, filename: string): string {
-	return join("wiki", pageDirForType(type), filename);
+	return wikiPathJoin("wiki", pageDirForType(type), filename);
 }
 
 function findExistingPage(l2DataDir: string, item: LinkedItem): string {
@@ -332,7 +333,7 @@ function readAllWikiPageAliases(l2DataDir: string): { title: string; path: strin
 		if (!existsSync(dir)) continue;
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".md")) continue;
-			const path = join("wiki", dirName, file);
+			const path = wikiPathJoin("wiki", dirName, file);
 			const { frontmatter } = parseFrontmatter(readText(join(l2DataDir, path)));
 			pages.push({ title: frontmatter?.title || basename(file, extname(file)), path });
 		}

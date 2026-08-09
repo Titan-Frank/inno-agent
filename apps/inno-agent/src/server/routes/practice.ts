@@ -1,6 +1,7 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
+import { wikiPathJoin } from "../../memory/l2/wiki-paths.js";
 import { logger } from "../../logger.js";
 import { serializeFrontmatter } from "../../memory/l2/wiki-maintainer.js";
 import { ensureDir, writeText } from "../../storage/file-store.js";
@@ -97,7 +98,7 @@ export async function handlePracticeRoutes(
 		const ws = workspaceRegistry.getWorkspace(record.workspaceId);
 
 		const now = new Date().toISOString();
-		const wikiRelPath = join("wiki", "analysis", `run-${record.id}.md`);
+		const wikiRelPath = wikiPathJoin("wiki", "analysis", `run-${record.id}.md`);
 		const fullPath = join(l2DataDir, wikiRelPath);
 		if (existsSync(fullPath)) {
 			json(res, 409, { error: "Run already archived", path: wikiRelPath });

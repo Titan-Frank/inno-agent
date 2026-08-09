@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { wikiPathJoin } from "./wiki-paths.js";
 import { parse as parseYaml, Document as YamlDocument } from "yaml";
 import { ensureDir, writeText, readText, appendText, fileExists } from "../../storage/file-store.js";
 import type {
@@ -288,7 +289,7 @@ export function createSourcePage(
 	const ref = extractedPath ? `\n## 来源\n\n完整提取文本: \`${extractedPath}\`\n` : "";
 	const body = `\n# ${entry.title}\n\n${summaryBody}\n${ref}`;
 	writeText(join(dir, filename), serializeFrontmatter(fm) + body);
-	return join("wiki", "sources", filename);
+	return wikiPathJoin("wiki", "sources", filename);
 }
 
 // ============================================================================
@@ -431,7 +432,7 @@ function listWikiPagesForIndex(
 		if (!fileExists(dir)) continue;
 		const files = readDirectoryMdFiles(dir);
 		for (const file of files) {
-			const wikiPath = join("wiki", TYPE_DIR_MAP[type], file);
+			const wikiPath = wikiPathJoin("wiki", TYPE_DIR_MAP[type], file);
 			items.push(readWikiPageIndexItem(l2DataDir, fallbackTitleByPath.get(wikiPath) ?? file.replace(/\.md$/, ""), wikiPath));
 		}
 	}
