@@ -8,7 +8,7 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeF
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-import { loadConfig, saveConfig, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig } from "./config.js";
+import { loadConfig, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
 import { ensureDir, readJson, readText, writeJson, writeText } from "./storage/file-store.js";
@@ -21,9 +21,6 @@ import {
 	initSession,
 	isQueueTaskCancelled,
 	reloadResources,
-	switchSessionFile,
-	syncConfig,
-	applyWorkspaceCwd,
 	setWorkspaceCwdResolver,
 } from "./agent/pi-runner.js";
 import { completePromptOnce, runPromptSerialized, runPromptStreamingInSession, runPromptInSession, abortPromptForTurnToken } from "./agent/pi-runner.js";
@@ -37,12 +34,10 @@ import type { PersonalBridgeChannelConfig } from "./config.js";
 import { JobStore } from "./scheduler/job-store.js";
 import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
-import { json, matchRoute, readBody } from "./server/http-helpers.js";
+import { json } from "./server/http-helpers.js";
 import {
-	contentDispositionAttachment,
 	safeJoin,
 	slugifySkillName,
-	WORKSPACE_IGNORES,
 } from "./server/file-helpers.js";
 import { handleChannelsRoutes } from "./server/routes/channels.js";
 import { handleJobsRoutes } from "./server/routes/jobs.js";
@@ -68,7 +63,7 @@ import { logger } from "./logger.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
 import { questionBridge } from "./agent/question-bridge.js";
 import { streamRegistry } from "./chat/stream-registry.js";
-import { DEFAULT_WORKSPACE_ID, TEMP_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
+import { DEFAULT_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
 import { createContentSource, type RemoteContentSource } from "./content-source/index.js";
 import { mapWithConcurrency } from "./content-source/types.js";
 import { RunRecordStore } from "./terminal/run-record-store.js";

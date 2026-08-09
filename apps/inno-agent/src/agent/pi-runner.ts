@@ -28,7 +28,6 @@ let _runtime: AgentSessionRuntime | null = null;
 let _queue: Promise<void> = Promise.resolve();
 let _workspaceDir = "";
 let _currentCwd = "";
-let _config: InnoConfig | null = null;
 let _configHolder: ConfigHolder | null = null;
 let _cwdResolver: ((sessionPath: string) => string | null) | null = null;
 let _activePromptToken: string | null = null;
@@ -311,7 +310,6 @@ export async function initSession(
 	runtime.setRebindSession(bindSessionExtensions);
 
 	_runtime = runtime;
-	_config = config;
 	_configHolder = configHolder;
 	_workspaceDir = paths.workspaceDir;
 	_currentCwd = cwd;
@@ -345,7 +343,6 @@ function modelConfigToProviderModel(model: InnoConfig["providers"][string]["mode
  */
 export async function refreshConfiguredProviders(config: InnoConfig): Promise<void> {
 	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
-	_config = config;
 	if (_configHolder) _configHolder.current = config;
 
 	// Drop providers that were registered before but are no longer in config.
@@ -380,7 +377,6 @@ export async function refreshConfiguredProviders(config: InnoConfig): Promise<vo
 }
 
 export function syncConfig(config: InnoConfig): void {
-	_config = config;
 	if (_configHolder) _configHolder.current = config;
 }
 
