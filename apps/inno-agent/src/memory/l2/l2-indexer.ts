@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { wikiPathJoin } from "./wiki-paths.js";
 import { readText, fileExists } from "../../storage/file-store.js";
 import { parseFrontmatter } from "./wiki-maintainer.js";
 import type { L2IndexStore, L2PageDoc } from "./l2-index-store.js";
@@ -81,7 +82,7 @@ export function indexAllPages(store: L2IndexStore, l2DataDir: string): { indexed
 			continue;
 		}
 		for (const f of files) {
-			const wikiPath = join("wiki", sub, f);
+			const wikiPath = wikiPathJoin("wiki", sub, f);
 			present.add(wikiPath);
 			if (indexPage(store, l2DataDir, wikiPath)) indexed++;
 		}

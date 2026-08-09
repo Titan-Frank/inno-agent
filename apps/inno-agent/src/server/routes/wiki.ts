@@ -1,6 +1,7 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
 import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
+import { wikiPathJoin } from "../../memory/l2/wiki-paths.js";
 import { logger } from "../../logger.js";
 import { getL2Memory } from "../../memory/l2/l2-memory.js";
 import { readManifest, removeWikiPathFromManifest } from "../../memory/l2/manifest-store.js";
@@ -30,7 +31,7 @@ function listWikiPagePaths(l2DataDir: string): string[] {
 		if (!existsSync(dir)) continue;
 		for (const file of readdirSync(dir)) {
 			if (file.endsWith(".md")) {
-				paths.push(join("wiki", dirName, file));
+				paths.push(wikiPathJoin("wiki", dirName, file));
 			}
 		}
 	}

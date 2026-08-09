@@ -115,6 +115,8 @@ src/server/
 ✅ P1 尾巴：personal-dispatcher 路由测试 + L3 条件测试（PR #149）
 ✅ P5 README Non-goals + session_busy 覆盖审计（docs/p5-non-goals）
 整改计划全部完成 🎉（L1 profile-updater 增量测试随 L1 规则演进另行安排）
+
+> 后话（2026-08-09 v0.4.8 发版）：P0 加的 Windows CI 测试门禁当场抓到 3 个真实 bug——L2 wiki 逻辑路径用 `path.join` 构造，在 Windows 上产生反斜杠标识符，链接解析/图谱边/overview 统计全挂（`wiki-linker`/`wiki-graph`/`overview` 三个测试红）。修复：新增 `memory/l2/wiki-paths.ts`（`wikiPathJoin`/`toWikiPath`），10 处逻辑路径构造点全部改正斜杠。门禁价值即刻兑现。
 ```
 
 依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。
