@@ -4,7 +4,7 @@
 >
 > 状态图例：✅ 已完成 / 🚧 进行中 / ⬜ 未开始
 >
-> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134，测试 17 文件/101 用例 → 23 文件/144 用例）**。下一站 P3（L1 语言正则 + 命名诚实性），然后 P2 拆 server.ts。
+> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134，测试 17 文件/101 用例 → 23 文件/144 用例），P3 完成待合并（`fix/p3-mastery-honesty`）**。下一站 P2 拆 server.ts。
 
 ## 总体原则
 
@@ -65,19 +65,20 @@ src/server/
 - 共享状态经 `context.ts` 显式传参，不引入 DI 框架。
 - 拆完后各路由域独立可测，测试再逐步下沉。
 
-## P3 · 模型与命名的诚实性（需拍板）
+## P3 · 模型与命名的诚实性 ✅（`fix/p3-mastery-honesty`）
 
 共同点："演示能跑、泛化不行"。修法不是换更强算法，而是让系统声称的和做的一致。
 
-**L1 掌握度模型**
-- 最小修（推荐先做这个）：`confidence`/`stability` 改名或标注 `heuristic: true`；固定增量 +0.03/+0.02 收敛为配置项。
-- 彻底修：换简化 BKT/Elo（每知识点一个难度参数，练习对错驱动更新），3–5 天，可复用 `rebuildProfileFromEvents` 的事件重放。
-- **四语言正则必须修（这是 bug 不是风格）**：硬编码 Rust/C++/Python/TypeScript 让其他主题目标归档静默失效。改成从 L2 wiki 主题/用户目标文本动态匹配，正则只作兜底。
+**L1 掌握度模型** ✅（最小修路线）
+- ✅ 固定增量收敛为命名常量 `MASTERY_DELTAS`（auto-profile.ts），附 HONESTY NOTE 注释：无遗忘曲线、无题目难度，分数仅用于排序。
+- ✅ `KnowledgeState.mastery/confidence/stability` 三个字段加 JSDoc 标注启发式、非概率。
+- ✅ **四语言正则 bug 已修**：`targetMatchesGoal`/`targetMatchesKnowledge` 的 rust/c++/python/typescript 硬编码正则替换为通用主题匹配（提取拉丁 token ≥2 字符 + CJK bigram，意图词先剥离；2 字符 token 要求词边界防 "go" 误配 "good"）。新增 `auto-profile.test.ts` 9 个用例覆盖：非编程主题归档（"不再学习吉他"→"吉他入门"）、部分匹配、"go"/"good" 边界、知识点联动归档、幂等性。
+- ⬜ 彻底修（简化 BKT/Elo）暂缓——等最小修实际用起来再评估。
 
-**"语义检索"**
-- 诚实路线（推荐，1 天）：`semantic-chunker` 改名 `structural-chunker`，L2 检索统一表述为「词法检索 + 图扩展」。
-- 能力路线（暂缓）：PI SDK 无 embedding API，需自接 provider embedding 端点 + sqlite 向量表（schema 已预留 embeddings 表），1 周以上。个人知识库规模下 BM25+图扩展大概率够用，等真有检索质量投诉再做。
-- BM25 分值丢弃 / 图扩展分数拍脑袋：有 eval 阈值兜底，不算 bug。加注释标明"分数未标定，仅排序有效"。
+**"语义检索"** ✅（诚实路线）
+- ✅ `semantic-chunker` → `structural-chunker`（文件、符号、测试全改），其 doc 注释本就如实描述"按标题/段落/句读切分"。
+- ✅ l2-search.ts 图扩展权重处加注释：分数未标定、仅排序有效、跨查询不可比，质量回归靠 eval 阈值兜底。
+- ⬜ 能力路线（真 embedding 检索）暂缓：PI SDK 无 embedding API，需自接 provider 端点 + sqlite 向量表（schema 已预留），等真有检索质量投诉再做。
 
 ## P4 · 小坑批量修（各随所属模块的 PR 带走）
 
@@ -98,9 +99,9 @@ src/server/
 ```
 ✅ P0 全部（PR #133）
 ✅ P1.1 web DOM 环境 + P1.3 server.ts smoke 测试 + P1.2 首批（PR #134）
-下一站: P3 语言正则修复 + 命名诚实性（用户可感知，优先级高于拆文件）
-之后:   P2 server.ts 按域拆（每周 1–2 个域，穿插正常 feature 开发）
+✅ P3 语言正则修复 + 命名诚实性（fix/p3-mastery-honesty）
+下一站: P2 server.ts 按域拆（每周 1–2 个域，穿插正常 feature 开发）
 随手:   P1 尾巴（personal-dispatcher / L3 条件测试）+ P4 各项跟随所属模块的 PR
 ```
 
-依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则是唯一正在静默失效的用户可见 bug，提前于拆分。
+依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。

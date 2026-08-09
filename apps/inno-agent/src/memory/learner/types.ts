@@ -30,8 +30,15 @@ export interface KnowledgeState {
 	concept_id: string;
 	concept_name: string;
 	domain: string;
+	/**
+	 * Heuristic score in [0,1] accumulated from fixed per-event increments
+	 * (see MASTERY_DELTAS in auto-profile.ts). NOT a calibrated probability —
+	 * use for relative ordering (what to review first), not absolute claims.
+	 */
 	mastery: number;
+	/** Heuristic: how much evidence backs the mastery score. Not statistical confidence. */
 	confidence: number;
+	/** Heuristic: resistance to decay. Grows with positive deltas; no real forgetting model. */
 	stability: number;
 	last_practiced_at?: string;
 	review_due_at?: string;

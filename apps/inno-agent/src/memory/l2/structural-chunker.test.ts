@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { splitSemanticChunks } from "./semantic-chunker.js";
+import { splitStructuralChunks } from "./structural-chunker.js";
 
-describe("semantic L2 chunking", () => {
+describe("structural L2 chunking", () => {
 	it("keeps short content on the existing single-chunk path", () => {
-		expect(splitSemanticChunks("short text")).toEqual(["short text"]);
+		expect(splitStructuralChunks("short text")).toEqual(["short text"]);
 	});
 
-	it("prefers semantic boundaries and preserves the document tail", () => {
+	it("prefers structural boundaries and preserves the document tail", () => {
 		const content = `${"A".repeat(1_200)}\n\n## 第二节\n${"B".repeat(1_200)}\n\nTAIL_FACT`;
-		const chunks = splitSemanticChunks(content, { targetChars: 1_500, overlapChars: 50 });
+		const chunks = splitStructuralChunks(content, { targetChars: 1_500, overlapChars: 50 });
 
 		expect(chunks.length).toBeGreaterThan(1);
 		expect(chunks[0]).toMatch(/\n\n$/);
