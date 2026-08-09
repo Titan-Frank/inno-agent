@@ -71,7 +71,9 @@ if (parsed.options.sandbox) {
 			logger.info("[inno] Sandbox extension loaded");
 		}
 	} catch (err) {
-		logger.warn({ err }, "[inno] Failed to load pi-sandbox");
+		// pi-sandbox ships TS source only and is loaded via jiti — a version
+		// bump can break loading; it is pinned in package.json for that reason.
+		logger.warn({ err }, "[inno] Failed to load pi-sandbox (TS-source package loaded via jiti; check that the pinned version in package.json was not changed)");
 	}
 }
 

@@ -128,7 +128,8 @@
 		"tsx": "^4.20.3",
 		"typescript": "^5.9.2",
 		"vite": "^6.3.5",
-		"vitest": "^3.2.4"
+		"vitest": "^3.2.4",
+		"xlsx": "file:./vendor/xlsx-0.20.3.tgz"
 	},
 	"overrides": {
 		"@larksuiteoapi/node-sdk": {
@@ -138,6 +139,6 @@
 		"gaxios": {
 			"rimraf": "6.1.2"
 		},
-		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+		"xlsx": "$xlsx"
 	}
 }
