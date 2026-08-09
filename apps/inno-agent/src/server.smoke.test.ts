@@ -140,6 +140,20 @@ describe("server smoke", () => {
 		expect(res.status).toBe(200);
 	}, 60_000);
 
+	it("GET /api/sessions/:id returns 404 for a missing session", async () => {
+		const res = await api("/api/sessions/no-such-session.jsonl");
+		expect(res.status).toBe(404);
+	});
+
+	it("POST /api/sessions/:id/archive + unarchive round-trips", async () => {
+		const archive = await fetch(`http://127.0.0.1:${port}/api/sessions/some-session.jsonl/archive`, { method: "POST" });
+		expect(archive.status).toBe(200);
+		expect((await archive.json()) as { archived: boolean }).toEqual({ id: "some-session.jsonl", archived: true });
+		const unarchive = await fetch(`http://127.0.0.1:${port}/api/sessions/some-session.jsonl/unarchive`, { method: "POST" });
+		expect(unarchive.status).toBe(200);
+		expect((await unarchive.json()) as { archived: boolean }).toEqual({ id: "some-session.jsonl", archived: false });
+	});
+
 	it("GET /api/jobs returns 200", async () => {
 		const res = await api("/api/jobs");
 		expect(res.status).toBe(200);
