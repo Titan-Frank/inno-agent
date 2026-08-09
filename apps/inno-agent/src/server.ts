@@ -12,7 +12,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { getL2Memory } from "./memory/l2/l2-memory.js";
 import { buildWikiGraph } from "./memory/l2/wiki-graph.js";
-import { loadConfig, saveConfig, setDefaultModel, upsertProvider, deleteProvider, deleteModel, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig, type InnoModelConfig, type InnoProviderConfig } from "./config.js";
+import { loadConfig, saveConfig, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
 import {
@@ -23,20 +23,16 @@ import {
 	upsertShowcaseIndex,
 	type CaseSpec,
 } from "./showcase/case-exporter.js";
-import { probeProviderModels } from "./agent/model-probe.js";
 import { ensureDir, readJson, readText, writeJson, writeText } from "./storage/file-store.js";
 import {
 	createNewSession,
 	getCurrentSessionId,
-	getAvailableModels,
 	getLoadedSkills,
 	getSession,
 	getActivePromptToken,
 	initSession,
 	isQueueTaskCancelled,
-	refreshConfiguredProviders,
 	reloadResources,
-	switchModel,
 	switchSessionFile,
 	syncConfig,
 	applyWorkspaceCwd,
@@ -52,18 +48,12 @@ import { BridgeChannel } from "./channels/bridge/bridge-channel.js";
 import { WeChatChannel } from "./channels/wechat/wechat-channel.js";
 import type { PersonalBridgeChannelConfig } from "./config.js";
 import { JobStore } from "./scheduler/job-store.js";
-import {
-	deleteManagedServer,
-	getMcpOverview,
-	seedManagedMcpConfig,
-	setManagedServerDisabled,
-	upsertManagedServer,
-	type McpServerEntry,
-} from "./mcp/mcp-config-store.js";
+import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
 import { json, matchRoute, readBody } from "./server/http-helpers.js";
 import { handleChannelsRoutes } from "./server/routes/channels.js";
 import { handleJobsRoutes } from "./server/routes/jobs.js";
+import { handleSettingsRoutes } from "./server/routes/settings.js";
 import { parseFrontmatter, serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { readManifest, removeWikiPathFromManifest } from "./memory/l2/manifest-store.js";
 import { loadProfile, saveProfile } from "./memory/learner/profile-store.js";
@@ -424,10 +414,6 @@ async function reloadFeishuChannel(): Promise<void> {
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-function maskSecret(value: string | undefined): string {
-	return value ? `****${value.slice(-4)}` : "";
-}
-
 /**
  * Persist inline chat images (base64 data URLs from the web UI) to a
  * workspace-local `.chat-images/` directory so file-path-based tools
@@ -534,142 +520,6 @@ function prependImagePathsHint(prompt: string, imagePaths: string[]): string {
 		`[用户本轮上传了 ${imagePaths.length} 张图片，已保存到工作区：\n${list}\n` +
 		`如果需要识别图片中的文字（当前模型可能不支持图片识别），请调用 ocr_image 工具并传入上述路径。]\n\n${prompt}`
 	);
-}
-
-function providerModelToRuntimeModel(model: InnoModelConfig, provider: string, baseUrl: string) {
-	return {
-		id: model.id,
-		name: model.name,
-		provider,
-		reasoning: model.reasoning,
-		input: model.input,
-		contextWindow: model.contextWindow,
-		maxTokens: model.maxTokens,
-		baseUrl,
-	};
-}
-
-function buildSafeSettings() {
-	const session = getSession();
-	const currentModel = session.model;
-	const configuredModels = Object.entries(config.providers).flatMap(([providerId, providerConfig]) =>
-		providerConfig.models.map((model) => providerModelToRuntimeModel(model, providerId, providerConfig.baseUrl)),
-	);
-	const availableModels = getAvailableModels().map((model) => ({
-		id: model.id,
-		name: model.name,
-		provider: model.provider,
-		reasoning: model.reasoning,
-		input: model.input,
-		contextWindow: model.contextWindow,
-		maxTokens: model.maxTokens,
-		baseUrl: model.baseUrl,
-	}));
-
-	return {
-		...config,
-		defaultProvider: currentModel?.provider ?? config.defaultProvider,
-		defaultModel: currentModel?.id ?? config.defaultModel,
-		configuredModels,
-		availableModels,
-		providers: Object.fromEntries(
-			Object.entries(config.providers).map(([providerId, providerConfig]) => [
-				providerId,
-				{
-					...providerConfig,
-					apiKey: maskSecret(providerConfig.apiKey),
-					headers: providerConfig.headers
-						? Object.fromEntries(Object.entries(providerConfig.headers).map(([key, value]) => [key, maskSecret(value)]))
-						: undefined,
-				},
-			]),
-		),
-		feishu: config.feishu
-			? { ...config.feishu, appSecret: config.feishu.appSecret ? "****" : "" }
-			: undefined,
-		bridge: config.bridge
-			? { token: maskSecret(config.bridge.token) }
-			: undefined,
-		github: config.github
-			? { token: maskSecret(config.github.token) }
-			: undefined,
-		ocrApi: config.ocrApi
-			? {
-				token: maskSecret(config.ocrApi.token),
-				model: config.ocrApi.model,
-				baseUrl: config.ocrApi.baseUrl,
-			}
-			: undefined,
-		tavily: config.tavily
-			? { apiKey: maskSecret(config.tavily.apiKey) }
-			: undefined,
-		contentHub: config.contentHub
-			? { ...config.contentHub, token: maskSecret(config.contentHub.token) }
-			: undefined,
-	};
-}
-
-function parseModelConfig(value: unknown): InnoModelConfig {
-	if (!value || typeof value !== "object") throw new Error("Invalid model");
-	const record = value as Record<string, unknown>;
-	const id = typeof record.id === "string" ? record.id.trim() : "";
-	if (!id) throw new Error("Model id is required");
-	return {
-		id,
-		name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : id,
-		reasoning: Boolean(record.reasoning),
-		input: ("input" in record)
-			? (Array.isArray(record.input) && record.input.includes("image") ? ["text", "image"] : ["text"])
-			: ["text", "image"],
-		contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : Number(record.contextWindow ?? 128000),
-		maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : Number(record.maxTokens ?? 8192),
-	};
-}
-
-function parseStringHeaders(value: unknown): Record<string, string> | undefined {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-	const headers: Record<string, string> = {};
-	for (const [key, headerValue] of Object.entries(value as Record<string, unknown>)) {
-		const normalizedKey = key.trim();
-		if (normalizedKey && typeof headerValue === "string") {
-			headers[normalizedKey] = headerValue;
-		}
-	}
-	return Object.keys(headers).length > 0 ? headers : undefined;
-}
-
-function parseProviderPayload(body: Record<string, unknown>): {
-	providerId: string;
-	provider: InnoProviderConfig;
-	makeDefault: boolean;
-	preserveApiKey: boolean;
-	preserveHeaders: boolean;
-} {
-	const providerId = typeof body.providerId === "string" ? body.providerId.trim() : "";
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(providerId)) {
-		throw new Error("Provider id must use letters, numbers, dot, underscore, or dash");
-	}
-	const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
-	const apiKey = typeof body.apiKey === "string" ? body.apiKey : "";
-	const api = typeof body.api === "string" ? body.api.trim() : "openai-completions";
-	const headers = parseStringHeaders(body.headers);
-	const rawModels = Array.isArray(body.models) ? body.models : [];
-	const models = rawModels.map(parseModelConfig);
-	return {
-		providerId,
-		provider: {
-			baseUrl,
-			apiKey,
-			api,
-			...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-			...(body.authHeader === true ? { authHeader: true } : {}),
-			...(body.bypassProxy === true ? { bypassProxy: true } : {}),
-			models,
-		},
-		makeDefault: Boolean(body.makeDefault),
-		preserveApiKey: Boolean(body.preserveApiKey),
-		preserveHeaders: !Object.prototype.hasOwnProperty.call(body, "headers"),
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -3979,413 +3829,15 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
-		// --- Settings API ---
-		if (method === "GET" && url === "/api/settings") {
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		if (method === "POST" && url === "/api/settings/model") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const provider = typeof body.provider === "string" ? body.provider.trim() : "";
-			const model = typeof body.model === "string" ? body.model.trim() : "";
-			if (!provider || !model) {
-				json(res, 400, { error: "Missing provider or model" });
-				return;
-			}
-
-			await switchModel(provider, model);
-			config = saveConfig(paths.configPath, setDefaultModel(config, provider, model));
-			syncConfig(config);
-			const currentModel = getSession().model;
-			json(res, 200, {
-				defaultProvider: currentModel?.provider ?? provider,
-				defaultModel: currentModel?.id ?? model,
-			});
-			return;
-		}
-
-		if ((method === "PUT" || method === "POST" || method === "PATCH") && url === "/api/settings/providers") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const payload = parseProviderPayload(body);
-			config = saveConfig(
-				paths.configPath,
-				upsertProvider(config, payload.providerId, payload.provider, {
-					makeDefault: payload.makeDefault,
-					preserveApiKey: payload.preserveApiKey,
-					preserveHeaders: payload.preserveHeaders,
-				}),
-			);
-			applyProviderProxyBypass(config);
-			await refreshConfiguredProviders(config);
-			if (payload.makeDefault) {
-				await switchModel(config.defaultProvider, config.defaultModel);
-				config = saveConfig(paths.configPath, setDefaultModel(config, config.defaultProvider, config.defaultModel));
-			}
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// Probe a provider's model list server-side (the browser can't call
-		// provider APIs directly due to CORS + API key exposure). If apiKey is
-		// omitted, fall back to the stored key of an existing provider.
-		if (method === "POST" && url === "/api/settings/providers/probe-models") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
-			const api = typeof body.api === "string" ? body.api : undefined;
-			let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
-			const providerId = typeof body.providerId === "string" ? body.providerId.trim() : "";
-			if ((!apiKey || apiKey.startsWith("****")) && providerId) {
-				apiKey = config.providers?.[providerId]?.apiKey ?? "";
-			}
-			try {
-				const result = await probeProviderModels({ baseUrl, apiKey, api });
-				json(res, 200, result);
-			} catch (err) {
-				json(res, 400, { error: err instanceof Error ? err.message : String(err) });
-			}
-			return;
-		}
-
-		// Delete a single model from a provider. Must be matched before the
-		// provider-delete route below (which uses startsWith on the same prefix).
-		if (method === "DELETE" && /^\/api\/settings\/providers\/[^/]+\/models\/[^/]+$/.test(url)) {
-			const rest = url.slice("/api/settings/providers/".length);
-			const [providerPart, modelPart] = rest.split("/models/");
-			const providerId = decodeURIComponent(providerPart);
-			const modelId = decodeURIComponent(modelPart);
-			if (!providerId || !modelId) {
-				json(res, 400, { error: "Missing provider or model id" });
-				return;
-			}
-			try {
-				config = saveConfig(paths.configPath, deleteModel(config, providerId, modelId));
-				await refreshConfiguredProviders(config);
-			} catch (err) {
-				logger.error({ err, providerId, modelId }, "failed to delete model");
-				json(res, 400, { error: err instanceof Error ? err.message : String(err) });
-				return;
-			}
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		if (method === "DELETE" && url.startsWith("/api/settings/providers/")) {
-			const providerId = decodeURIComponent(url.slice("/api/settings/providers/".length));
-			if (!providerId) {
-				json(res, 400, { error: "Missing provider id" });
-				return;
-			}
-			try {
-				config = saveConfig(paths.configPath, deleteProvider(config, providerId));
-				await refreshConfiguredProviders(config);
-			} catch (err) {
-				logger.error({ err }, "failed to update channel settings");
-				json(res, 400, { error: err instanceof Error ? err.message : String(err) });
-				return;
-			}
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- Channels Settings ---
-		if (method === "PUT" && url === "/api/settings/channels") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			try {
-				// Update feishu config
-				if (body.feishu && typeof body.feishu === "object") {
-					const feishuBody = body.feishu as Record<string, unknown>;
-					const appId = typeof feishuBody.appId === "string" ? feishuBody.appId.trim() : "";
-					const appSecret = typeof feishuBody.appSecret === "string" ? feishuBody.appSecret.trim() : "";
-					if (appId) {
-						config.feishu = {
-							appId,
-							appSecret: appSecret || config.feishu?.appSecret || "",
-						};
-					}
-				}
-				// Update channels config
-				if (body.channels && typeof body.channels === "object") {
-					const channels = body.channels as Record<string, unknown>;
-					config.channels = config.channels ?? {};
-					for (const name of ["feishu", "qq", "wechat"] as const) {
-						const ch = channels[name];
-						if (ch && typeof ch === "object") {
-							const chObj = ch as Record<string, unknown>;
-							(config.channels as Record<string, unknown>)[name] = {
-								...((config.channels as Record<string, unknown>)?.[name] as object ?? {}),
-								enabled: typeof chObj.enabled === "boolean" ? chObj.enabled : false,
-								...(typeof chObj.personalOnly === "boolean" ? { personalOnly: chObj.personalOnly } : {}),
-								...(Array.isArray(chObj.allowedUserIds) ? { allowedUserIds: chObj.allowedUserIds.filter((v: unknown) => typeof v === "string") } : {}),
-								...(typeof chObj.mode === "string" ? { mode: chObj.mode } : {}),
-								...(typeof chObj.sidecarBaseUrl === "string" ? { sidecarBaseUrl: chObj.sidecarBaseUrl.trim() } : {}),
-							};
-						}
-					}
-				}
-				// Update bridge config
-				if (body.bridge && typeof body.bridge === "object") {
-					const bridgeBody = body.bridge as Record<string, unknown>;
-					const token = typeof bridgeBody.token === "string" ? bridgeBody.token.trim() : "";
-					if (token && !token.startsWith("****")) {
-						config.bridge = { token };
-					} else if (!config.bridge && token) {
-						// preserve existing
-					}
-				}
-				config = saveConfig(paths.configPath, config);
-			} catch (err) {
-				logger.warn({ err }, "failed to update channel settings");
-				json(res, 400, { error: err instanceof Error ? err.message : String(err) });
-				return;
-			}
-
-			// Hot-reload Feishu channel: stop old instance, create new one if configured.
-			try {
-				await reloadFeishuChannel();
-			} catch (err) {
-				logger.warn({ err }, "feishu channel hot-reload failed");
-			}
-
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- Memory Settings (L3 cross-conversation recall toggle) ---
-		if (method === "PUT" && url === "/api/settings/memory") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const keys = ["l1Enabled", "l2Enabled", "l3Enabled"] as const;
-			if (keys.every((k) => typeof body[k] !== "boolean")) {
-				json(res, 400, { error: "Provide at least one of l1Enabled / l2Enabled / l3Enabled (boolean)" });
-				return;
-			}
-			for (const k of keys) {
-				if (body[k] !== undefined && typeof body[k] !== "boolean") {
-					json(res, 400, { error: `${k} must be a boolean` });
-					return;
-				}
-			}
-			// Merge over current values so a partial payload leaves the other
-			// layers untouched. normalizeMemoryConfig backfills defaults.
-			const current = config.memory ?? { l1Enabled: true, l2Enabled: true, l3Enabled: true };
-			config.memory = {
-				l1Enabled: typeof body.l1Enabled === "boolean" ? body.l1Enabled : current.l1Enabled,
-				l2Enabled: typeof body.l2Enabled === "boolean" ? body.l2Enabled : current.l2Enabled,
-				l3Enabled: typeof body.l3Enabled === "boolean" ? body.l3Enabled : current.l3Enabled,
-			};
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- Simple Mode toggle (streamlined experience: force-locks memory off
-		// at runtime and hides notebook/profile tabs; does not touch memory config) ---
-		if (method === "PUT" && url === "/api/settings/simple-mode") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.enabled !== "boolean") {
-				json(res, 400, { error: "enabled must be a boolean" });
-				return;
-			}
-			config.simpleMode = { enabled: body.enabled };
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- MCP master switch. Takes effect on the next process start: the
-		// extension set is fixed at boot, so toggling loads/unloads the
-		// pi-mcp-adapter extension only after a restart. The UI compares
-		// `mcp.enabled` (config) against GET /api/mcp's `adapterLoaded`
-		// (runtime) to surface the restart hint.
-		if (method === "PUT" && url === "/api/settings/mcp") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.enabled !== "boolean") {
-				json(res, 400, { error: "enabled must be a boolean" });
-				return;
-			}
-			config.mcp = { enabled: body.enabled };
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- MCP server management (managed file: <configDir>/mcp.json) ---
-		if (method === "GET" && url === "/api/mcp") {
-			json(res, 200, getMcpOverview(config, paths));
-			return;
-		}
-
-		const mcpServerPutMatch = matchRoute("PUT", method, url, "/api/mcp/servers/:name");
-		if (mcpServerPutMatch) {
-			const name = mcpServerPutMatch.name;
-			const body = (await readBody(req)) as McpServerEntry;
-			try {
-				upsertManagedServer(paths, name, body);
-			} catch (err) {
-				json(res, 400, { error: err instanceof Error ? err.message : "Invalid server definition" });
-				return;
-			}
-			// Best-effort hot apply; if the runtime doesn't pick it up the UI
-			// tells the user to restart (same fire-and-forget pattern as skills).
-			scheduleSkillsReload();
-			json(res, 200, getMcpOverview(config, paths));
-			return;
-		}
-
-		const mcpServerPatchMatch = matchRoute("PATCH", method, url, "/api/mcp/servers/:name");
-		if (mcpServerPatchMatch) {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.disabled !== "boolean") {
-				json(res, 400, { error: "disabled must be a boolean" });
-				return;
-			}
-			if (!setManagedServerDisabled(paths, mcpServerPatchMatch.name, body.disabled)) {
-				json(res, 404, { error: "Server not found in managed config (it may come from an external config file)" });
-				return;
-			}
-			scheduleSkillsReload();
-			json(res, 200, getMcpOverview(config, paths));
-			return;
-		}
-
-		const mcpServerDeleteMatch = matchRoute("DELETE", method, url, "/api/mcp/servers/:name");
-		if (mcpServerDeleteMatch) {
-			if (!deleteManagedServer(paths, mcpServerDeleteMatch.name)) {
-				json(res, 404, { error: "Server not found in managed config (it may come from an external config file)" });
-				return;
-			}
-			scheduleSkillsReload();
-			json(res, 200, getMcpOverview(config, paths));
-			return;
-		}
-
-		if (method === "PUT" && url === "/api/settings/github") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.token !== "string") {
-				json(res, 400, { error: "Missing token (string)" });
-				return;
-			}
-			const incoming = body.token.trim();
-			// A masked value (e.g. "****abcd") means "keep the existing token".
-			const token = incoming.startsWith("****") ? (config.github?.token ?? "") : incoming;
-			config.github = token ? { token } : undefined;
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			// Rebuild the content source so the new auth (and higher limit) applies.
-			invalidateContentSource();
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- OCR API settings (Baidu PaddleOCR-VL token / model / baseUrl) ---
-		if (method === "PUT" && url === "/api/settings/ocr") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.token !== "string") {
-				json(res, 400, { error: "Missing token (string)" });
-				return;
-			}
-			const incoming = body.token.trim();
-			// A masked value (e.g. "****abcd") means "keep the existing token".
-			const token = incoming.startsWith("****") ? (config.ocrApi?.token ?? "") : incoming;
-			const model = typeof body.model === "string" ? body.model.trim() : config.ocrApi?.model;
-			const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : config.ocrApi?.baseUrl;
-			if (!token) {
-				config.ocrApi = undefined;
-			} else {
-				config.ocrApi = {
-					token,
-					model: model || undefined,
-					baseUrl: baseUrl || undefined,
-				};
-			}
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- Tavily settings (web_search tool API key) ---
-		if (method === "PUT" && url === "/api/settings/tavily") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			if (typeof body.apiKey !== "string") {
-				json(res, 400, { error: "Missing apiKey (string)" });
-				return;
-			}
-			const incoming = body.apiKey.trim();
-			// A masked value (e.g. "****abcd") means "keep the existing key".
-			const apiKey = incoming.startsWith("****") ? (config.tavily?.apiKey ?? "") : incoming;
-			if (!apiKey) {
-				config.tavily = undefined;
-			} else {
-				config.tavily = { apiKey };
-			}
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// --- Content Hub settings (source for skill library + presets) ---
-		if (method === "PUT" && url === "/api/settings/content-hub") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const current = config.contentHub ?? normalizeContentHubConfig(undefined, config.github?.token);
-			const str = (key: string, fallback: string): string =>
-				typeof body[key] === "string" ? (body[key] as string).trim() : fallback;
-			// A masked token (e.g. "****abcd") means "keep the existing token".
-			const incomingToken = typeof body.token === "string" ? body.token.trim() : "";
-			const token = incomingToken.startsWith("****") ? current.token : incomingToken;
-			config.contentHub = normalizeContentHubConfig({
-				type: body.type === "bundle" ? "bundle" : "github",
-				owner: str("owner", current.owner),
-				repo: str("repo", current.repo),
-				ref: str("ref", current.ref),
-				skillsPath: str("skillsPath", current.skillsPath),
-				presetsPath: str("presetsPath", current.presetsPath),
-				baseUrl: str("baseUrl", current.baseUrl),
-				token,
-			});
-			config = saveConfig(paths.configPath, config);
-			syncConfig(config);
-			// Rebuild the content source so the new hub takes effect immediately.
-			invalidateContentSource();
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// PUT /api/settings/theme — persist UI theme preference
-		if (method === "PUT" && url === "/api/settings/theme") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const theme = typeof body.theme === "string" ? body.theme.trim() : "";
-			const ALLOWED_THEMES = ["light", "warm", "ocean", "innospark"];
-			if (!ALLOWED_THEMES.includes(theme)) {
-				json(res, 400, { error: `Invalid theme. Allowed: ${ALLOWED_THEMES.join(", ")}` });
-				return;
-			}
-			config.ui = { ...(config.ui ?? { theme: "light", closeBehavior: "ask" }), theme };
-			config = saveConfig(paths.configPath, config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
-
-		// PUT /api/settings/close-behavior — persist the cross-platform window-close preference
-		if (method === "PUT" && url === "/api/settings/close-behavior") {
-			const body = (await readBody(req)) as Record<string, unknown>;
-			const closeBehavior = body.closeBehavior;
-			if (closeBehavior !== "ask" && closeBehavior !== "hide" && closeBehavior !== "quit") {
-				json(res, 400, { error: "closeBehavior must be one of ask, hide, quit" });
-				return;
-			}
-			config.ui = {
-				...(config.ui ?? { theme: "light", closeBehavior: "ask" }),
-				closeBehavior,
-			};
-			config = saveConfig(paths.configPath, config);
-			json(res, 200, buildSafeSettings());
-			return;
-		}
+		// --- Settings + MCP API (extracted to server/routes/settings.ts) ---
+		if (await handleSettingsRoutes(req, res, method, url, {
+			paths,
+			getConfig: () => config,
+			setConfig: (next) => { config = next; },
+			reloadFeishuChannel,
+			scheduleSkillsReload,
+			invalidateContentSource,
+		})) return;
 
 		// --- Chat API ---
 		if (method === "POST" && url === "/api/chat") {
