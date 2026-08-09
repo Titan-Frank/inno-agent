@@ -223,6 +223,36 @@ describe("server smoke", () => {
 		expect(Array.isArray(await res.json())).toBe(true);
 	});
 
+	it("learner profile: goal create → patch → delete round-trip", async () => {
+		const profile = await api("/api/learner/profile");
+		expect(profile.status).toBe(200);
+
+		const created = await fetch(`http://127.0.0.1:${port}/api/learner/profile/goals`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ title: "smoke goal" }),
+		});
+		expect(created.status).toBe(201);
+		const goal = (await created.json()) as { goal_id: string; title: string };
+		expect(goal.title).toBe("smoke goal");
+
+		const patched = await fetch(`http://127.0.0.1:${port}/api/learner/profile/goals/${goal.goal_id}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ status: "paused" }),
+		});
+		expect(patched.status).toBe(200);
+
+		const removed = await fetch(`http://127.0.0.1:${port}/api/learner/profile/goals/${goal.goal_id}`, { method: "DELETE" });
+		expect(removed.status).toBe(200);
+		const gone = await fetch(`http://127.0.0.1:${port}/api/learner/profile/goals/${goal.goal_id}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ status: "active" }),
+		});
+		expect(gone.status).toBe(404);
+	});
+
 	it("POST /api/skills/upload validates required fields", async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/api/skills/upload`, {
 			method: "POST",
