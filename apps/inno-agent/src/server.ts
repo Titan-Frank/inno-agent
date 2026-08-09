@@ -62,9 +62,9 @@ import {
 	upsertManagedServer,
 	type McpServerEntry,
 } from "./mcp/mcp-config-store.js";
-import { executeJob } from "./scheduler/job-runner.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
-import { validateCron } from "./scheduler/cron-utils.js";
+import { json, matchRoute, readBody } from "./server/http-helpers.js";
+import { handleJobsRoutes } from "./server/routes/jobs.js";
 import { parseFrontmatter, serializeFrontmatter } from "./memory/l2/wiki-maintainer.js";
 import { readManifest, removeWikiPathFromManifest } from "./memory/l2/manifest-store.js";
 import { loadProfile, saveProfile } from "./memory/learner/profile-store.js";
@@ -425,32 +425,6 @@ async function reloadFeishuChannel(): Promise<void> {
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-function readBody(req: HttpReq): Promise<unknown> {
-	return new Promise((resolve, reject) => {
-		let data = "";
-		req.on("data", (chunk: Buffer) => {
-			data += chunk.toString();
-		});
-		req.on("end", () => {
-			try {
-				resolve(data ? JSON.parse(data) : {});
-			} catch (err) {
-				reject(new Error("Invalid JSON body"));
-			}
-		});
-		req.on("error", reject);
-	});
-}
-
-function json(res: ServerResponse, status: number, data: unknown): void {
-	const body = data !== null ? JSON.stringify(data) : "";
-	res.writeHead(status, {
-		"Content-Type": "application/json; charset=utf-8",
-		"Content-Length": Buffer.byteLength(body),
-	});
-	res.end(body);
-}
-
 function maskSecret(value: string | undefined): string {
 	return value ? `****${value.slice(-4)}` : "";
 }
@@ -697,37 +671,6 @@ function parseProviderPayload(body: Record<string, unknown>): {
 		preserveApiKey: Boolean(body.preserveApiKey),
 		preserveHeaders: !Object.prototype.hasOwnProperty.call(body, "headers"),
 	};
-}
-
-/**
- * Simple route matching with :param support.
- * Returns params object or null if no match.
- */
-function matchRoute(
-	method: string,
-	reqMethod: string,
-	reqUrl: string,
-	pattern: string,
-): Record<string, string> | null {
-	if (reqMethod !== method) return null;
-	const url = reqUrl.split("?")[0];
-	const patternParts = pattern.split("/");
-	const urlParts = url.split("/");
-	if (patternParts.length !== urlParts.length) return null;
-
-	const params: Record<string, string> = {};
-	for (let i = 0; i < patternParts.length; i++) {
-		if (patternParts[i].startsWith(":")) {
-			try {
-				params[patternParts[i].slice(1)] = decodeURIComponent(urlParts[i]);
-			} catch (err) {
-				params[patternParts[i].slice(1)] = urlParts[i];
-			}
-		} else if (patternParts[i] !== urlParts[i]) {
-			return null;
-		}
-	}
-	return params;
 }
 
 // ---------------------------------------------------------------------------
@@ -2508,21 +2451,8 @@ const server = createServer(async (req, res) => {
 			await ensureBootstrapped();
 		}
 
-		// --- Jobs CRUD ---
-		if (method === "GET" && url === "/api/jobs") {
-			json(res, 200, jobStore.list());
-			return;
-		}
-
-		if (method === "GET" && url === "/api/jobs/status") {
-			json(res, 200, jobStore.getStatus());
-			return;
-		}
-
-		if (method === "GET" && url === "/api/jobs/runs") {
-			json(res, 200, jobStore.listRuns());
-			return;
-		}
+		// --- Jobs CRUD (extracted to server/routes/jobs.ts) ---
+		if (await handleJobsRoutes(req, res, method, url, { jobStore, channelRegistry })) return;
 
 		if (method === "GET" && url === "/api/channels") {
 			json(res, 200, channelRegistry.all().map((channel) => {
@@ -2730,78 +2660,6 @@ const server = createServer(async (req, res) => {
 			} else {
 				json(res, 200, []);
 			}
-			return;
-		}
-
-		if (method === "POST" && url === "/api/jobs") {
-			const body = await readBody(req) as Record<string, unknown> & Parameters<JobStore["create"]>[0];
-			if (typeof body.cron !== "string") {
-				json(res, 400, { error: "cron is required" });
-				return;
-			}
-			const cronCheck = validateCron(body.cron, typeof body.timezone === "string" ? body.timezone : undefined);
-			if (!cronCheck.ok) {
-				json(res, 400, { error: `Invalid cron: ${cronCheck.error}` });
-				return;
-			}
-			if (body.channel && !channelRegistry.get(body.channel)) {
-				json(res, 400, { error: `Channel not registered: ${body.channel}. Enable it in settings first.` });
-				return;
-			}
-			const job = jobStore.create(body);
-			json(res, 201, job);
-			return;
-		}
-
-		const runsMatch = matchRoute("GET", method, url, "/api/jobs/:id/runs");
-		if (runsMatch) {
-			json(res, 200, jobStore.listRuns(runsMatch.id));
-			return;
-		}
-
-		const runMatch = matchRoute("POST", method, url, "/api/jobs/:id/run");
-		if (runMatch) {
-			const job = jobStore.get(runMatch.id);
-			if (!job) {
-				json(res, 404, { error: "Job not found" });
-				return;
-			}
-			const result = await executeJob(job, jobStore, channelRegistry, "api");
-			json(res, 200, result);
-			return;
-		}
-
-		const patchMatch = matchRoute("PATCH", method, url, "/api/jobs/:id");
-		if (patchMatch) {
-			const body = await readBody(req) as Partial<import("./scheduler/types.js").ScheduledJob>;
-			if (typeof body.cron === "string") {
-				const cronCheck = validateCron(body.cron, body.timezone);
-				if (!cronCheck.ok) {
-					json(res, 400, { error: `Invalid cron: ${cronCheck.error}` });
-					return;
-				}
-			}
-			if (body.channel && !channelRegistry.get(body.channel)) {
-				json(res, 400, { error: `Channel not registered: ${body.channel}. Enable it in settings first.` });
-				return;
-			}
-			const updated = jobStore.update(patchMatch.id, body);
-			if (!updated) {
-				json(res, 404, { error: "Job not found" });
-				return;
-			}
-			json(res, 200, updated);
-			return;
-		}
-
-		const deleteMatch = matchRoute("DELETE", method, url, "/api/jobs/:id");
-		if (deleteMatch) {
-			const deleted = jobStore.delete(deleteMatch.id);
-			if (!deleted) {
-				json(res, 404, { error: "Job not found" });
-				return;
-			}
-			json(res, 204, null);
 			return;
 		}
 

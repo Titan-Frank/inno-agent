@@ -41,7 +41,7 @@
    - **terminal** ✅：`command-resolver` 扩展名映射与路径引用。PTY 交互不测
 3. **server.ts smoke 层** ✅：`server.smoke.test.ts` 以子进程方式起真实 server（`--import tsx` + 临时 `--home` + dummy provider），断言 `/health`、`/api/settings`（含 API key 脱敏）、`/api/sessions`、`/api/jobs`、未匹配 `/api/*` 的 JSON 404。**该测试当场抓到一个真 bug**：SPA fallback 对未匹配的 `/api/*` 也返回 200 index.html——已修（fallback 跳过 `/api` 前缀）。
 
-## P2 · server.ts 拆分（2–3 周，纯搬运零行为变更）
+## P2 · server.ts 拆分 🚧 进行中（首个域 jobs 已抽出，`refactor/p2-server-split`）
 
 判断标准：它是全仓库改得最多、历史 bug 最密集的文件（队列焊死、SSE 重连都在这里），值得拆。
 
@@ -49,20 +49,22 @@
 
 ```
 src/server/
-  index.ts            # createServer + 路由表装配（<300 行）
-  routes/chat.ts      # /api/chat/* 含 SSE + 事件回放
-  routes/wiki.ts      # /api/wiki/*
-  routes/jobs.ts      # /api/jobs/*
-  routes/skills.ts    # /api/skills/*
-  routes/settings.ts  # /api/settings/* + config 热写
-  routes/workspaces.ts
-  routes/terminal.ts  # WebSocket upgrade
-  context.ts          # 各路由共享依赖（paths、store、registry）显式注入
+  http-helpers.ts     # ✅ readBody / json / matchRoute（原样搬家）
+  routes/jobs.ts      # ✅ /api/jobs* 全部 8 个路由块（handleJobsRoutes → boolean）
+  routes/chat.ts      # ⬜ /api/chat/* 含 SSE + 事件回放
+  routes/wiki.ts      # ⬜ /api/wiki/*
+  routes/skills.ts    # ⬜ /api/skills/*
+  routes/settings.ts  # ⬜ /api/settings/* + config 热写
+  routes/workspaces.ts # ⬜
+  routes/terminal.ts  # ⬜ WebSocket upgrade
+  context.ts          # ⬜ 第二个域需要共享状态时再建，从 JobsRouteContext 长出来
 ```
+
+进度：server.ts 5295 → 5155 行（-140），jobs 域 ~150 行落位 `routes/jobs.ts`。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，server.ts 在原位置留一行委托。
 
 约束：
 - **禁止顺手重构**。每个 PR 只移动一个路由域，diff 应为纯 cut-paste + import 调整。
-- 共享状态经 `context.ts` 显式传参，不引入 DI 框架。
+- 共享状态经 ctx 显式传参，不引入 DI 框架。
 - 拆完后各路由域独立可测，测试再逐步下沉。
 
 ## P3 · 模型与命名的诚实性 ✅ 已合并（PR #135）

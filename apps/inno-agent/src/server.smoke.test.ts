@@ -145,6 +145,23 @@ describe("server smoke", () => {
 		expect(res.status).toBe(200);
 	});
 
+	it("POST /api/jobs with an invalid cron returns 400 (route-domain extraction guard)", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "bad", cron: "not a cron", prompt: "x", taskType: "custom_prompt" }),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toContain("Invalid cron");
+	});
+
+	it("GET /api/jobs/:id/runs returns 200 for any id shape", async () => {
+		const res = await api("/api/jobs/job_missing/runs");
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual([]);
+	});
+
 	it("unknown /api/ route returns a JSON 404 (not the SPA index.html)", async () => {
 		const res = await api("/api/definitely-not-a-route");
 		expect(res.status).toBe(404);
