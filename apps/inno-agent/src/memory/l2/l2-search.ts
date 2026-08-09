@@ -24,6 +24,11 @@ import type { L2IndexStore, L2PageMeta } from "./l2-index-store.js";
 const RANK_DECAY_K = 60;
 const LEX_CANDIDATES = 30;
 const GRAPH_SEEDS = 8;
+// NOTE: these graph-expansion weights are hand-picked, not calibrated against
+// a relevance dataset. Combined with the rank-decay base score (which drops
+// the raw BM25 magnitude), `score` in results is valid for ORDERING ONLY —
+// never compare scores across queries. Retrieval-quality regressions are
+// guarded by the eval thresholds instead of score assertions.
 const WEIGHT_DIRECT_LINK = 0.5;
 const WEIGHT_SOURCE_OVERLAP = 0.4;
 const WEIGHT_ADAMIC_ADAR = 0.3;

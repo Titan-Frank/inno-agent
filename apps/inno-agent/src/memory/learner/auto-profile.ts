@@ -46,6 +46,57 @@ function hasArchiveIntent(text: string): boolean {
 	return /不学|不学习|不再学习|放弃|停止学习|取消.*目标|归档|archive|archived|stop learning|quit/i.test(text);
 }
 
+/**
+ * Words that express the archiving intent itself rather than the topic.
+ * Stripped before keyword extraction so "不再学习" never becomes a keyword.
+ */
+const INTENT_WORDS =
+	/不再学习|不想学习|不想学|不学习|不学|停止学习|放弃学习|放弃|停止|取消|归档|别再学|目标|学习|stop learning|quit learning|quit|archived?|drop|learn|learning/gi;
+
+/**
+ * Extract topic keywords from free text: latin tokens (length >= 2, so
+ * "c++" / "ts" / "go" survive) and CJK bigrams (so "吉他入门" still matches
+ * a goal titled "吉他"). Returns lowercase keywords.
+ */
+function extractTopicKeywords(text: string): string[] {
+	const cleaned = text.toLowerCase().replace(INTENT_WORDS, " ");
+	const keywords: string[] = [];
+	for (const match of cleaned.matchAll(/[a-z0-9][a-z0-9+#._-]*/g)) {
+		if (match[0].length >= 2) keywords.push(match[0]);
+	}
+	for (const match of cleaned.matchAll(/[一-鿿]+/g)) {
+		const run = match[0];
+		for (let i = 0; i < run.length - 1; i++) keywords.push(run.slice(i, i + 2));
+	}
+	return keywords;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Generic topic matcher: does the archive target mention anything the
+ * haystack (goal title / concept id / domain) talks about? Replaces the
+ * former hardcoded rust|c++|python|typescript regexes that silently failed
+ * for every other topic.
+ *
+ * Matching rules: latin keywords of 3+ chars match as substrings ("rust" in
+ * "rust-ownership"); 2-char tokens ("go", "ts") require a non-alphanumeric
+ * boundary to avoid "go" matching "good habits". CJK bigrams match as
+ * substrings.
+ */
+function topicKeywordsMatch(haystack: string, targetText: string): boolean {
+	for (const keyword of extractTopicKeywords(targetText)) {
+		if (/^[a-z0-9+#._-]+$/.test(keyword) && keyword.length === 2) {
+			if (new RegExp(`(^|[^a-z0-9])${escapeRegExp(keyword)}([^a-z0-9]|$)`, "i").test(haystack)) return true;
+			continue;
+		}
+		if (haystack.includes(keyword)) return true;
+	}
+	return false;
+}
+
 function targetMatchesGoal(goal: LearningGoal, targetText: string, targetGoalId?: string): boolean {
 	const haystack = `${goal.goal_id} ${goal.title}`.toLowerCase();
 	const target = targetText.toLowerCase();
@@ -53,11 +104,7 @@ function targetMatchesGoal(goal: LearningGoal, targetText: string, targetGoalId?
 	if (target.includes(goal.goal_id.toLowerCase())) return true;
 	if (target.includes(goal.title.toLowerCase())) return true;
 
-	if (/rust/i.test(target)) return /rust/i.test(haystack);
-	if (/c\+\+|cpp/i.test(target)) return /c\+\+|cpp/i.test(haystack);
-	if (/python/i.test(target)) return /python/i.test(haystack);
-	if (/typescript|\bts\b/i.test(target)) return /typescript|\bts\b/i.test(haystack);
-	return false;
+	return topicKeywordsMatch(haystack, target);
 }
 
 function archiveMatchingGoals(profile: LearnerProfile, targetText: string, timestamp: string, targetGoalId?: string): boolean {
@@ -78,11 +125,7 @@ function targetMatchesKnowledge(state: KnowledgeState, targetText: string): bool
 	const haystack = `${state.concept_id} ${state.concept_name} ${state.domain}`.toLowerCase();
 	const target = targetText.toLowerCase();
 	if (target.includes(state.concept_id.toLowerCase())) return true;
-	if (/rust/i.test(target)) return /rust/i.test(haystack);
-	if (/c\+\+|cpp/i.test(target)) return /c\+\+|cpp/i.test(haystack);
-	if (/python/i.test(target)) return /python/i.test(haystack);
-	if (/typescript|\bts\b/i.test(target)) return /typescript|\bts\b/i.test(haystack);
-	return false;
+	return topicKeywordsMatch(haystack, target);
 }
 
 function archiveMatchingKnowledge(profile: LearnerProfile, targetText: string): boolean {
@@ -183,6 +226,22 @@ function ensureKnowledgeState(profile: LearnerProfile, conceptId: string): Knowl
 	return state;
 }
 
+/**
+ * Fixed mastery increments per event type, applied only when an event carries
+ * no explicit `derived_signals.mastery_delta`.
+ *
+ * HONESTY NOTE: these are hand-tuned heuristics, not a calibrated model
+ * (no forgetting curve, no item difficulty). `mastery` / `confidence` /
+ * `stability` in the profile should be read as relative ordering signals
+ * ("which concept needs review first"), never as probabilities.
+ */
+export const MASTERY_DELTAS: Partial<Record<LearningEvent["event_type"], number>> = {
+	exercise_attempt: 0.03,
+	concept_explained: 0.02,
+	milestone_reached: 0.02,
+	self_assessed: 0.01,
+};
+
 function updateKnowledgeFromEvent(profile: LearnerProfile, event: LearningEvent): boolean {
 	const conceptIds = event.context.concept_ids ?? [];
 	if (conceptIds.length === 0) return false;
@@ -190,15 +249,7 @@ function updateKnowledgeFromEvent(profile: LearnerProfile, event: LearningEvent)
 	const delta =
 		typeof event.derived_signals?.mastery_delta === "number"
 			? event.derived_signals.mastery_delta
-			: event.event_type === "exercise_attempt"
-				? 0.03
-				: event.event_type === "concept_explained"
-					? 0.02
-					: event.event_type === "milestone_reached"
-						? 0.02
-						: event.event_type === "self_assessed"
-							? 0.01
-							: 0;
+			: (MASTERY_DELTAS[event.event_type] ?? 0);
 
 	let changed = false;
 	for (const conceptId of conceptIds) {

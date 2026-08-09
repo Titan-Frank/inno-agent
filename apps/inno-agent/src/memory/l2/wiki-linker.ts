@@ -9,7 +9,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
 import type { ManifestEntry, WikiPageType, WikiPageFrontmatter } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter } from "./wiki-maintainer.js";
-import { splitSemanticChunks } from "./semantic-chunker.js";
+import { splitStructuralChunks } from "./structural-chunker.js";
 import { buildAliasIndex, normalizeWikiLink } from "./wiki-links.js";
 import { logger } from "../../logger.js";
 
@@ -242,7 +242,7 @@ async function extractLinkedItemsAcrossChunks(
 		return extractLinkedItems(model, modelRegistry, title, content);
 	}
 
-	const chunks = splitSemanticChunks(content, { targetChars: 24_000, overlapChars: 400 });
+	const chunks = splitStructuralChunks(content, { targetChars: 24_000, overlapChars: 400 });
 	if (chunks.length > MAX_LINK_MODEL_CHUNKS) return fallbackItems(content);
 
 	const items: LinkedItem[] = [];

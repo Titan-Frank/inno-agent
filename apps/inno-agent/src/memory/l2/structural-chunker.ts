@@ -1,4 +1,4 @@
-export interface SemanticChunkOptions {
+export interface StructuralChunkOptions {
 	targetChars?: number;
 	overlapChars?: number;
 }
@@ -31,7 +31,7 @@ function lastBoundary(content: string, start: number, hardEnd: number): number {
  * Split text without dropping content. Breaks prefer headings, paragraphs and
  * sentence endings; a small read-only overlap gives adjacent chunks context.
  */
-export function splitSemanticChunks(content: string, options: SemanticChunkOptions = {}): string[] {
+export function splitStructuralChunks(content: string, options: StructuralChunkOptions = {}): string[] {
 	if (!content) return [];
 	const targetChars = Math.max(1_000, Math.trunc(options.targetChars ?? DEFAULT_TARGET_CHARS));
 	const overlapChars = Math.max(0, Math.min(Math.trunc(options.overlapChars ?? DEFAULT_OVERLAP_CHARS), targetChars / 4));

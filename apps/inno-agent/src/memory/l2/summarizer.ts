@@ -7,7 +7,7 @@ import { logger } from "../../logger.js";
 import { complete } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { splitSemanticChunks } from "./semantic-chunker.js";
+import { splitStructuralChunks } from "./structural-chunker.js";
 
 const SUMMARIZE_PROMPT = `你是一个知识库管理助手。请为以下资料生成结构化的 Wiki 摘要页。
 
@@ -125,7 +125,7 @@ export async function summarizeContent(
 		return completeSummary(model, modelRegistry, prompt, 4096);
 	}
 
-	const chunks = splitSemanticChunks(content);
+	const chunks = splitStructuralChunks(content);
 	if (chunks.length > MAX_MODEL_CHUNKS) {
 		logger.warn(
 			{ chunks: chunks.length, characters: content.length },
