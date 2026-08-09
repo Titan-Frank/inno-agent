@@ -35,9 +35,9 @@
 1. **web 端 DOM 环境** ✅（`chore/p1-test-infra`）：`vitest.config.ts` 用 `environmentMatchGlobs` 把 `*.test.tsx` 路由到 jsdom，装了 `@testing-library/react`；`react/ui/Switch.test.tsx` 是首个组件测试示例。纯 store/util 测试留在 node 环境。
 2. **后端补测，按风险排序而非按目录平均分配**：
    - **scheduler** ✅：`cron-utils`（解析/校验/due 判定/one-shot 检测）+ `job-store`（create 默认值、update 清 nextRunAt、`normalizePersistedJobs` 迁移、runs、getStatus）
-   - **channels** ✅（部分）：`dedupe-store`（TTL、按渠道隔离、重启持久化）。`personal-dispatcher` 消息路由待补 ⬜
+   - **channels** ✅：`dedupe-store`（TTL、按渠道隔离、重启持久化）+ `personal-dispatcher` 消息路由（去重、空消息、/new 绑定、自动建会话与复用、失效绑定重建、无 chatId 回退全局会话、失败通知 + run-log、截断、附件注入、流式路径与卡片初始化失败回退）
    - **L1 learner**：profile-updater 增量逻辑（与 P2 模型修正一起测）⬜
-   - **L3**：依赖 Node ≥22.5，用 `describe.skipIf(...)` 做条件测试 ⬜
+   - **L3** ✅：`l3.test.ts`——`segmentForFts` 纯函数常跑；store/indexer/recall 套件用 `describe.skipIf(node < 22.5)` 条件执行（覆盖 bigram 检索、coverage 阈值门控、excludeSession、去重、deleteSession、mtime 增量索引、端到端 recall）
    - **terminal** ✅：`command-resolver` 扩展名映射与路径引用。PTY 交互不测
 3. **server.ts smoke 层** ✅：`server.smoke.test.ts` 以子进程方式起真实 server（`--import tsx` + 临时 `--home` + dummy provider），断言 `/health`、`/api/settings`（含 API key 脱敏）、`/api/sessions`、`/api/jobs`、未匹配 `/api/*` 的 JSON 404。**该测试当场抓到一个真 bug**：SPA fallback 对未匹配的 `/api/*` 也返回 200 index.html——已修（fallback 跳过 `/api` 前缀）。
 
@@ -110,8 +110,9 @@ src/server/
 ✅ P3 语言正则修复 + 命名诚实性（PR #135）
 ✅ P2 server.ts 按域拆完（PR #136–#146,一次性连续完成）
 ✅ P4 时区可配 + runCount 竞态 + jsonl 滚动（PR #147）
-✅ P4 依赖卫生：pi-mcp-adapter/pi-sandbox 钉版本 + xlsx vendoring（chore/p4-dependency-hygiene）
-下一站: P1 尾巴（personal-dispatcher / L3 条件测试）+ P5 README Non-goals
+✅ P4 依赖卫生：pi-mcp-adapter/pi-sandbox 钉版本 + xlsx vendoring（PR #148）
+✅ P1 尾巴：personal-dispatcher 路由测试 + L3 条件测试（test/p1-tail）
+下一站: P5 README Non-goals（L1 profile-updater 增量测试随 L1 规则演进另行安排）
 ```
 
 依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。
