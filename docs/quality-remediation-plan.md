@@ -4,7 +4,7 @@
 >
 > 状态图例：✅ 已完成 / 🚧 进行中 / ⬜ 未开始
 >
-> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134），P3 已合并（PR #135），P2 进行中（10 个域已拆：#136–#145，server.ts 5295→2267 行，只剩 chat）**。
+> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134），P3 已合并（PR #135），P2 ✅ 完成（11 个域全部拆出：#136–#146，server.ts 5295→1608 行，-70%）**。
 
 ## 总体原则
 
@@ -41,7 +41,7 @@
    - **terminal** ✅：`command-resolver` 扩展名映射与路径引用。PTY 交互不测
 3. **server.ts smoke 层** ✅：`server.smoke.test.ts` 以子进程方式起真实 server（`--import tsx` + 临时 `--home` + dummy provider），断言 `/health`、`/api/settings`（含 API key 脱敏）、`/api/sessions`、`/api/jobs`、未匹配 `/api/*` 的 JSON 404。**该测试当场抓到一个真 bug**：SPA fallback 对未匹配的 `/api/*` 也返回 200 index.html——已修（fallback 跳过 `/api` 前缀）。
 
-## P2 · server.ts 拆分 🚧 进行中（首个域 jobs 已抽出，`refactor/p2-server-split`）
+## P2 · server.ts 拆分 ✅ 完成（11 个域，PR #136–#146）
 
 判断标准：它是全仓库改得最多、历史 bug 最密集的文件（队列焊死、SSE 重连都在这里），值得拆。
 
@@ -56,16 +56,17 @@ src/server/
   routes/settings.ts  # ✅ /api/settings* + /api/mcp*（PR #138,含 buildSafeSettings 等 6 个域私有 helper）
   routes/skills.ts    # ✅ /api/skills/* + /api/skill-library/*（PR #139）
   routes/workspaces.ts # ✅ /api/workspace/* + /api/workspaces + 会话↔工作区绑定（PR #140,含 PPTX→SVG 转换器家族）
-  routes/chat.ts      # ⬜ /api/chat/* 含 SSE + 事件回放
+  routes/chat.ts      # ✅ /api/chat/* 含 SSE + 事件回放（PR #146,最后一块）
   routes/sessions.ts  # ✅ /api/sessions/*（PR #141,含 showcase-export;共享类型落 server/session-model.ts）
   routes/learner.ts   # ✅ /api/learner/*（PR #142）
   routes/wiki.ts      # （上方已列）/api/wiki/* + /api/l2/raw/upload（PR #143）
   routes/presets.ts   # ✅ /api/presets + /api/preset-library（PR #144）
   routes/practice.ts  # ✅ /api/terminal/sessions* + /api/runs*（PR #145;PTY WebSocket 留在 server.ts）
-  context.ts          # ⬜ 第二个域需要共享状态时再建，从 JobsRouteContext 长出来
+  session-model.ts    # ✅ 会话摘要/元数据共享类型（PR #141 建立）
+  ~~context.ts~~      # 未建——各域 ctx 接口各自声明即够用
 ```
 
-进度：server.ts 5295 → 2267 行（-3028,‑57%）。jobs（#136）+ channels（#137）+ settings/mcp（#138）+ skills（#139）+ workspaces（#140）+ sessions（#141）+ learner（#142）+ wiki（#143）+ presets（#144）+ practice（#145）已落位,只剩 chat（SSE,最大,最后做）。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，可变模块状态（config、wechatChannel）经 getter/setter 注入，server.ts 在原位置留一行委托。
+进度：server.ts 5295 → 1608 行（-3687,‑70%）。11 个域全部落位：jobs（#136）、channels（#137）、settings/mcp（#138）、skills（#139）、workspaces（#140）、sessions（#141）、learner（#142）、wiki（#143）、presets（#144）、practice（#145）、chat（#146）。server.ts 剩余：bootstrap、渠道接线/热重载、队列 helper、技能安装器、静态/SPA 服务、终端 WebSocket upgrade、11 行委托。测试 24 文件 / 175 用例全绿。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，可变模块状态（config、wechatChannel）经 getter/setter 注入，server.ts 在原位置留一行委托。
 
 约束：
 - **禁止顺手重构**。每个 PR 只移动一个路由域，diff 应为纯 cut-paste + import 调整。
@@ -107,8 +108,8 @@ src/server/
 ✅ P0 全部（PR #133）
 ✅ P1.1 web DOM 环境 + P1.3 server.ts smoke 测试 + P1.2 首批（PR #134）
 ✅ P3 语言正则修复 + 命名诚实性（PR #135）
-下一站: P2 server.ts 按域拆（每周 1–2 个域，穿插正常 feature 开发）
-随手:   P1 尾巴（personal-dispatcher / L3 条件测试）+ P4 各项跟随所属模块的 PR
+✅ P2 server.ts 按域拆完（PR #136–#146,一次性连续完成）
+下一站: P1 尾巴（personal-dispatcher / L3 条件测试）+ P4 小坑批量修 + P5 README Non-goals
 ```
 
 依赖关系：P2 拆分的安全网（smoke 测试）已就位 ✅；P3 语言正则（唯一正在静默失效的用户可见 bug）已修 ✅。
