@@ -4,7 +4,7 @@
 >
 > 状态图例：✅ 已完成 / 🚧 进行中 / ⬜ 未开始
 >
-> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134，测试 17 文件/101 用例 → 23 文件/144 用例），P3 已合并（PR #135）**。下一站 P2 拆 server.ts。
+> 进度速览：**P0 已合并（PR #133），P1 主体已合并（PR #134），P3 已合并（PR #135），P2 进行中（5 个域已拆：#136/#137/#138/#139/#140，server.ts 5295→3275 行）**。
 
 ## 总体原则
 
@@ -50,19 +50,22 @@
 ```
 src/server/
   http-helpers.ts     # ✅ readBody / json / matchRoute（原样搬家）
+  file-helpers.ts     # ✅ 纯文件/路径 helper（safeJoin、contentDispositionAttachment、WORKSPACE_IGNORES 等）
   routes/jobs.ts      # ✅ /api/jobs* 全部 8 个路由块（handleJobsRoutes → boolean）
   routes/channels.ts  # ✅ /api/channels* + /api/bridge/*（PR #137,QR 登录的可变状态走 getter/setter ctx）
   routes/settings.ts  # ✅ /api/settings* + /api/mcp*（PR #138,含 buildSafeSettings 等 6 个域私有 helper）
+  routes/skills.ts    # ✅ /api/skills/* + /api/skill-library/*（PR #139）
+  routes/workspaces.ts # ✅ /api/workspace/* + /api/workspaces + 会话↔工作区绑定（PR #140,含 PPTX→SVG 转换器家族）
   routes/chat.ts      # ⬜ /api/chat/* 含 SSE + 事件回放
   routes/wiki.ts      # ⬜ /api/wiki/*
-  routes/skills.ts    # ⬜ /api/skills/*
-  routes/settings.ts  # ⬜ /api/settings/* + config 热写
-  routes/workspaces.ts # ⬜
+  routes/sessions.ts  # ⬜ /api/sessions/*
+  routes/learner.ts   # ⬜ /api/learner/*（L1 profile）
+  routes/presets.ts   # ⬜ /api/presets + /api/preset-library
   routes/terminal.ts  # ⬜ WebSocket upgrade
   context.ts          # ⬜ 第二个域需要共享状态时再建，从 JobsRouteContext 长出来
 ```
 
-进度：server.ts 5295 → 4411 行（-884）。jobs（PR #136）+ channels（PR #137）+ settings/mcp（PR #138）已落位。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，可变模块状态（config、wechatChannel）经 getter/setter 注入，server.ts 在原位置留一行委托。
+进度：server.ts 5295 → 3275 行（-2020,‑38%）。jobs（PR #136）+ channels（PR #137）+ settings/mcp（PR #138）+ skills（PR #139）+ workspaces（PR #140）已落位。模式已定型：每域一个 `handle<Domain>Routes(req, res, method, url, ctx): Promise<boolean>`，可变模块状态（config、wechatChannel）经 getter/setter 注入，server.ts 在原位置留一行委托。
 
 约束：
 - **禁止顺手重构**。每个 PR 只移动一个路由域，diff 应为纯 cut-paste + import 调整。
