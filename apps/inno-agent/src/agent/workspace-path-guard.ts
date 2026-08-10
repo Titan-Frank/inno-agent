@@ -1,7 +1,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findExistingAncestor, isWithin } from "../utils/path-safety.js";
 
 export interface WorkspacePathCheck {
 	allowed: boolean;
@@ -21,21 +22,6 @@ function normalizeToolPath(input: string): string {
 	}
 	if (/^file:\/\//.test(normalized)) return fileURLToPath(normalized);
 	return normalized;
-}
-
-function isWithin(root: string, target: string): boolean {
-	const rel = relative(root, target);
-	return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
-}
-
-function findExistingAncestor(target: string): string | null {
-	let current = target;
-	while (!existsSync(current)) {
-		const parent = dirname(current);
-		if (parent === current) return null;
-		current = parent;
-	}
-	return current;
 }
 
 /**

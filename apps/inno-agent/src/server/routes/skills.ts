@@ -1,12 +1,13 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, sep } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import { logger } from "../../logger.js";
+import { isWithin } from "../../utils/path-safety.js";
 import {
 	canonicalTreeRoot,
 	contentTypeForWorkspaceFile,
-	safeJoin,
+	safeJoinReal,
 	slugifySkillName,
 	workspaceFileKind,
 	WORKSPACE_TREE_MAX_DEPTH,
@@ -224,7 +225,7 @@ export async function handleSkillsRoutes(
 						} catch {
 							real = fullPath;
 						}
-						const withinRoot = real === skillRootReal || real.startsWith(skillRootReal + sep);
+						const withinRoot = isWithin(skillRootReal, real);
 						node.children = withinRoot && !seen.has(real)
 							? readSkillTree(fullPath, depth + 1, new Set([...seen, real]))
 							: [];
@@ -253,7 +254,7 @@ export async function handleSkillsRoutes(
 		if (!existsSync(skillDir)) { json(res, 404, { error: "Skill not found" }); return true; }
 		const params = new URL(url, "http://localhost").searchParams;
 		const relPath = params.get("path") ?? "";
-		const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
+		const fullPath = safeJoinReal(skillDir, relPath.replace(/^\/+/, ""));
 		if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
 			json(res, 404, { error: "File not found" });
 			return true;
@@ -296,7 +297,7 @@ export async function handleSkillsRoutes(
 		const relPath = typeof body.path === "string" ? body.path.trim() : "";
 		const content = typeof body.content === "string" ? body.content : "";
 		if (!relPath) { json(res, 400, { error: "Missing path" }); return true; }
-		const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
+		const fullPath = safeJoinReal(skillDir, relPath.replace(/^\/+/, ""));
 		if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
 			json(res, 404, { error: "File not found" });
 			return true;
@@ -316,7 +317,7 @@ export async function handleSkillsRoutes(
 		if (!existsSync(skillDir)) { json(res, 404, { error: "Skill not found" }); return true; }
 		const params = new URL(url, "http://localhost").searchParams;
 		const relPath = params.get("path") ?? "";
-		const fullPath = safeJoin(skillDir, relPath.replace(/^\/+/, ""));
+		const fullPath = safeJoinReal(skillDir, relPath.replace(/^\/+/, ""));
 		if (!fullPath || !existsSync(fullPath) || !statSync(fullPath).isFile()) {
 			json(res, 404, { error: "File not found" });
 			return true;

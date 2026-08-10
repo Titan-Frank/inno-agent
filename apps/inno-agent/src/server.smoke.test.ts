@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -336,6 +336,77 @@ describe("server smoke", () => {
 	it("GET /api/workspace/file returns 404 for a missing file", async () => {
 		const res = await api("/api/workspace/file?path=no-such-file.txt");
 		expect(res.status).toBe(404);
+	});
+
+	it("GET /api/workspace/file rejects symlinks escaping the workspace (issue #162)", async () => {
+		const tree = await api("/api/workspace/tree");
+		const { root } = (await tree.json()) as { root: string };
+
+		// A symlink planted inside the workspace (trivial via the agent's bash
+		// tool) must not let the endpoint read host files outside the root.
+		const secretDir = mkdtempSync(join(tmpdir(), "inno-smoke-secret-"));
+		// Track what we plant in the shared workspace so the finally block can
+		// leave the fixture exactly as it found it.
+		const planted = ["escape-link", "direct-link.txt", "dangling-link.txt", "hello.txt"];
+		try {
+			writeFileSync(join(secretDir, "secret.txt"), "top-secret");
+			// "junction" needs no symlink privilege on Windows and is ignored on POSIX.
+			symlinkSync(secretDir, join(root, "escape-link"), "junction");
+			// File symlinks do require the privilege on Windows; skip just this
+			// assertion there when the shell is not elevated (CI runners are).
+			let directLinkPlanted = true;
+			try {
+				symlinkSync(join(secretDir, "secret.txt"), join(root, "direct-link.txt"));
+			} catch (err) {
+				if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
+					directLinkPlanted = false;
+				} else {
+					throw err;
+				}
+			}
+
+			const viaDir = await api("/api/workspace/file?path=escape-link/secret.txt");
+			expect(viaDir.status).toBe(404);
+			if (directLinkPlanted) {
+				const viaFile = await api("/api/workspace/file?path=direct-link.txt");
+				expect(viaFile.status).toBe(404);
+			}
+
+			// A *dangling* symlink (target missing) must not let write endpoints
+			// create the target outside the workspace either. Same Windows
+			// privilege caveat as the file symlink above.
+			let danglingLinkPlanted = true;
+			try {
+				symlinkSync(join(secretDir, "missing.txt"), join(root, "dangling-link.txt"));
+			} catch (err) {
+				if (process.platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
+					danglingLinkPlanted = false;
+				} else {
+					throw err;
+				}
+			}
+			if (danglingLinkPlanted) {
+				const writeViaDangling = await fetch(`http://127.0.0.1:${port}/api/workspace/upload`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ files: [{ path: "dangling-link.txt", dataBase64: Buffer.from("pwned").toString("base64") }] }),
+				});
+				expect(writeViaDangling.status).toBe(201);
+				const writeBody = (await writeViaDangling.json()) as { uploaded: unknown[] };
+				expect(writeBody.uploaded).toHaveLength(0);
+				expect(existsSync(join(secretDir, "missing.txt"))).toBe(false);
+			}
+
+			// Positive control: a genuine file inside the root stays readable.
+			writeFileSync(join(root, "hello.txt"), "hello");
+			const ok = await api("/api/workspace/file?path=hello.txt");
+			expect(ok.status).toBe(200);
+		} finally {
+			for (const name of planted) {
+				rmSync(join(root, name), { recursive: true, force: true });
+			}
+			rmSync(secretDir, { recursive: true, force: true });
+		}
 	});
 
 	it("DELETE /api/workspaces/tmp is rejected with 400", async () => {

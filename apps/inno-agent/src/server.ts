@@ -4,12 +4,13 @@ import "source-map-support/register.js";
 
 import { createServer, type IncomingMessage as HttpReq, type ServerResponse } from "node:http";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { loadConfig, normalizeContentHubConfig, type InnoConfig, type InnoContentHubConfig } from "./config.js";
 import { installFetchLogger } from "./utils/fetch-logger.js";
+import { canonicalContainmentRoot, isWithin } from "./utils/path-safety.js";
 import { applyProviderProxyBypass } from "./utils/proxy-bypass.js";
 import { ensureDir, readJson, readText, writeJson, writeText } from "./storage/file-store.js";
 import {
@@ -36,7 +37,7 @@ import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
 import { HttpError, json } from "./server/http-helpers.js";
 import {
-	safeJoin,
+	safeJoinReal,
 	slugifySkillName,
 } from "./server/file-helpers.js";
 import { handleChannelsRoutes } from "./server/routes/channels.js";
@@ -428,7 +429,7 @@ function encodingAccepted(acceptEncoding: string, encoding: "br" | "gzip"): bool
 	return wildcardQ !== undefined ? wildcardQ > 0 : false;
 }
 
-function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBody = true): boolean {
+function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBody = true, staticRoot?: string): boolean {
 	try {
 		if (!existsSync(filePath) || !statSync(filePath).isFile()) return false;
 		const ext = extname(filePath);
@@ -436,11 +437,27 @@ function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBo
 		const acceptEncoding = acceptEncodingHeader(req);
 		let responsePath = filePath;
 		let contentEncoding: "br" | "gzip" | undefined;
-		if (encodingAccepted(acceptEncoding, "br") && existsSync(`${filePath}.br`)) {
-			responsePath = `${filePath}.br`;
+		// The pre-compressed sibling never went through safeJoinReal, so verify
+		// its realpath stays inside the static root — a planted symlink like
+		// `assets/index.js.gz -> /etc/passwd` must not be served.
+		const canonicalRoot = staticRoot ? canonicalContainmentRoot(staticRoot) : null;
+		const pickCompressedSibling = (suffix: string): string | null => {
+			const candidate = `${filePath}${suffix}`;
+			try {
+				if (!existsSync(candidate)) return null;
+				if (canonicalRoot && !isWithin(canonicalRoot, realpathSync(candidate))) return null;
+				return candidate;
+			} catch {
+				return null;
+			}
+		};
+		const brSibling = encodingAccepted(acceptEncoding, "br") ? pickCompressedSibling(".br") : null;
+		const gzSibling = !brSibling && encodingAccepted(acceptEncoding, "gzip") ? pickCompressedSibling(".gz") : null;
+		if (brSibling) {
+			responsePath = brSibling;
 			contentEncoding = "br";
-		} else if (encodingAccepted(acceptEncoding, "gzip") && existsSync(`${filePath}.gz`)) {
-			responsePath = `${filePath}.gz`;
+		} else if (gzSibling) {
+			responsePath = gzSibling;
 			contentEncoding = "gzip";
 		}
 
@@ -473,7 +490,7 @@ function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBo
 function sessionFileFromId(sessionDir: string, id: string): string | null {
 	const fileName = basename(id);
 	if (fileName !== id || !fileName.endsWith(".jsonl")) return null;
-	return safeJoin(sessionDir, fileName);
+	return safeJoinReal(sessionDir, fileName);
 }
 
 function textFromContent(content: unknown): string {
@@ -1459,14 +1476,14 @@ const server = createServer(async (req, res) => {
 		// --- Static files / SPA fallback ---
 		if (method === "GET" || method === "HEAD") {
 			const urlPath = decodeURIComponent(url.split("?")[0]);
-			const staticPath = safeJoin(webDistDir, urlPath.replace(/^\/+/, ""));
+			const staticPath = safeJoinReal(webDistDir, urlPath.replace(/^\/+/, ""));
 			const sendBody = method === "GET";
 			// Try exact file in web/dist
-			if (staticPath && serveStatic(req, res, staticPath, sendBody)) return;
+			if (staticPath && serveStatic(req, res, staticPath, sendBody, webDistDir)) return;
 			// SPA fallback: serve index.html for non-API paths only. An unmatched
 			// /api/* route must fall through to the JSON 404 — returning HTML with
 			// a 200 status breaks API client error handling.
-			if (urlPath !== "/api" && !urlPath.startsWith("/api/") && serveStatic(req, res, join(webDistDir, "index.html"), sendBody)) return;
+			if (urlPath !== "/api" && !urlPath.startsWith("/api/") && serveStatic(req, res, join(webDistDir, "index.html"), sendBody, webDistDir)) return;
 		}
 
 		// --- 404 ---
