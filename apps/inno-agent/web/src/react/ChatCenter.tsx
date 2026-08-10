@@ -264,7 +264,7 @@ function StreamingBubbles() {
 					animate={{ opacity: 1, y: 0 }}
 					transition={{ duration: 0.2, ease: "easeOut" }}
 				>
-					<div ref={streamingBubbleRef} className="inno-message inno-streaming-blocks max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+					<div ref={streamingBubbleRef} className={`inno-message inno-streaming-blocks ${questionnaires.length > 0 ? "w-full max-w-[76%]" : "max-w-[78%]"} rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
 						{timeline.entries.map(({ tool, questionnaire, before }) => (
 							<Fragment key={tool.toolCallId}>
 								{before.trim() ? <StableStreamingMarkdown content={normalizeMarkdownMath(before.trim())} /> : null}

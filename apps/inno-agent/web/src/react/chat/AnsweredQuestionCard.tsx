@@ -55,7 +55,7 @@ export function AnsweredQuestionCard({ questionnaire }: { questionnaire: Answere
 	const { t } = useTranslation();
 
 	return (
-		<div className="w-full rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
+		<div className="w-full max-w-[36.5rem] rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
 			<div className="mb-3 text-xs font-medium text-[var(--inno-accent)]">{t("question.answered")}</div>
 			<div className="space-y-4">
 				{questionnaire.questions.map((question, questionIndex) => {
