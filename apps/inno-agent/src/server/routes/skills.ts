@@ -12,7 +12,7 @@ import {
 	WORKSPACE_TREE_MAX_DEPTH,
 	type WorkspaceTreeNode,
 } from "../file-helpers.js";
-import { json, matchRoute, readBody } from "../http-helpers.js";
+import { json, matchRoute, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
 
 export interface SkillLibraryItem {
 	/** Directory name under the skills path (used as the skill name). */
@@ -66,7 +66,7 @@ export async function handleSkillsRoutes(
 	}
 
 	if (method === "POST" && url === "/api/skills/upload") {
-		const body = (await readBody(req)) as Record<string, unknown>;
+		const body = (await readBody(req, { maxBytes: UPLOAD_MAX_BODY_BYTES })) as Record<string, unknown>;
 		const fileName = typeof body.fileName === "string" ? body.fileName : "";
 		const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
 		if (!fileName || !dataBase64) {

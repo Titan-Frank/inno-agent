@@ -23,7 +23,7 @@ import {
 import { readJson, writeJson } from "../../storage/file-store.js";
 import { TEMP_WORKSPACE_ID, type WorkspaceRegistry } from "../../workspace/workspace-registry.js";
 import { contentDispositionAttachment } from "../file-helpers.js";
-import { json, matchRoute, readBody } from "../http-helpers.js";
+import { HttpError, json, matchRoute, readBody } from "../http-helpers.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -317,7 +317,12 @@ export async function handleSessionsRoutes(
 			json(res, 404, { error: "Session not found" });
 			return true;
 		}
-		const body = await readBody(req).catch(() => ({})) as Record<string, unknown>;
+		const body = await readBody(req).catch((err: unknown) => {
+			// An oversized body must still surface as 413 — only a missing or
+			// malformed payload is treated as {}.
+			if (err instanceof HttpError && err.statusCode === 413) throw err;
+			return {};
+		}) as Record<string, unknown>;
 		const sessionFile = basename(sessionPath);
 		const sessionInfo = readSessionCwd(sessionPath);
 		const parsed = parseSessionFile(sessionPath);
@@ -454,7 +459,12 @@ export async function handleSessionsRoutes(
 	}
 
 	if (method === "POST" && url === "/api/sessions") {
-		const body = await readBody(req).catch(() => ({})) as Record<string, unknown>;
+		const body = await readBody(req).catch((err: unknown) => {
+			// An oversized body must still surface as 413 — only a missing or
+			// malformed payload is treated as {}.
+			if (err instanceof HttpError && err.statusCode === 413) throw err;
+			return {};
+		}) as Record<string, unknown>;
 		// A new session is always a different session — release the queue
 		// from a question-blocked turn before enqueueing (issue #124).
 		releaseQueueFromQuestionBlockedTurn("");

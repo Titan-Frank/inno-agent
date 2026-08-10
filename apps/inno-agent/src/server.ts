@@ -34,7 +34,7 @@ import type { PersonalBridgeChannelConfig } from "./config.js";
 import { JobStore } from "./scheduler/job-store.js";
 import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
-import { json } from "./server/http-helpers.js";
+import { HttpError, json } from "./server/http-helpers.js";
 import {
 	safeJoin,
 	slugifySkillName,
@@ -61,6 +61,7 @@ import {
 } from "./server/session-model.js";
 import { logger } from "./logger.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
+import { installProcessFallbacks } from "./utils/process-fallback.js";
 import { questionBridge } from "./agent/question-bridge.js";
 import { streamRegistry } from "./chat/stream-registry.js";
 import { DEFAULT_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
@@ -1472,6 +1473,24 @@ const server = createServer(async (req, res) => {
 		json(res, 404, { error: "Not found" });
 	} catch (err) {
 		logger.error({ err }, "unhandled error in HTTP handler");
+		// SSE/streaming responses have already sent headers — calling json()
+		// here would throw ERR_HTTP_HEADERS_SENT from inside this catch block
+		// and kill the process. The only safe move is to end the stream.
+		if (res.headersSent) {
+			try { res.end(); } catch { /* best effort */ }
+			return;
+		}
+		// readBody failures carry a client-facing status (400/413); anything
+		// else is an internal error and must not leak details.
+		if (err instanceof HttpError) {
+			if (err.statusCode === 413) {
+				// The oversized body was never consumed, so this connection is
+				// unsafe for keep-alive — Node closes it after the response.
+				res.setHeader("Connection", "close");
+			}
+			json(res, err.statusCode, { error: err.message });
+			return;
+		}
 		json(res, 500, { error: "Internal server error" });
 	}
 });
@@ -1594,6 +1613,19 @@ questionBridge.setPersistence({
 			delete meta[sessionId];
 			writeSessionQuestionMetadata(meta);
 		}
+	},
+});
+
+// Process-level last resort: a stray rejection or an exception escaping a
+// catch block would otherwise kill the process silently (or via a secondary
+// ERR_HTTP_HEADERS_SENT from the catch-all). Log at fatal level, close the
+// HTTP/WS servers so clients see a clean close, then exit — after an
+// uncaught exception the process state is untrustworthy, so we do not
+// attempt to continue serving.
+installProcessFallbacks({
+	onFatal: () => {
+		try { server.close(); } catch { /* best effort */ }
+		try { wss.close(); } catch { /* best effort */ }
 	},
 });
 

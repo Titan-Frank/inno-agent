@@ -9,7 +9,7 @@ import { buildWikiGraph } from "../../memory/l2/wiki-graph.js";
 import { parseFrontmatter } from "../../memory/l2/wiki-maintainer.js";
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
 import { safeJoin } from "../file-helpers.js";
-import { json, readBody } from "../http-helpers.js";
+import { json, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
 
 export interface WikiRouteContext {
 	l2DataDir: string;
@@ -210,7 +210,7 @@ export async function handleWikiRoutes(
 
 	// --- L2 Raw Upload API ---
 	if (method === "POST" && url === "/api/l2/raw/upload") {
-		const body = (await readBody(req)) as Record<string, unknown>;
+		const body = (await readBody(req, { maxBytes: UPLOAD_MAX_BODY_BYTES })) as Record<string, unknown>;
 		const fileName = typeof body.fileName === "string" ? body.fileName : "";
 		const mimeType = typeof body.mimeType === "string" ? body.mimeType : "application/octet-stream";
 		const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
