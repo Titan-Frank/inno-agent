@@ -228,7 +228,7 @@ export function QuestionDialog({ pending }: { pending: PendingQuestion }) {
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.3, ease: "easeOut" }}
 		>
-			<div className="w-full max-w-[76%] rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
+			<div className="w-full max-w-[36.5rem] rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
 				{questions.length > 1 ? (
 					<div className="mb-3 flex gap-1">
 						{questions.map((q, i) => (

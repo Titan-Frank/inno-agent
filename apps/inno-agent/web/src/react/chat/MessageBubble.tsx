@@ -185,6 +185,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel 
 		const questionnaire = answeredQuestionnaireFromTool(tool);
 		return questionnaire ? [{ tool, questionnaire }] : [];
 	});
+	const hasAnsweredQuestionnaire = answeredQuestionnaires.length > 0;
 	const answeredToolCallIds = new Set(answeredQuestionnaires.map((view) => view.tool.toolCallId));
 	const regularTools = (message.tools ?? []).filter((tool) => !answeredToolCallIds.has(tool.toolCallId));
 
@@ -227,7 +228,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel 
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.25, ease: "easeOut" }}
 		>
-			<div className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+			<div className={`inno-message min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
 				{showChannel && message.channel ? (
 					<div className="mb-1"><ChannelBadge channel={message.channel} /></div>
 				) : null}

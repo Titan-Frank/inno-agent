@@ -11,17 +11,18 @@ import { inferModelMetadata } from "./model-metadata.js";
 
 const apiOptions = ["openai-completions", "openai-responses", "anthropic-messages"];
 
-/** Brand-colored letter-tile icon for a provider (preset or existing). */
+/** Brand icon for a provider, with a colored glyph tile as the fallback. */
 export function ProviderIcon({ providerId, size = 28 }: { providerId: string; size?: number }) {
 	const preset = findPreset(providerId);
 	const color = preset?.brandColor ?? "#8A8F98";
 	const glyph = preset?.glyph ?? providerId.trim().charAt(0).toUpperCase() ?? "?";
+	const iconSrc = preset?.iconSrc;
 	return (
 		<span
-			className="flex shrink-0 items-center justify-center rounded-md font-semibold text-white"
-			style={{ width: size, height: size, backgroundColor: color, fontSize: Math.round(size * 0.38) }}
+			className="flex shrink-0 items-center justify-center overflow-hidden rounded-md font-semibold text-white"
+			style={{ width: size, height: size, backgroundColor: iconSrc ? "transparent" : color, fontSize: Math.round(size * 0.38) }}
 		>
-			{glyph}
+			{iconSrc ? <img src={iconSrc} alt="" aria-hidden="true" className="h-full w-full object-contain" /> : glyph}
 		</span>
 	);
 }
@@ -74,6 +75,7 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 	const [form, setForm] = useState<WizardFormState | null>(null);
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [fetchedModels, setFetchedModels] = useState<string[] | null>(null);
+	const [modelPickerOpen, setModelPickerOpen] = useState(false);
 	const [probing, setProbing] = useState(false);
 	const [probeError, setProbeError] = useState<string | null>(null);
 	const [formError, setFormError] = useState<string | null>(null);
@@ -86,6 +88,7 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 		setForm(null);
 		setShowAdvanced(false);
 		setFetchedModels(null);
+		setModelPickerOpen(false);
 		setProbeError(null);
 		setFormError(null);
 	}
@@ -94,6 +97,7 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 		setPreset(p);
 		setForm(formFromPreset(p, existingProviders));
 		setFetchedModels(null);
+		setModelPickerOpen(false);
 		setProbeError(null);
 		setFormError(null);
 	}
@@ -111,6 +115,11 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 		});
 	}
 
+	function selectModel(modelId: string) {
+		applyModel(modelId);
+		setModelPickerOpen(false);
+	}
+
 	async function handleProbe() {
 		if (!form) return;
 		setProbing(true);
@@ -123,8 +132,10 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 				providerId: existing?.apiKey ? form.providerId : undefined,
 				api: form.api,
 			});
-			setFetchedModels(result.models);
-			if (result.models.length > 0 && !form.modelId) applyModel(result.models[0]);
+			const models = [...new Set(result.models.map((id) => id.trim()).filter(Boolean))];
+			setFetchedModels(models);
+			setModelPickerOpen(false);
+			if (models.length > 0 && !form.modelId) applyModel(models[0]);
 		} catch (err) {
 			setFetchedModels(null);
 			setProbeError(err instanceof Error ? err.message : String(err));
@@ -270,14 +281,44 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 													: t("settings.wizard.fetchModels", "拉取模型列表")}
 										</button>
 									</div>
-									<input
-										className={inputCls}
-										list="inno-probed-models"
-										placeholder={t("settings.wizard.modelPlaceholder", "输入或从拉取的列表中选择") ?? ""}
-										value={form.modelId}
-										onChange={(e) => applyModel(e.target.value)}
-									/>
-									{datalist(fetchedModels)}
+									<div className="relative">
+										<input
+											className={`${inputCls}${fetchedModels?.length ? " pr-8" : ""}`}
+											role="combobox"
+											aria-controls="inno-probed-models"
+											aria-expanded={modelPickerOpen}
+											placeholder={t("settings.wizard.modelPlaceholder", "输入或从拉取的列表中选择") ?? ""}
+											value={form.modelId}
+											onChange={(e) => applyModel(e.target.value)}
+										/>
+										{fetchedModels?.length ? (
+											<button
+												type="button"
+												aria-label={modelPickerOpen ? "收起模型列表" : "展开模型列表"}
+												className="absolute right-0 top-0 flex h-full w-8 items-center justify-center text-[var(--inno-text-subtle)] hover:text-[var(--inno-text)]"
+												onClick={() => setModelPickerOpen((open) => !open)}
+											>
+												<ChevronDown size={14} className={`transition-transform${modelPickerOpen ? " rotate-180" : ""}`} />
+											</button>
+										) : null}
+										{modelPickerOpen && fetchedModels?.length ? (
+											<div id="inno-probed-models" role="listbox" className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface)] p-1 shadow-lg">
+												{fetchedModels.map((id) => (
+													<button
+														key={id}
+														type="button"
+														role="option"
+														aria-selected={form.modelId === id}
+																className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs text-[var(--inno-text)] hover:bg-[var(--inno-surface-muted)]"
+														onClick={() => selectModel(id)}
+															>
+																<span className="block truncate">{id}</span>
+																{form.modelId === id && <Check size={14} className="shrink-0 text-[var(--inno-accent)]" />}
+															</button>
+												))}
+											</div>
+										) : null}
+									</div>
 									{preset.modelHint && <p className="mt-1 text-[10px] text-[var(--inno-text-subtle)]">{preset.modelHint}</p>}
 									{probeError && <p className="mt-1 text-[10px] text-[var(--inno-danger)]">{probeError}</p>}
 									{form.modelId && (
@@ -352,14 +393,5 @@ export function AddProviderWizard({ providers }: { providers: Record<string, Inn
 				</div>
 			)}
 		</div>
-	);
-}
-
-function datalist(models: string[] | null) {
-	if (!models || models.length === 0) return null;
-	return (
-		<datalist id="inno-probed-models">
-			{models.map((id) => <option key={id} value={id} />)}
-		</datalist>
 	);
 }
