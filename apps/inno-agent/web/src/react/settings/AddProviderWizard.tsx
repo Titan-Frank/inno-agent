@@ -11,17 +11,18 @@ import { inferModelMetadata } from "./model-metadata.js";
 
 const apiOptions = ["openai-completions", "openai-responses", "anthropic-messages"];
 
-/** Brand-colored letter-tile icon for a provider (preset or existing). */
+/** Brand icon for a provider, with a colored glyph tile as the fallback. */
 export function ProviderIcon({ providerId, size = 28 }: { providerId: string; size?: number }) {
 	const preset = findPreset(providerId);
 	const color = preset?.brandColor ?? "#8A8F98";
 	const glyph = preset?.glyph ?? providerId.trim().charAt(0).toUpperCase() ?? "?";
+	const iconSrc = preset?.iconSrc;
 	return (
 		<span
-			className="flex shrink-0 items-center justify-center rounded-md font-semibold text-white"
-			style={{ width: size, height: size, backgroundColor: color, fontSize: Math.round(size * 0.38) }}
+			className="flex shrink-0 items-center justify-center overflow-hidden rounded-md font-semibold text-white"
+			style={{ width: size, height: size, backgroundColor: iconSrc ? "transparent" : color, fontSize: Math.round(size * 0.38) }}
 		>
-			{glyph}
+			{iconSrc ? <img src={iconSrc} alt="" aria-hidden="true" className="h-full w-full object-contain" /> : glyph}
 		</span>
 	);
 }

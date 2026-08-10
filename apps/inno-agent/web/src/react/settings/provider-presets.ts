@@ -2,7 +2,7 @@
  * Guided provider presets for the "add model" wizard, in the spirit of
  * cc-switch's preset catalog. Each preset pre-fills the OpenAI-compatible
  * endpoint, links to the console where the user gets an API key, and carries
- * brand metadata (icon glyph + color) used across the settings UI.
+ * brand metadata (icon asset + glyph fallback + color) used across the settings UI.
  */
 
 export interface ProviderPreset {
@@ -14,6 +14,8 @@ export interface ProviderPreset {
 	description: string;
 	/** Brand color used for the icon tile */
 	brandColor: string;
+	/** Optional local brand icon. The glyph remains the fallback for custom/unknown providers. */
+	iconSrc?: string;
 	/** Short glyph rendered inside the icon tile (letter mark) */
 	glyph: string;
 	/** Pre-filled API base URL (OpenAI-compatible unless api says otherwise) */
@@ -33,6 +35,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "DeepSeek",
 		description: "深度求索 · deepseek-chat / reasoner",
 		brandColor: "#4D6BFE",
+		iconSrc: "/provider-icons/deepseek.ico",
 		glyph: "DS",
 		baseUrl: "https://api.deepseek.com/v1",
 		api: "openai-completions",
@@ -44,6 +47,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "Kimi",
 		description: "月之暗面 · kimi-k2 系列",
 		brandColor: "#6366F1",
+		iconSrc: "/provider-icons/kimi-rounded.png",
 		glyph: "K",
 		baseUrl: "https://api.moonshot.cn/v1",
 		api: "openai-completions",
@@ -55,6 +59,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "MiniMax",
 		description: "MiniMax-M2 系列",
 		brandColor: "#FF6B6B",
+		iconSrc: "/provider-icons/minimax-user-icon.png",
 		glyph: "MM",
 		baseUrl: "https://api.minimaxi.com/v1",
 		api: "openai-completions",
@@ -66,6 +71,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "火山引擎",
 		description: "字节跳动 · 豆包 Doubao",
 		brandColor: "#F5582E",
+		iconSrc: "/provider-icons/volcengine-icon.svg",
 		glyph: "火",
 		baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
 		api: "openai-completions",
@@ -78,6 +84,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "小米 MiMo",
 		description: "小米 · mimo 系列",
 		brandColor: "#FF6900",
+		iconSrc: "/provider-icons/xiaomi-mi.png",
 		glyph: "Mi",
 		baseUrl: "https://api.xiaomimimo.com/v1",
 		api: "openai-completions",
@@ -89,6 +96,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		name: "阿里百炼",
 		description: "阿里云 · 通义千问 Qwen",
 		brandColor: "#624AFF",
+		iconSrc: "/provider-icons/bailian.svg",
 		glyph: "百",
 		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		api: "openai-completions",
