@@ -1,8 +1,9 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, sep } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import { logger } from "../../logger.js";
+import { isWithin } from "../../utils/path-safety.js";
 import {
 	canonicalTreeRoot,
 	contentTypeForWorkspaceFile,
@@ -224,7 +225,7 @@ export async function handleSkillsRoutes(
 						} catch {
 							real = fullPath;
 						}
-						const withinRoot = real === skillRootReal || real.startsWith(skillRootReal + sep);
+						const withinRoot = isWithin(skillRootReal, real);
 						node.children = withinRoot && !seen.has(real)
 							? readSkillTree(fullPath, depth + 1, new Set([...seen, real]))
 							: [];

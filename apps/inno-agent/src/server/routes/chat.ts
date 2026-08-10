@@ -20,6 +20,7 @@ import {
 } from "../../chat/stream-registry.js";
 import { logger } from "../../logger.js";
 import type { RuntimePaths } from "../../runtime.js";
+import { resolveContainedPath } from "../../utils/path-safety.js";
 import type { WorkspaceRegistry } from "../../workspace/workspace-registry.js";
 import { WORKSPACE_IGNORES } from "../file-helpers.js";
 import { json, matchRoute, readBody } from "../http-helpers.js";
@@ -109,7 +110,14 @@ function toolCallStreamEventFromAssistantEvent(ev: any): unknown | null {
  */
 function persistInlineImages(images: Array<{ data: string; mimeType: string }>, workspaceRoot: string): string[] {
 	if (images.length === 0) return [];
-	const chatImagesDir = join(workspaceRoot, ".chat-images");
+	// `.chat-images` is agent-writable like the rest of the workspace — if it
+	// (or an ancestor) is a symlink escaping the workspace, pasted images would
+	// be written to a host directory. Fail closed and just skip persistence.
+	const chatImagesDir = resolveContainedPath(workspaceRoot, ".chat-images");
+	if (!chatImagesDir) {
+		logger.warn({ workspaceRoot }, "skipping inline image persistence: .chat-images escapes the workspace");
+		return [];
+	}
 	try {
 		if (!existsSync(chatImagesDir)) mkdirSync(chatImagesDir, { recursive: true });
 	} catch (err) {

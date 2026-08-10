@@ -252,7 +252,7 @@ Three layers, all file-backed under `dataDir`:
 
 ### HTTP server (`src/server.ts`)
 
-Plain Node `http.createServer` (no framework), ~5300 lines in a single file (slated for incremental route-domain extraction — see `docs/quality-remediation-plan.md`). Key endpoints:
+Plain Node `http.createServer` (no framework), ~1600 lines plus route domains extracted under `src/server/routes/` (chat, wiki, workspaces, skills, channels, jobs, sessions, settings, learner, practice, presets). Key endpoints:
 - `POST /api/chat/stream` — SSE streaming chat.
 - `POST /api/chat` — non-streaming chat (full response).
 - `GET /api/chat/events/:id` — SSE event replay for reconnecting to an in-progress chat stream after page navigation (backed by `SessionEventBroadcaster`, an in-memory buffer).

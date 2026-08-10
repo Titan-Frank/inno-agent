@@ -13,13 +13,14 @@ import {
 } from "node:fs";
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { applyWorkspaceCwd, getCurrentSessionId } from "../../agent/pi-runner.js";
 import { streamRegistry } from "../../chat/stream-registry.js";
 import { logger } from "../../logger.js";
 import type { RuntimePaths } from "../../runtime.js";
 import { ensureDir } from "../../storage/file-store.js";
+import { isWithin } from "../../utils/path-safety.js";
 import { TEMP_WORKSPACE_ID, type WorkspaceRegistry } from "../../workspace/workspace-registry.js";
 import {
 	canonicalTreeRoot,
@@ -139,7 +140,7 @@ function readWorkspaceTree(rootDir: string, dir: string, depth = 0, seen: Readon
 				} catch {
 					real = fullPath;
 				}
-				const withinRoot = real === realRoot || real.startsWith(realRoot + sep);
+				const withinRoot = isWithin(realRoot, real);
 				node.children = withinRoot && !seen.has(real)
 					? readWorkspaceTree(rootDir, fullPath, depth + 1, new Set([...seen, real]))
 					: [];
@@ -171,7 +172,10 @@ function zipDirectory(dirPath: string): Buffer {
 			}
 		} else {
 			// `-r` recurse, run inside the dir so paths are relative to it.
-			const result = spawnSync("/usr/bin/zip", ["-r", "-q", zipPath, "."], { cwd: dirPath, encoding: "utf-8" });
+			// `-y` stores symlinks as links: without it zip dereferences them,
+			// so a symlink planted inside the workspace would leak the linked
+			// host files into the archive.
+			const result = spawnSync("/usr/bin/zip", ["-r", "-y", "-q", zipPath, "."], { cwd: dirPath, encoding: "utf-8" });
 			if (result.status !== 0) {
 				throw new Error((result.stderr || "").trim() || "Unable to create zip archive");
 			}
@@ -647,10 +651,15 @@ export async function handleWorkspacesRoutes(
 			// A .zip or .md dropped into the workspace's private skills dir is
 			// installed as a skill (zip is extracted) rather than written raw.
 			if (filePath.split("/").includes(WORKSPACE_PRIVATE_SKILLS_DIR) && (ext === ".zip" || ext === ".md")) {
+				// The install target must really be `<root>/.skills` — a symlink
+				// planted at `.skills` would make the installer delete/overwrite
+				// a directory outside the workspace.
+				const skillsRoot = safeWorkspacePath(wsId, WORKSPACE_PRIVATE_SKILLS_DIR);
+				if (!skillsRoot) { json(res, 400, { error: "Invalid skills directory" }); return true; }
 				try {
 					const skill = ext === ".zip"
-						? installSkillZip(basename(filePath), data, join(root, WORKSPACE_PRIVATE_SKILLS_DIR))
-						: installSkillMarkdown(basename(filePath), data, join(root, WORKSPACE_PRIVATE_SKILLS_DIR));
+						? installSkillZip(basename(filePath), data, skillsRoot)
+						: installSkillMarkdown(basename(filePath), data, skillsRoot);
 					uploaded.push(workspaceSkillNode(root, skill.name));
 					installedSkill = true;
 					continue;
@@ -689,10 +698,14 @@ export async function handleWorkspacesRoutes(
 		const ext = extname(fileName).toLowerCase();
 		if (ext !== ".zip" && ext !== ".md") { json(res, 400, { error: "Only .zip or .md skill packages are supported" }); return true; }
 		const data = Buffer.from(dataBase64, "base64");
+		// Guard the install target: a symlink planted at `.skills` would make the
+		// installer delete/overwrite a directory outside the workspace.
+		const skillsRoot = safeWorkspacePath(wsId, WORKSPACE_PRIVATE_SKILLS_DIR);
+		if (!skillsRoot) { json(res, 400, { error: "Invalid skills directory" }); return true; }
 		try {
 			const skill = ext === ".zip"
-				? installSkillZip(fileName, data, join(root, WORKSPACE_PRIVATE_SKILLS_DIR))
-				: installSkillMarkdown(fileName, data, join(root, WORKSPACE_PRIVATE_SKILLS_DIR));
+				? installSkillZip(fileName, data, skillsRoot)
+				: installSkillMarkdown(fileName, data, skillsRoot);
 			scheduleSkillsReload();
 			json(res, 201, workspaceSkillNode(root, skill.name));
 		} catch (err) {

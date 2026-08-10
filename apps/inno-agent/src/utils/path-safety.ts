@@ -9,9 +9,16 @@
  * the host. The checks here resolve the closest *existing* ancestor through
  * `realpathSync` and project the non-existent suffix from there, so symlink
  * escapes are caught for both reads and writes.
+ *
+ * "Existing" is determined with `lstatSync`, not `existsSync`: `existsSync`
+ * follows links, so a *dangling* symlink (target missing) would look like a
+ * non-existent suffix and skip the realpath check — and a subsequent write
+ * would follow the link and create the file outside the root. With lstat the
+ * symlink itself counts as existing, and `realpathSync` on a dangling link
+ * throws, which fails closed.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export function isWithin(root: string, target: string): boolean {
@@ -19,14 +26,28 @@ export function isWithin(root: string, target: string): boolean {
 	return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
+/**
+ * Closest ancestor of `target` that exists, where a symlink itself counts as
+ * existing even when its target does not (see module header). Returns null
+ * when nothing exists or a component cannot be inspected.
+ */
 export function findExistingAncestor(target: string): string | null {
 	let current = target;
-	while (!existsSync(current)) {
-		const parent = dirname(current);
-		if (parent === current) return null;
-		current = parent;
+	for (;;) {
+		try {
+			lstatSync(current);
+			return current;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			// Only "not there" keeps the walk going; anything else (EACCES,
+			// ELOOP, ...) fails closed instead of skipping past a component
+			// we cannot inspect.
+			if (code !== "ENOENT" && code !== "ENOTDIR") return null;
+			const parent = dirname(current);
+			if (parent === current) return null;
+			current = parent;
+		}
 	}
-	return current;
 }
 
 /**
@@ -44,6 +65,24 @@ export function canonicalContainmentRoot(dir: string): string {
 }
 
 /**
+ * Canonicalize a path that may not exist yet: realpath the closest existing
+ * ancestor and project the missing suffix from there. Unlike a bare
+ * realpath-or-lexical fallback, this stays correct when the path is missing
+ * but an ancestor contains a symlink (macOS /var → /private/var, symlinked
+ * $HOME) — the mixed lexical/canonical comparison would otherwise reject
+ * every legitimate path under the not-yet-created directory.
+ */
+function canonicalizePossiblyMissing(target: string): string | null {
+	const ancestor = findExistingAncestor(target);
+	if (!ancestor) return null;
+	try {
+		return resolve(realpathSync(ancestor), relative(ancestor, target));
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Resolve `userPath` against `baseDir` and verify that the canonical
  * (symlink-resolved) target stays inside the canonical base. Returns the
  * lexically resolved path (not the canonical one — callers keep their
@@ -56,13 +95,13 @@ export function resolveContainedPath(baseDir: string, userPath: string): string 
 		// Fast lexical reject before touching the filesystem.
 		if (!isWithin(resolvedBase, resolvedPath)) return null;
 
-		const canonicalBase = canonicalContainmentRoot(resolvedBase);
-		const existingAncestor = findExistingAncestor(resolvedPath);
-		if (!existingAncestor) return null;
-
-		const canonicalAncestor = realpathSync(existingAncestor);
-		const unresolvedSuffix = relative(existingAncestor, resolvedPath);
-		const canonicalTarget = resolve(canonicalAncestor, unresolvedSuffix);
+		// The base may not exist yet (e.g. the L2 dir before the first wiki
+		// page is written); canonicalize it through its own existing ancestor
+		// so a symlinked ancestor cannot make every legitimate path mismatch.
+		const canonicalBase = canonicalizePossiblyMissing(resolvedBase);
+		if (!canonicalBase) return null;
+		const canonicalTarget = canonicalizePossiblyMissing(resolvedPath);
+		if (!canonicalTarget) return null;
 		if (!isWithin(canonicalBase, canonicalTarget)) return null;
 
 		return resolvedPath;
