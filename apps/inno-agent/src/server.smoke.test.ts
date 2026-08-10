@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -336,6 +336,32 @@ describe("server smoke", () => {
 	it("GET /api/workspace/file returns 404 for a missing file", async () => {
 		const res = await api("/api/workspace/file?path=no-such-file.txt");
 		expect(res.status).toBe(404);
+	});
+
+	it("GET /api/workspace/file rejects symlinks escaping the workspace (issue #162)", async () => {
+		const tree = await api("/api/workspace/tree");
+		const { root } = (await tree.json()) as { root: string };
+
+		// A symlink planted inside the workspace (trivial via the agent's bash
+		// tool) must not let the endpoint read host files outside the root.
+		const secretDir = mkdtempSync(join(tmpdir(), "inno-smoke-secret-"));
+		try {
+			writeFileSync(join(secretDir, "secret.txt"), "top-secret");
+			symlinkSync(secretDir, join(root, "escape-link"));
+			symlinkSync(join(secretDir, "secret.txt"), join(root, "direct-link.txt"));
+
+			const viaDir = await api("/api/workspace/file?path=escape-link/secret.txt");
+			expect(viaDir.status).toBe(404);
+			const viaFile = await api("/api/workspace/file?path=direct-link.txt");
+			expect(viaFile.status).toBe(404);
+
+			// Positive control: a genuine file inside the root stays readable.
+			writeFileSync(join(root, "hello.txt"), "hello");
+			const ok = await api("/api/workspace/file?path=hello.txt");
+			expect(ok.status).toBe(200);
+		} finally {
+			rmSync(secretDir, { recursive: true, force: true });
+		}
 	});
 
 	it("DELETE /api/workspaces/tmp is rejected with 400", async () => {

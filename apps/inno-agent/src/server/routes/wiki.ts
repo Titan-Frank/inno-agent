@@ -8,7 +8,7 @@ import { readManifest, removeWikiPathFromManifest } from "../../memory/l2/manife
 import { buildWikiGraph } from "../../memory/l2/wiki-graph.js";
 import { parseFrontmatter } from "../../memory/l2/wiki-maintainer.js";
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
-import { safeJoin } from "../file-helpers.js";
+import { safeJoinReal } from "../file-helpers.js";
 import { json, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
 
 export interface WikiRouteContext {
@@ -117,7 +117,7 @@ export async function handleWikiRoutes(
 			json(res, 400, { error: "Missing path parameter" });
 			return true;
 		}
-		const fullPath = safeJoin(l2DataDir, path);
+		const fullPath = safeJoinReal(l2DataDir, path);
 		if (!fullPath) {
 			json(res, 400, { error: "Invalid wiki path" });
 			return true;
@@ -139,7 +139,7 @@ export async function handleWikiRoutes(
 			json(res, 400, { error: "Missing path or content" });
 			return true;
 		}
-		const fullPath = safeJoin(l2DataDir, path);
+		const fullPath = safeJoinReal(l2DataDir, path);
 		if (!fullPath) {
 			json(res, 400, { error: "Invalid wiki path" });
 			return true;
@@ -157,7 +157,7 @@ export async function handleWikiRoutes(
 			json(res, 400, { error: "Missing path parameter" });
 			return true;
 		}
-		const fullPath = safeJoin(l2DataDir, path);
+		const fullPath = safeJoinReal(l2DataDir, path);
 		if (!fullPath) {
 			json(res, 400, { error: "Invalid wiki path" });
 			return true;

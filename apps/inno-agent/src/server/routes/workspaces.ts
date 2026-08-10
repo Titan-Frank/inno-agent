@@ -26,7 +26,7 @@ import {
 	contentDispositionAttachment,
 	contentTypeForWorkspaceFile,
 	officeFormat,
-	safeJoin,
+	safeJoinReal,
 	workspaceFileKind,
 	WORKSPACE_IGNORES,
 	WORKSPACE_TREE_MAX_DEPTH,
@@ -309,10 +309,12 @@ export async function handleWorkspacesRoutes(
 
 	// safeWorkspacePath closed over server.ts's module-level workspaceRegistry;
 	// rebind it to the injected registry here so the route bodies stay verbatim.
+	// safeJoinReal (not plain safeJoin): a symlink planted inside the workspace
+	// must not let these endpoints read/write files outside it.
 	const safeWorkspacePath = (workspaceId: string | null | undefined, userPath: string): string | null => {
 		const root = workspaceRegistry.resolveWorkspaceDir(workspaceId ?? TEMP_WORKSPACE_ID);
 		if (!root) return null;
-		return safeJoin(root, userPath.replace(/^\/+/, ""));
+		return safeJoinReal(root, userPath.replace(/^\/+/, ""));
 	};
 
 	// --- Workspace API ---

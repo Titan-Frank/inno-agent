@@ -36,7 +36,7 @@ import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { CronScheduler } from "./scheduler/cron-scheduler.js";
 import { HttpError, json } from "./server/http-helpers.js";
 import {
-	safeJoin,
+	safeJoinReal,
 	slugifySkillName,
 } from "./server/file-helpers.js";
 import { handleChannelsRoutes } from "./server/routes/channels.js";
@@ -473,7 +473,7 @@ function serveStatic(req: HttpReq, res: ServerResponse, filePath: string, sendBo
 function sessionFileFromId(sessionDir: string, id: string): string | null {
 	const fileName = basename(id);
 	if (fileName !== id || !fileName.endsWith(".jsonl")) return null;
-	return safeJoin(sessionDir, fileName);
+	return safeJoinReal(sessionDir, fileName);
 }
 
 function textFromContent(content: unknown): string {
@@ -1459,7 +1459,7 @@ const server = createServer(async (req, res) => {
 		// --- Static files / SPA fallback ---
 		if (method === "GET" || method === "HEAD") {
 			const urlPath = decodeURIComponent(url.split("?")[0]);
-			const staticPath = safeJoin(webDistDir, urlPath.replace(/^\/+/, ""));
+			const staticPath = safeJoinReal(webDistDir, urlPath.replace(/^\/+/, ""));
 			const sendBody = method === "GET";
 			// Try exact file in web/dist
 			if (staticPath && serveStatic(req, res, staticPath, sendBody)) return;

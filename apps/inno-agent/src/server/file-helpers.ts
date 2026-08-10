@@ -1,5 +1,5 @@
-import { realpathSync } from "node:fs";
 import { basename, extname, relative, resolve } from "node:path";
+import { canonicalContainmentRoot, resolveContainedPath } from "../utils/path-safety.js";
 
 /**
  * Pure file/path helpers shared by the server route domains (skills,
@@ -13,6 +13,17 @@ export function safeJoin(baseDir: string, userPath: string): string | null {
 	const rel = relative(resolvedBase, resolvedPath);
 	if (rel.startsWith("..") || resolve(rel) === rel) return null;
 	return resolvedPath;
+}
+
+/**
+ * Symlink-aware variant of {@link safeJoin} for endpoints that read or write
+ * file contents. A lexical check alone lets a symlink planted inside the root
+ * (trivial for the agent's bash tool to create in a workspace) escape to any
+ * file on the host; this resolves the closest existing ancestor through
+ * realpath and verifies the canonical target stays inside the canonical root.
+ */
+export function safeJoinReal(baseDir: string, userPath: string): string | null {
+	return resolveContainedPath(baseDir, userPath);
 }
 
 export function slugifySkillName(value: string): string {
@@ -48,11 +59,7 @@ export function contentDispositionAttachment(fileName: string): string {
  * every directory empty.
  */
 export function canonicalTreeRoot(dir: string): string {
-	try {
-		return realpathSync(dir);
-	} catch {
-		return dir;
-	}
+	return canonicalContainmentRoot(dir);
 }
 
 export interface WorkspaceTreeNode {
