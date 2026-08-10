@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { logger } from "../../logger.js";
@@ -95,7 +95,13 @@ export class ILinkClient {
 			updates_buf: this.updatesBuf,
 			...extra,
 		};
-		writeFileSync(this.tokenFilePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+		// 0o600: this file carries the live bot token.
+		writeFileSync(this.tokenFilePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+		try {
+			chmodSync(this.tokenFilePath, 0o600);
+		} catch {
+			// permissions are best-effort (Windows)
+		}
 	}
 
 	private buildHeaders(): Record<string, string> {

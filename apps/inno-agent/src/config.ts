@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RuntimePaths } from "./runtime.js";
 import { DEFAULT_SCHEDULER_TIMEZONE } from "./scheduler/cron-utils.js";
@@ -388,6 +388,14 @@ export function loadConfig(configPathOrDir: string): InnoConfig {
 		: join(configPathOrDir, "config.json");
 	try {
 		const raw = readFileSync(configPath, "utf-8");
+		// Best-effort permission fix-up for configs written before saveConfig
+		// started enforcing 0o600 — a config that is never re-saved would
+		// otherwise stay world-readable forever.
+		try {
+			chmodSync(configPath, 0o600);
+		} catch {
+			// read-only FS / Windows — permissions are best-effort
+		}
 		return normalizeConfig(JSON.parse(raw) as LegacyInnoConfig);
 	} catch (error) {
 		throw new Error(
@@ -403,7 +411,8 @@ export function saveConfig(configPathOrDir: string, config: InnoConfig): InnoCon
 	const normalized = normalizeConfig(config);
 	// Atomic write (tmp + rename): a crash mid-write must not leave a truncated
 	// config.json — the server hot-rewrites this file on every model switch.
-	writeJson(configPath, normalized);
+	// 0o600: the file carries plaintext provider API keys and the bridge token.
+	writeJson(configPath, normalized, { mode: 0o600 });
 	return normalized;
 }
 

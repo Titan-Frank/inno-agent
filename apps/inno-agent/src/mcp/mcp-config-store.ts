@@ -17,7 +17,7 @@
  *   6. <workspaceDir>/.pi/mcp.json   (project Pi override, highest)
  * Later sources override earlier ones by server name.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { RuntimePaths } from "../runtime.js";
@@ -150,8 +150,14 @@ export function writeManagedMcpConfig(paths: RuntimePaths, config: McpConfigFile
 	const configPath = getManagedMcpConfigPath(paths);
 	mkdirSync(dirname(configPath), { recursive: true });
 	const tmp = `${configPath}.tmp-${process.pid}`;
-	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+	// 0o600: server entries commonly carry API keys / bearer tokens in env.
+	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
 	renameSync(tmp, configPath);
+	try {
+		chmodSync(configPath, 0o600);
+	} catch {
+		// permissions are best-effort (Windows)
+	}
 }
 
 const SERVER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
