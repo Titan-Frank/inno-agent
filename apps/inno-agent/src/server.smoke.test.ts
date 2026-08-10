@@ -416,4 +416,39 @@ describe("server smoke", () => {
 		const res = await api("/health");
 		expect(res.status).toBe(200);
 	});
+
+	it("upload endpoints honour the raised cap: 33 MB is accepted, 193 MB is rejected", async () => {
+		// 33 MB exceeds the default 32 MB cap but is under the upload cap, so
+		// the body is consumed and fails JSON parsing (400) rather than size
+		// rejection (413).
+		const accepted = await fetch(`http://127.0.0.1:${port}/api/skills/upload`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "a".repeat(33 * 1024 * 1024),
+		});
+		expect(accepted.status).toBe(400);
+
+		// 193 MB exceeds even the upload cap — headers only, rejected early.
+		const { status } = await new Promise<{ status: number }>((resolveReq, rejectReq) => {
+			const req = httpRequest(
+				{
+					host: "127.0.0.1",
+					port,
+					path: "/api/skills/upload",
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Content-Length": String(193 * 1024 * 1024),
+					},
+				},
+				(res) => {
+					res.resume();
+					res.on("end", () => resolveReq({ status: res.statusCode ?? 0 }));
+				},
+			);
+			req.on("error", rejectReq);
+			req.flushHeaders();
+		});
+		expect(status).toBe(413);
+	});
 });

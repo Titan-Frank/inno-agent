@@ -28,6 +28,14 @@ export class HttpError extends Error {
  */
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
 
+/**
+ * Raised cap for the base64 upload endpoints (skill zip upload, L2 raw
+ * document upload). Base64 inflates the payload by 4/3, so 192 MB on the
+ * wire covers source files up to ~128 MB — large PDFs/Office docs are
+ * legitimate inputs there, unlike on the chat/CRUD endpoints.
+ */
+export const UPLOAD_MAX_BODY_BYTES = 192 * 1024 * 1024;
+
 export function readBody(req: HttpReq, options?: { maxBytes?: number }): Promise<unknown> {
 	const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BODY_BYTES;
 	return new Promise((resolve, reject) => {
