@@ -19,7 +19,7 @@ PI SDK packages (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@e
 
 Key dependencies: `ws` (WebSocket), `node-pty` (PTY terminal), `cron-parser` (scheduler), `@larksuiteoapi/node-sdk` (Feishu), `typebox` (validation), `undici` (HTTP client), `@juicesharp/rpiv-ask-user-question` (bridges agent `ask_user_question` tool calls to the web UI), `pi-subagents` (optional subagent support), `pi-sandbox` (optional OS-level sandboxing), `graphology` + `graphology-communities-louvain` (wiki knowledge graph), `yaml` (YAML parsing), `@llamaindex/liteparse` (document parsing).
 
-Tests run with `npm test` (`vitest run`, root script) and also execute in the release CI. The suite is ~30 files (245 tests) and skewed toward `memory/l2`; coverage for channels/scheduler/terminal/L1/L3 is tracked in `docs/quality-remediation-plan.md`. The TypeScript build (`npm run build`) remains the primary sanity check. No ESLint or Prettier configuration exists.
+Tests run with `npm test` (`vitest run`, root script) and also execute in the release CI. The suite is ~32 files (254 tests) and skewed toward `memory/l2`; coverage for channels/scheduler/terminal/L1/L3 is tracked in `docs/quality-remediation-plan.md`. The TypeScript build (`npm run build`) remains the primary sanity check. No ESLint or Prettier configuration exists.
 
 When a PR changes the test count, the size of `server.ts`, or other structural facts stated in this file, update this file in the same PR — AI agents read it as ground truth.
 
@@ -195,7 +195,7 @@ The Electron main process (`electron/main.js`) spawns the server as a child proc
 
 ### LLM Fetch Logger (`src/utils/fetch-logger.ts`)
 
-Wraps `globalThis.fetch` at startup to intercept and log all LLM provider API calls (OpenAI-style `/chat/completions`, Anthropic `/messages`, PI proxy `/api/stream`). Each request gets a correlation ID (`seq/unixTimestamp`), logs the request body (truncated to 8000 chars), and logs the response with status, elapsed time, and body (truncated to 4000 chars). Installed via `installFetchLogger()` in both `server.ts` and `cli.ts`.
+Wraps `globalThis.fetch` at startup to intercept and log all LLM provider API calls (OpenAI-style `/chat/completions`, Anthropic `/messages`, PI proxy `/api/stream`). Each request gets a correlation ID (`seq/unixTimestamp`). By default only metadata is logged (URL, status, elapsed time, body sizes) — request/response bodies (truncated to 8000/4000 chars) are included only when `LOG_LLM_BODY=1` is set, since they contain prompts, learner data and model output. Installed via `installFetchLogger()` in both `server.ts` and `cli.ts`.
 
 ### Proxy Bypass (`src/utils/proxy-bypass.ts`)
 

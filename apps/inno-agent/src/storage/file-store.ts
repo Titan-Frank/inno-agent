@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { logger } from "../logger.js";
 
@@ -27,12 +27,25 @@ export function readJson<T>(filePath: string, defaultValue: T): T {
 
 /**
  * Write a JSON file atomically (write to .tmp then rename).
+ *
+ * `options.mode` (e.g. 0o600 for files containing secrets) is applied to the
+ * final file — including pre-existing files left over from before the option
+ * was introduced, whose permissions are corrected in place.
  */
-export function writeJson<T>(filePath: string, data: T): void {
+export function writeJson<T>(filePath: string, data: T, options?: { mode?: number }): void {
 	ensureDir(dirname(filePath));
 	const tmp = filePath + ".tmp";
-	writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
+	writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", ...(options?.mode !== undefined ? { mode: options.mode } : {}) });
 	renameSync(tmp, filePath);
+	if (options?.mode !== undefined) {
+		// rename only helps if the tmp file got the right mode at creation;
+		// chmod unconditionally so old 0644 files are fixed on next write too.
+		try {
+			chmodSync(filePath, options.mode);
+		} catch (err) {
+			logger.warn({ err, filePath }, "failed to chmod file");
+		}
+	}
 }
 
 /**

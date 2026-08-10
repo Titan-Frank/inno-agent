@@ -54,7 +54,7 @@ function ensureConfig() {
     subagents: { enabled: false },
     ui: { theme: "light", closeBehavior: "ask" },
   };
-  writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n");
+  writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n", { mode: 0o600 });
 }
 
 // ── 全局状态 ──────────────────────────────────────────────────────────────────
@@ -233,7 +233,16 @@ function openMainWindow() {
   });
   mainWindow.on("closed", () => { mainWindow = null; });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // Only http(s) may leave the app — file://, smb:// and custom schemes
+    // handed to shell.openExternal can trigger OS-level handlers (issue #162).
+    try {
+      const protocol = new URL(url).protocol;
+      if (protocol === "https:" || protocol === "http:") {
+        shell.openExternal(url);
+      }
+    } catch {
+      // unparseable URL — deny
+    }
     return { action: "deny" };
   });
 }

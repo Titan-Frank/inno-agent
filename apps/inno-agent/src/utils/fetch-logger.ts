@@ -3,12 +3,17 @@
  *
  * Installed once at startup via {@link installFetchLogger}. It wraps
  * `globalThis.fetch` so that any SDK (OpenAI, Anthropic, etc.) that uses
- * `fetch` under the hood will have its request URL and body logged through
+ * `fetch` under the hood will have its request URL and timing logged through
  * the shared Pino logger.
  *
  * Every LLM request gets a unique {@code seq/timestamp} identifier so that
  * request and response log lines can be correlated even when concurrent
  * calls produce interleaved output.
+ *
+ * Privacy: by default only metadata (URL, status, elapsed time, body sizes)
+ * is logged. Request/response bodies — which contain the system prompt,
+ * learner profile, user messages and model output — are only logged when
+ * LOG_LLM_BODY=1 is set explicitly.
  */
 
 import { logger } from "../logger.js";
@@ -25,6 +30,18 @@ const MAX_BODY_LENGTH = 8000;
 
 /** Maximum characters of the response body to log. */
 const MAX_RESPONSE_BODY_LENGTH = 4000;
+
+/**
+ * Body logging is opt-in: request bodies contain the system prompt, learner
+ * profile, user messages and uploaded document contents, and response bodies
+ * contain model output — all of it private learning data that should not sit
+ * in `log/server-*.log` by default. Set LOG_LLM_BODY=1 (or "true") to include
+ * truncated bodies when actively debugging a provider issue. Read dynamically
+ * so the toggle works without a restart (and stays testable).
+ */
+function shouldLogBodies(): boolean {
+	return /^(1|true|yes)$/i.test(process.env.LOG_LLM_BODY ?? "");
+}
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -57,14 +74,16 @@ export function installFetchLogger(): void {
     const startTime = isLlmCall ? Date.now() : 0;
 
     if (isLlmCall) {
-      let bodyStr = extractBodyString(init?.body);
-      if (bodyStr.length > MAX_BODY_LENGTH) {
-        bodyStr = bodyStr.slice(0, MAX_BODY_LENGTH) + "...[truncated]";
+      const bodyStr = extractBodyString(init?.body);
+      // Default: metadata only (see shouldLogBodies). bodyBytes keeps size
+      // observability without persisting the content itself.
+      const fields: Record<string, unknown> = { reqId, url, requestBodyBytes: bodyStr.length };
+      if (shouldLogBodies()) {
+        fields.requestBody = bodyStr.length > MAX_BODY_LENGTH
+          ? bodyStr.slice(0, MAX_BODY_LENGTH) + "...[truncated]"
+          : bodyStr;
       }
-      logger.info(
-        { reqId, url, requestBody: bodyStr },
-        `[LLM ${reqId}] REQ → POST ${url}`,
-      );
+      logger.info(fields, `[LLM ${reqId}] REQ → POST ${url}`);
     }
 
     let response: Awaited<ReturnType<FetchFn>>;
@@ -159,24 +178,37 @@ async function logResponse(
   const status = response.status;
   let bodyStr = "";
 
-  try {
-    // Clone so we can read the body without consuming it for the caller.
-    const cloned = response.clone();
-    bodyStr = await cloned.text();
-  } catch {
-    bodyStr = "[unable to read response body]";
-  }
+  if (shouldLogBodies()) {
+    try {
+      // Clone so we can read the body without consuming it for the caller.
+      const cloned = response.clone();
+      bodyStr = await cloned.text();
+    } catch {
+      bodyStr = "[unable to read response body]";
+    }
 
-  if (bodyStr.length > MAX_RESPONSE_BODY_LENGTH) {
-    bodyStr = bodyStr.slice(0, MAX_RESPONSE_BODY_LENGTH) + "...[truncated]";
+    if (bodyStr.length > MAX_RESPONSE_BODY_LENGTH) {
+      bodyStr = bodyStr.slice(0, MAX_RESPONSE_BODY_LENGTH) + "...[truncated]";
+    }
+  } else {
+    // Content-Length keeps response-size observability without reading
+    // (and persisting) the body itself.
+    bodyStr = "";
   }
 
   const level = status >= 400 ? "warn" : "info";
   const elapsed = elapsedMs >= 1000
     ? `${(elapsedMs / 1000).toFixed(1)}s`
     : `${elapsedMs}ms`;
+  const fields: Record<string, unknown> = { reqId, url, status, elapsedMs };
+  if (shouldLogBodies()) {
+    fields.responseBody = bodyStr;
+  } else {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) fields.responseBodyBytes = Number.parseInt(contentLength, 10);
+  }
   logger[level](
-    { reqId, url, status, elapsedMs, responseBody: bodyStr },
+    fields,
     `[LLM ${reqId}] RESP ← ${status} (${elapsed})`,
   );
 }

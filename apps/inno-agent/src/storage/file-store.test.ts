@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendJsonl, readJsonl, readJsonlTail } from "./file-store.js";
+import { appendJsonl, readJson, readJsonl, readJsonlTail, writeJson } from "./file-store.js";
 
 let dir: string;
 
@@ -79,5 +79,26 @@ describe("readJsonlTail", () => {
 		const file = join(dir, "mixed.jsonl");
 		writeFileSync(file, '{"n":1}\nnot json\n{"n":2}\n', "utf-8");
 		expect(readJsonlTail<{ n: number }>(file, 1024).map((r) => r.n)).toEqual([1, 2]);
+	});
+});
+
+describe("writeJson mode option", () => {
+	it.skipIf(process.platform === "win32")("writes secret files with 0o600 and fixes pre-existing 0644 files", () => {
+		const file = join(dir, "secret.json");
+
+		writeJson(file, { key: "v1" }, { mode: 0o600 });
+		expect(statSync(file).mode & 0o777).toBe(0o600);
+
+		// Simulate a file written before the mode option existed.
+		writeFileSync(file, "{}", "utf-8");
+		chmodSync(file, 0o644);
+		writeJson(file, { key: "v2" }, { mode: 0o600 });
+		expect(statSync(file).mode & 0o777).toBe(0o600);
+	});
+
+	it("leaves permissions alone when no mode is given", () => {
+		const file = join(dir, "plain.json");
+		writeJson(file, { a: 1 });
+		expect(readJson(file, null)).toEqual({ a: 1 });
 	});
 });
