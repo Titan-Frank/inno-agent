@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -369,5 +370,50 @@ describe("server smoke", () => {
 
 		const abort = await fetch(`http://127.0.0.1:${port}/api/chat/sess/turn/abort`, { method: "POST" });
 		expect(abort.status).toBe(404);
+	});
+
+	it("POST with a malformed JSON body returns 400 (not 500)", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "not json{",
+		});
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("Invalid JSON");
+	});
+
+	it("POST with an oversized declared Content-Length returns 413 and survives to serve the next request", async () => {
+		// Send headers only — the server must reject from the declared length
+		// without consuming a single body byte. (issue #162: readBody had no cap)
+		const { status, connection } = await new Promise<{ status: number; connection: string | undefined }>(
+			(resolveReq, rejectReq) => {
+				const req = httpRequest(
+					{
+						host: "127.0.0.1",
+						port,
+						path: "/api/chat",
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"Content-Length": String(33 * 1024 * 1024),
+						},
+					},
+					(res) => {
+						res.resume();
+						res.on("end", () =>
+							resolveReq({ status: res.statusCode ?? 0, connection: res.headers.connection }),
+						);
+					},
+				);
+				req.on("error", rejectReq);
+				req.flushHeaders();
+			},
+		);
+		expect(status).toBe(413);
+		expect(connection).toBe("close");
+
+		// The process must still be healthy after rejecting the oversized body.
+		const res = await api("/health");
+		expect(res.status).toBe(200);
 	});
 });

@@ -10,10 +10,15 @@ import { createMcpStatusExtension, loadMcpAdapterExtension } from "./agent/mcp-e
 import { ensureDir } from "./storage/file-store.js";
 import { seedManagedMcpConfig } from "./mcp/mcp-config-store.js";
 import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "./runtime.js";
+import { installProcessFallbacks } from "./utils/process-fallback.js";
 import { logger } from "./logger.js";
 
 // Set process title
 process.title = "inno";
+
+// Last-resort handlers: log fatal-level and exit cleanly on stray
+// exceptions/rejections instead of dying silently mid-session.
+installProcessFallbacks();
 
 // Disable undici timeouts for long streaming responses
 // bodyTimeout: 15 min safety net for LLM provider requests. Provider-level

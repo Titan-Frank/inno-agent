@@ -7,17 +7,62 @@ import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
  * re-defining their own copies.
  */
 
-export function readBody(req: HttpReq): Promise<unknown> {
+/**
+ * Error carrying a client-facing HTTP status code. The server catch-all
+ * honours `statusCode`/`message` instead of collapsing to a bare 500.
+ */
+export class HttpError extends Error {
+	readonly statusCode: number;
+	constructor(statusCode: number, message: string) {
+		super(message);
+		this.name = "HttpError";
+		this.statusCode = statusCode;
+	}
+}
+
+/**
+ * Default request body cap (32 MB). Chat messages carry base64-encoded
+ * images and skill/L2 uploads carry base64-encoded archives, so the limit
+ * must be generous — but unbounded accumulation lets any client exhaust
+ * server memory with a single oversized POST.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+export function readBody(req: HttpReq, options?: { maxBytes?: number }): Promise<unknown> {
+	const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BODY_BYTES;
 	return new Promise((resolve, reject) => {
+		// Stop consuming without destroying the socket: the catch-all still
+		// needs to write the 413 response on this connection. The response is
+		// sent with `Connection: close` and the socket is torn down after the
+		// response flushes (an unconsumed body makes keep-alive unsafe).
+		const tooLarge = (): void => {
+			req.removeAllListeners("data");
+			req.pause();
+			reject(new HttpError(413, `Request body too large (limit ${maxBytes} bytes)`));
+		};
+
+		// Reject early when the declared size already exceeds the cap.
+		const declared = Number.parseInt(req.headers["content-length"] ?? "", 10);
+		if (Number.isFinite(declared) && declared > maxBytes) {
+			tooLarge();
+			return;
+		}
+
 		let data = "";
+		let received = 0;
 		req.on("data", (chunk: Buffer) => {
+			received += chunk.length;
+			if (received > maxBytes) {
+				tooLarge();
+				return;
+			}
 			data += chunk.toString();
 		});
 		req.on("end", () => {
 			try {
 				resolve(data ? JSON.parse(data) : {});
 			} catch (err) {
-				reject(new Error("Invalid JSON body"));
+				reject(new HttpError(400, "Invalid JSON body"));
 			}
 		});
 		req.on("error", reject);
