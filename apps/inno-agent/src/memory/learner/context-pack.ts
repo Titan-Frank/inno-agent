@@ -3,6 +3,7 @@ import type {
 	LearnerContextPack,
 	LearningEvent,
 } from "./types.js";
+import { projectLearnerKnowledge } from "./state-engine.js";
 
 /**
  * Build a short context pack from the current learner profile.
@@ -23,22 +24,46 @@ function summarizeEvent(event: LearningEvent): string {
 	return label || event.event_type;
 }
 
-export function buildContextPack(profile: LearnerProfile, recentEvents: LearningEvent[] = []): LearnerContextPack {
+export interface BuildContextPackOptions {
+	asOf?: Date;
+}
+
+export function buildContextPack(
+	profile: LearnerProfile,
+	events: LearningEvent[] = [],
+	options: BuildContextPackOptions = {},
+): LearnerContextPack {
+	const asOf = options.asOf ?? new Date();
 	// Find highest-priority active goal
 	const activeGoals = profile.goals
 		.filter((g) => g.status === "active")
 		.sort((a, b) => b.priority - a.priority);
 	const activeGoal = activeGoals[0]?.title;
 
-	// Collect concepts with mastery < 1.0, sorted by mastery ascending (weakest first)
-	const relevantConcepts = profile.knowledge_states
+	const statePriority = {
+		misconception: 0,
+		review_due: 1,
+		unknown: 2,
+		learning: 3,
+		fragile: 4,
+		stable: 5,
+	} as const;
+	const projectedStates = projectLearnerKnowledge(profile, events, asOf);
+
+	// Collect actionable concepts using the evidence-derived state before the
+	// legacy numeric mastery as a tie breaker.
+	const relevantConcepts = projectedStates
 		.filter((ks) => ks.mastery < 1.0)
-		.sort((a, b) => a.mastery - b.mastery)
+		.sort((a, b) => statePriority[a.state_label] - statePriority[b.state_label] || a.mastery - b.mastery)
 		.slice(0, 5)
 		.map((ks) => ({
 			concept_id: ks.concept_id,
 			mastery: ks.mastery,
-			diagnosis: ks.diagnosis || "暂无诊断",
+			diagnosis: ks.diagnosis,
+			estimate_confidence: ks.estimate_confidence,
+			retrievability: ks.retrievability,
+			state_label: ks.state_label,
+			recommended_action: ks.next_actions[0],
 		}));
 
 	// Collect active misconceptions
@@ -81,18 +106,30 @@ export function buildContextPack(profile: LearnerProfile, recentEvents: Learning
 		teachingHints.push(`避免：${avoid}`);
 	}
 
-	const now = Date.now();
-	const reviewDueConcepts = profile.knowledge_states
-		.filter((ks) => ks.review_due_at && Date.parse(ks.review_due_at) <= now)
-		.sort((a, b) => Date.parse(a.review_due_at!) - Date.parse(b.review_due_at!))
+	const now = asOf.getTime();
+	const dynamicReviewDueConcepts = projectedStates
+		.filter((ks) => ks.next_review_at && Date.parse(ks.next_review_at) <= now)
+		.sort((a, b) => Date.parse(a.next_review_at!) - Date.parse(b.next_review_at!))
 		.slice(0, 5)
 		.map((ks) => ({
 			concept_id: ks.concept_id,
-			review_due_at: ks.review_due_at!,
+			review_due_at: ks.next_review_at!,
 			mastery: ks.mastery,
 		}));
+	const reviewDueByConcept = new Map(dynamicReviewDueConcepts.map((item) => [item.concept_id, item]));
+	for (const state of profile.knowledge_states) {
+		if (!state.review_due_at || Date.parse(state.review_due_at) > now || reviewDueByConcept.has(state.concept_id)) continue;
+		reviewDueByConcept.set(state.concept_id, {
+			concept_id: state.concept_id,
+			review_due_at: state.review_due_at,
+			mastery: state.mastery,
+		});
+	}
+	const reviewDueConcepts = [...reviewDueByConcept.values()]
+		.sort((a, b) => Date.parse(a.review_due_at) - Date.parse(b.review_due_at))
+		.slice(0, 5);
 
-	const recentEventSummaries = recentEvents
+	const recentEventSummaries = events
 		.slice(-5)
 		.reverse()
 		.map((event) => ({
@@ -127,7 +164,15 @@ export function formatContextPackForPrompt(pack: LearnerContextPack): string {
 	if (pack.relevant_concepts.length > 0) {
 		lines.push("\n相关概念：");
 		for (const c of pack.relevant_concepts) {
-			lines.push(`- ${c.concept_id}: 掌握度 ${c.mastery.toFixed(2)}，诊断：${c.diagnosis}`);
+			const state = c.state_label ? `，状态 ${c.state_label}` : "";
+			const confidence = c.estimate_confidence === undefined
+				? ""
+				: `，估计置信度 ${c.estimate_confidence.toFixed(2)}`;
+			const retrievability = c.retrievability === undefined
+				? ""
+				: `，当前可提取概率 ${c.retrievability.toFixed(2)}`;
+			lines.push(`- ${c.concept_id}: 长期掌握度 ${c.mastery.toFixed(2)}${state}${confidence}${retrievability}，诊断：${c.diagnosis}`);
+			if (c.recommended_action) lines.push(`  建议：${c.recommended_action}`);
 		}
 	}
 
