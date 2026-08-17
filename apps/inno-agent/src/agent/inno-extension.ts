@@ -197,7 +197,13 @@ export function createInnoExtension(
 		const isL2Enabled = () => !isSimpleMode() && configHolder.current.memory?.l2Enabled !== false;
 
 		// 2. Register L1 learner tools (gated on config.memory.l1Enabled)
-		const learnerTools = createLearnerTools(paths.learnerDataDir, "default", isL1Enabled);
+		const learnerTools = createLearnerTools(
+			paths.learnerDataDir,
+			"default",
+			isL1Enabled,
+			paths.l2DataDir,
+			isL2Enabled,
+		);
 		for (const tool of learnerTools) {
 			pi.registerTool(tool);
 		}

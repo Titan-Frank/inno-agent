@@ -1,11 +1,19 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadProfile } from "./profile-store.js";
+import { loadEvents, loadProfile, saveProfile } from "./profile-store.js";
 import { recordEventAndUpdateProfile } from "./profile-store.js";
 import { buildContextPack } from "./context-pack.js";
 import { patchProfile, updateProfile } from "./profile-updater.js";
 import { createLearningEvent } from "./types.js";
+import { createLearningEvidenceEvent } from "./evidence.js";
+import {
+	applyDerivedKnowledgeState,
+	applyEvidenceToLinkedMisconception,
+	projectLearnerKnowledge,
+} from "./state-engine.js";
+import { loadPrerequisiteEdges } from "./prerequisite-store.js";
+import { evaluateTeachingEntry, formatTeachingEntryDecision } from "./teaching-entry-gate.js";
 import { logger } from "../../logger.js";
 
 // ============================================================================
@@ -30,6 +38,17 @@ const KnowledgeStateSchema = Type.Object({
 	mastery: Type.Number({ description: "Mastery level 0-1", minimum: 0, maximum: 1 }),
 	confidence: Type.Number({ description: "Confidence in mastery estimate 0-1", minimum: 0, maximum: 1 }),
 	stability: Type.Number({ description: "Knowledge stability 0-1", minimum: 0, maximum: 1 }),
+	estimate_confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+	stability_days: Type.Optional(Type.Number({ minimum: 0.25 })),
+	retrievability: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+	state_label: Type.Optional(StringEnum(["unknown", "learning", "fragile", "review_due", "stable", "misconception"] as const)),
+	last_evidence_at: Type.Optional(Type.String()),
+	last_successful_retrieval_at: Type.Optional(Type.String()),
+	last_result: Type.Optional(StringEnum(["correct", "partial", "incorrect", "unknown"] as const)),
+	exposure_count: Type.Optional(Type.Integer({ minimum: 0 })),
+	retrieval_count: Type.Optional(Type.Integer({ minimum: 0 })),
+	lapse_count: Type.Optional(Type.Integer({ minimum: 0 })),
+	successful_transfer_count: Type.Optional(Type.Integer({ minimum: 0 })),
 	last_practiced_at: Type.Optional(Type.String({ description: "ISO 8601 timestamp" })),
 	review_due_at: Type.Optional(Type.String({ description: "ISO 8601 timestamp for next review" })),
 	evidence_ids: Type.Array(Type.String(), { description: "IDs of supporting learning events" }),
@@ -71,6 +90,8 @@ export function createLearnerTools(
 	dataDir: string,
 	learnerId: string,
 	isEnabled?: () => boolean,
+	l2DataDir?: string,
+	isL2Enabled?: () => boolean,
 ): ToolDefinition[] {
 	const L1_DISABLED_TEXT = "L1 学习者画像已在设置中关闭，当前不读取也不更新学习者画像。";
 	const disabledResult = () => ({
@@ -87,7 +108,7 @@ export function createLearnerTools(
 		async execute() {
 			if (isEnabled && !isEnabled()) return disabledResult();
 			const profile = loadProfile(dataDir);
-			const pack = buildContextPack(profile);
+			const pack = buildContextPack(profile, loadEvents(dataDir));
 			return {
 				content: [{ type: "text" as const, text: JSON.stringify(pack, null, 2) }],
 				details: {},
@@ -121,7 +142,6 @@ export function createLearnerTools(
 				}),
 			derived_signals: Type.Optional(
 				Type.Object({
-					mastery_delta: Type.Optional(Type.Number({ description: "Change in mastery estimate" })),
 					misconception_candidates: Type.Optional(Type.Array(Type.String(), { description: "Observed learner misconceptions or error patterns, e.g. ['thinks Rust ownership means the variable is destroyed after borrow']" })),
 					affect: Type.Optional(Type.String({ description: "Detected affect, e.g. frustrated, confident" })),
 					preference_candidates: Type.Optional(Type.Array(Type.String(), { description: "Observed learner preferences, e.g. ['prefers code-first explanations', '避免长篇理论']" })),
@@ -154,6 +174,136 @@ export function createLearnerTools(
 			}
 		},
 		});
+
+	const recordLearningEvidenceTool = defineTool({
+		name: "record_learning_evidence",
+		label: "Record Learning Evidence",
+		description:
+			"记录学生实际表现形成的结构化证据。用于诊断题、独立回忆、应用或迁移后的结果；讲解完成本身只能记录 exposure，不能当作掌握。不要用它猜测学生会不会。",
+		parameters: Type.Object({
+			concept_id: Type.String({ description: "Stable concept ID, e.g. physics.force_decomposition" }),
+			kind: StringEnum([
+				"exposure",
+				"recognition",
+				"guided_recall",
+				"free_recall",
+				"application",
+				"transfer",
+				"self_report",
+				"manual_override",
+			] as const),
+			result: StringEnum(["correct", "partial", "incorrect", "unknown"] as const),
+			score: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+			hint_level: Type.Optional(Type.Integer({ minimum: 0, maximum: 3, description: "0 无提示；3 表示答案已揭示" })),
+			delay_seconds: Type.Optional(Type.Number({ minimum: 0 })),
+			transfer_distance: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+			learner_confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+			evaluator: StringEnum(["deterministic", "rubric", "model", "teacher", "self"] as const),
+			evaluator_confidence: Type.Number({ minimum: 0, maximum: 1 }),
+			session_id: Type.Optional(Type.String()),
+			misconception_id: Type.Optional(Type.String({
+				description: "修复检查所针对的已知误区 ID；仅在 assess_learning_prerequisites 返回该 ID 时填写。",
+			})),
+			dedupe_key: Type.Optional(Type.String({ description: "Stable key for retry-safe writes" })),
+			metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+		}),
+		async execute(_toolCallId, params) {
+			try {
+				if (isEnabled && !isEnabled()) return disabledResult();
+				if (params.dedupe_key) {
+					const duplicate = loadEvents(dataDir).find((event) => event.dedupe_key === params.dedupe_key);
+					if (duplicate) {
+						return {
+							content: [{ type: "text" as const, text: `学习证据已存在，跳过重复写入: ${duplicate.event_id}` }],
+							details: { event_id: duplicate.event_id, duplicate: true },
+						};
+					}
+				}
+				const event = createLearningEvidenceEvent(learnerId, {
+					...params,
+					hint_level: (params.hint_level ?? 0) as 0 | 1 | 2 | 3,
+				});
+				const profile = recordEventAndUpdateProfile(dataDir, event);
+				let profileChanged = event.evidence
+					? applyEvidenceToLinkedMisconception(profile, event.evidence)
+					: false;
+				const state = projectLearnerKnowledge(profile, loadEvents(dataDir))
+					.find((item) => item.concept_id === params.concept_id);
+				if (state) profileChanged = applyDerivedKnowledgeState(profile, state) || profileChanged;
+				if (profileChanged) saveProfile(dataDir, profile);
+				return {
+					content: [{
+						type: "text" as const,
+						text: `学习证据已记录: ${event.evidence?.evidence_id}；当前状态 ${state?.state_label ?? "unknown"}。`,
+					}],
+					details: { event_id: event.event_id, evidence_id: event.evidence?.evidence_id, state },
+				};
+			} catch (err) {
+				logger.warn({ err, params }, "record_learning_evidence tool failed");
+				throw err;
+			}
+		},
+	});
+
+	const assessLearningPrerequisitesTool = defineTool({
+		name: "assess_learning_prerequisites",
+		label: "Assess Learning Prerequisites",
+		description:
+			"在正式讲解学习问题前评估必要前置知识。先识别当前任务所需的最小前置集合；L2 显式关系会自动读取，缺失时可提交少量低置信模型推断。若目标已是基础原子概念，设置 is_atomic=true 并直接教学。",
+		parameters: Type.Object({
+			target_concept_id: Type.String(),
+			task_scope: Type.Optional(Type.String({ description: "当前题型、难度和讲解目标" })),
+			mode: StringEnum(["learning", "direct_task", "urgent"] as const),
+			is_atomic: Type.Boolean({ description: "目标是否已达到本次教学无需继续追溯的原子概念边界" }),
+			skip_diagnosis: Type.Optional(Type.Boolean()),
+			prerequisites: Type.Optional(Type.Array(Type.Object({
+				concept_id: Type.String(),
+				relation: Type.Optional(StringEnum(["required", "supporting"] as const)),
+				required_level: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+				importance: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+				source: Type.Optional(StringEnum(["curated", "teacher", "imported", "model_inferred"] as const)),
+				source_confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+				rationale: Type.Optional(Type.String()),
+				scope: Type.Optional(Type.String()),
+			}))),
+		}),
+		async execute(_toolCallId, params) {
+			try {
+				if (isEnabled && !isEnabled()) return disabledResult();
+				const stored = !isL2Enabled || isL2Enabled()
+					? loadPrerequisiteEdges(l2DataDir, params.target_concept_id, { scope: params.task_scope })
+					: [];
+				const inferred = (params.prerequisites ?? []).map((item) => ({
+					target_concept_id: params.target_concept_id,
+					prerequisite_concept_id: item.concept_id,
+					relation: item.relation ?? "required" as const,
+					required_level: item.required_level ?? 0.65,
+					importance: item.importance ?? 0.8,
+					source: item.source ?? "model_inferred" as const,
+					source_confidence: item.source_confidence ?? 0.45,
+					rationale: item.rationale ?? "模型根据当前题目推断的候选前置知识。",
+					scope: item.scope ?? params.task_scope,
+				}));
+				const profile = loadProfile(dataDir);
+				const states = projectLearnerKnowledge(profile, loadEvents(dataDir));
+				const decision = evaluateTeachingEntry({
+					target_concept_id: params.target_concept_id,
+					task_scope: params.task_scope,
+					mode: params.mode,
+					is_atomic: params.is_atomic,
+					skip_diagnosis: params.skip_diagnosis,
+					prerequisites: [...stored, ...inferred],
+				}, states);
+				return {
+					content: [{ type: "text" as const, text: formatTeachingEntryDecision(decision) }],
+					details: { decision },
+				};
+			} catch (err) {
+				logger.warn({ err, params }, "assess_learning_prerequisites tool failed");
+				throw err;
+			}
+		},
+	});
 
 	const patchLearnerProfileTool = defineTool({
 		name: "patch_learner_profile",
@@ -278,6 +428,8 @@ export function createLearnerTools(
 	return [
 		getLearnerContextTool,
 		recordLearningEventTool,
+		recordLearningEvidenceTool,
+		assessLearningPrerequisitesTool,
 		patchLearnerProfileTool,
 		updateLearnerProfileTool,
 		reviewLearnerProfileTool,

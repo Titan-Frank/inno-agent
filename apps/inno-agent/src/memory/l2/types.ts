@@ -14,6 +14,17 @@ export type WikiPageStatus = "draft" | "reviewed" | "outdated";
 /** Confidence level for wiki content. */
 export type ConfidenceLevel = "low" | "medium" | "high";
 
+export interface WikiPrerequisite {
+	concept_id: string;
+	relation?: "required" | "supporting";
+	required_level?: number;
+	importance?: number;
+	source?: "curated" | "teacher" | "imported" | "model_inferred";
+	source_confidence?: number;
+	rationale?: string;
+	scope?: string;
+}
+
 /** Processing status for manifest entries. */
 export type ManifestStatus = "pending" | "extracted" | "indexed" | "error";
 
@@ -55,6 +66,10 @@ export interface WikiPageFrontmatter {
 	confidence: ConfidenceLevel;
 	contested?: boolean;
 	contradictions?: string[];
+	/** Stable concept identifier used by learner-state prerequisite resolution. */
+	concept_id?: string;
+	/** Explicit teaching dependencies. Ordinary wikilinks remain non-directional relatedness. */
+	prerequisites?: WikiPrerequisite[];
 }
 
 /**
