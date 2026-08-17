@@ -15,7 +15,7 @@ import { createSchedulerTools } from "../scheduler/scheduler-tools.js";
 import { createChannelTools } from "../channels/channel-tools.js";
 import { createL2Tools } from "../memory/l2/l2-tools.js";
 import { getL2Memory } from "../memory/l2/l2-memory.js";
-import { L3Memory, createL3Tools, formatRecallForPrompt } from "../memory/l3/l3-tools.js";
+import { createL3Tools, formatRecallForPrompt, getL3Memory } from "../memory/l3/l3-tools.js";
 import { createPracticeTools } from "./practice-tools.js";
 import { createDocumentTools } from "./document-tools.js";
 import { createOcrTools } from "./ocr-tools.js";
@@ -250,7 +250,7 @@ export function createInnoExtension(
 		// Recall (auto-inject + the l3_recall tool) is gated at runtime on
 		// config.memory.l3Enabled (default on); indexing always runs so the
 		// switch can be flipped back on without a backfill gap.
-		const l3Memory = new L3Memory(paths.l3DataDir, paths.sessionDir);
+		const l3Memory = getL3Memory(paths.l3DataDir, paths.sessionDir);
 		const isL3Enabled = () => !isSimpleMode() && configHolder.current.memory?.l3Enabled !== false;
 		const l3Tools = createL3Tools(l3Memory, deps?.getCurrentSessionId, isL3Enabled);
 		for (const tool of l3Tools) {

@@ -76,6 +76,18 @@ export class L3Memory {
 		if (!store) return [];
 		return recall(store, query, { excludeSessionId });
 	}
+
+	/**
+	 * Close the store and reset the lazy-init flags so the holder can be
+	 * reused. Mainly needed by tests: on Windows an open sqlite handle keeps
+	 * memory.db locked and temp-dir cleanup fails with EBUSY.
+	 */
+	close(): void {
+		this.store?.close();
+		this.store = null;
+		this.opened = false;
+		this.backfilled = false;
+	}
 }
 
 /**
@@ -154,3 +166,27 @@ export function createL3Tools(
 }
 
 export { formatRecallForPrompt } from "./recall.js";
+
+const registry = new Map<string, L3Memory>();
+
+/** Per-dir singleton so the extension and tests share ONE handle within a process. */
+export function getL3Memory(l3DataDir: string, sessionDir: string): L3Memory {
+	let mem = registry.get(l3DataDir);
+	if (!mem) {
+		mem = new L3Memory(l3DataDir, sessionDir);
+		registry.set(l3DataDir, mem);
+	}
+	return mem;
+}
+
+/**
+ * Close and drop the per-dir singleton. Tests must call this before deleting
+ * their temp data dir, otherwise the open sqlite handle keeps memory.db locked
+ * on Windows and cleanup fails with EBUSY.
+ */
+export function closeL3Memory(l3DataDir: string): void {
+	const mem = registry.get(l3DataDir);
+	if (!mem) return;
+	mem.close();
+	registry.delete(l3DataDir);
+}

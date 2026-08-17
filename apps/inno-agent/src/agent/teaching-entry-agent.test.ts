@@ -21,6 +21,7 @@ import type { InnoConfig } from "../config.js";
 import type { RuntimePaths } from "../runtime.js";
 import { ensureDir, writeText } from "../storage/file-store.js";
 import { closeL2Memory } from "../memory/l2/l2-memory.js";
+import { closeL3Memory } from "../memory/l3/l3-tools.js";
 import { serializeFrontmatter } from "../memory/l2/wiki-maintainer.js";
 import { loadEvents, loadProfile, saveProfile } from "../memory/learner/profile-store.js";
 import { createDefaultProfile } from "../memory/learner/types.js";
@@ -34,10 +35,12 @@ const temporaryRoots: string[] = [];
 
 afterEach(() => {
 	for (const root of temporaryRoots.splice(0)) {
-		// Close the L2 sqlite index before deleting the temp dir: an open handle
-		// keeps index.db locked on Windows and rmSync fails with EBUSY.
+		// Close the L2/L3 sqlite handles before deleting the temp dir: open
+		// handles keep index.db/memory.db locked on Windows and rmSync fails
+		// with EBUSY. maxRetries covers any residual async handle release.
 		closeL2Memory(join(root, "data", "l2"));
-		rmSync(root, { recursive: true, force: true });
+		closeL3Memory(join(root, "data", "l3"));
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 	}
 });
 
