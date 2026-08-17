@@ -1,7 +1,6 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { wikiPathJoin } from "../../memory/l2/wiki-paths.js";
 import { logger } from "../../logger.js";
 import { getL2Memory } from "../../memory/l2/l2-memory.js";
 import { readManifest, removeWikiPathFromManifest } from "../../memory/l2/manifest-store.js";
@@ -10,6 +9,7 @@ import { parseFrontmatter } from "../../memory/l2/wiki-maintainer.js";
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
 import { safeJoinReal } from "../file-helpers.js";
 import { json, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
+import { listWikiPagePaths } from "../../memory/l2/wiki-page-files.js";
 
 export interface WikiRouteContext {
 	l2DataDir: string;
@@ -20,23 +20,6 @@ export interface WikiRouteContext {
 // listing helpers closed over server.ts's module-level l2DataDir; they take
 // it as an explicit parameter instead.
 // ---------------------------------------------------------------------------
-
-const WIKI_PAGE_DIRS = ["sources", "entities", "concepts", "analysis"] as const;
-
-function listWikiPagePaths(l2DataDir: string): string[] {
-	const wikiRoot = join(l2DataDir, "wiki");
-	const paths: string[] = [];
-	for (const dirName of WIKI_PAGE_DIRS) {
-		const dir = join(wikiRoot, dirName);
-		if (!existsSync(dir)) continue;
-		for (const file of readdirSync(dir)) {
-			if (file.endsWith(".md")) {
-				paths.push(wikiPathJoin("wiki", dirName, file));
-			}
-		}
-	}
-	return paths.sort((a, b) => a.localeCompare(b, "zh-CN"));
-}
 
 function manifestSourceIdByWikiPath(l2DataDir: string): Map<string, string> {
 	const map = new Map<string, string>();

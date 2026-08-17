@@ -8,13 +8,13 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { ensureDir, readText, writeText } from "../../storage/file-store.js";
-import type { ManifestEntry, WikiPageType, WikiPageFrontmatter } from "./types.js";
+import type { ManifestEntry, WikiPageFrontmatter } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter } from "./wiki-maintainer.js";
 import { splitStructuralChunks } from "./structural-chunker.js";
 import { buildAliasIndex, normalizeWikiLink } from "./wiki-links.js";
 import { logger } from "../../logger.js";
 
-type LinkablePageType = Extract<WikiPageType, "entity" | "concept">;
+type LinkablePageType = "entity" | "concept";
 
 interface LinkedItem {
 	title: string;
@@ -328,7 +328,7 @@ function alignItemsWithExistingPages(items: LinkedItem[], existingPages: WikiPag
 
 function readAllWikiPageAliases(l2DataDir: string): { title: string; path: string }[] {
 	const pages: { title: string; path: string }[] = [];
-	for (const dirName of ["sources", "entities", "concepts", "analysis"] as const) {
+	for (const dirName of ["sources", "entities", "concepts", "queries", "comparisons", "synthesis", "analysis"] as const) {
 		const dir = join(l2DataDir, "wiki", dirName);
 		if (!existsSync(dir)) continue;
 		for (const file of readdirSync(dir)) {
@@ -380,6 +380,7 @@ function buildNewPage(
 		created: today,
 		type: item.type,
 		tags: mergeTags([item.type], item.tags),
+		related: relatedTitles.map(slugifyTitle),
 		sources: [sourcePagePath],
 		source_ids: [entry.id],
 		updated: today,
@@ -401,8 +402,16 @@ ${relatedSection(relatedTitles)}
 }
 
 function addRelatedLinks(content: string, relatedTitles: string[]): string | null {
+	const metadataUpdate = mutateFrontmatter(content, (fm) => {
+		fm.related ??= [];
+		for (const title of relatedTitles) {
+			const slug = slugifyTitle(title);
+			if (!fm.related.includes(slug)) fm.related.push(slug);
+		}
+	});
+	content = metadataUpdate.content;
 	const missing = relatedTitles.filter((title) => !content.includes(`[[${title}]]`));
-	if (missing.length === 0) return null;
+	if (missing.length === 0) return metadataUpdate.changed ? content : null;
 	const bullets = missing.map((title) => `- [[${title}]]`).join("\n");
 	const header = "\n## 相关概念";
 	const sectionStart = content.indexOf(header);

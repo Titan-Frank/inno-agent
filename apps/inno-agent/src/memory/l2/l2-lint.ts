@@ -1,6 +1,4 @@
-import { readdirSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { wikiPathJoin } from "./wiki-paths.js";
 import { parse as parseYaml } from "yaml";
 
 import { fileExists, readText } from "../../storage/file-store.js";
@@ -8,10 +6,11 @@ import { readManifest } from "./manifest-store.js";
 import type { WikiPageFrontmatter, WikiPageType } from "./types.js";
 import { buildAliasIndex, extractOutgoingLinks } from "./wiki-links.js";
 import { parseFrontmatter } from "./wiki-maintainer.js";
+import { listWikiPagePaths } from "./wiki-page-files.js";
+import { parseWikiSchemaRouting, validateWikiPageRouting, type WikiSchemaRouting } from "./wiki-schema-routing.js";
 
-const PAGE_DIRS = ["sources", "entities", "concepts", "analysis"] as const;
 const REQUIRED_FIELDS = ["title", "created", "type", "tags", "sources", "source_ids", "updated", "status", "confidence"] as const;
-const VALID_TYPES = new Set<WikiPageType>(["source-summary", "entity", "concept", "analysis"]);
+const BUILT_IN_TYPES = new Set<WikiPageType>(["source-summary", "source", "entity", "concept", "query", "comparison", "synthesis", "analysis"]);
 const VALID_STATUSES = new Set(["draft", "reviewed", "outdated"]);
 const VALID_CONFIDENCE = new Set(["low", "medium", "high"]);
 
@@ -70,18 +69,10 @@ function finding(code: L2LintCode, severity: L2LintSeverity, path: string, messa
 }
 
 function wikiPagePaths(l2DataDir: string): string[] {
-	const paths: string[] = [];
-	for (const directory of PAGE_DIRS) {
-		const absolute = join(l2DataDir, "wiki", directory);
-		if (!fileExists(absolute)) continue;
-		for (const file of readdirSync(absolute).filter((candidate) => candidate.endsWith(".md")).sort()) {
-			paths.push(wikiPathJoin("wiki", directory, file));
-		}
-	}
-	return paths;
+	return listWikiPagePaths(l2DataDir);
 }
 
-function readPage(l2DataDir: string, path: string, findings: L2LintFinding[]): PageRecord {
+function readPage(l2DataDir: string, path: string, findings: L2LintFinding[], routing: WikiSchemaRouting): PageRecord {
 	const content = readText(join(l2DataDir, path));
 	const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 	if (!match) {
@@ -120,9 +111,11 @@ function readPage(l2DataDir: string, path: string, findings: L2LintFinding[]): P
 
 	const { frontmatter, body } = parseFrontmatter(content);
 	if (frontmatter) {
-		if (!VALID_TYPES.has(frontmatter.type)) {
+		if (!BUILT_IN_TYPES.has(frontmatter.type) && !routing.typeDirs[frontmatter.type]) {
 			findings.push(finding("invalid_field_value", "error", path, `Unknown page type: ${String(frontmatter.type)}.`));
 		}
+		const routingIssue = validateWikiPageRouting(path, content, routing);
+		if (routingIssue) findings.push(finding("invalid_field_value", "error", path, routingIssue.message));
 		if (!VALID_STATUSES.has(frontmatter.status)) {
 			findings.push(finding("invalid_field_value", "error", path, `Unknown page status: ${String(frontmatter.status)}.`));
 		}
@@ -146,9 +139,11 @@ function readPage(l2DataDir: string, path: string, findings: L2LintFinding[]): P
 function indexedWikiPaths(l2DataDir: string): Set<string> {
 	const index = readText(join(l2DataDir, "wiki", "index.md"));
 	const paths = new Set<string>();
-	const pattern = /`(wiki[\\/](?:sources|entities|concepts|analysis)[\\/][^`]+\.md)`/g;
+	const pattern = /`(wiki[\\/][^`]+\.md)`/g;
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(index)) !== null) paths.add(normalizePath(match[1]));
+	const wikilinkPattern = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
+	while ((match = wikilinkPattern.exec(index)) !== null) paths.add(normalizePath(`wiki/${match[1]}.md`));
 	return paths;
 }
 
@@ -156,10 +151,12 @@ function indexedWikiPaths(l2DataDir: string): Set<string> {
 export function runL2Lint(l2DataDir: string): L2LintReport {
 	const findings: L2LintFinding[] = [];
 	const manifest = readManifest(l2DataDir);
+	const schemaPath = join(l2DataDir, "wiki", "SCHEMA.md");
+	const routing = parseWikiSchemaRouting(fileExists(schemaPath) ? readText(schemaPath) : "");
 	const manifestIds = new Set(manifest.map((entry) => entry.id));
 	const pagePaths = wikiPagePaths(l2DataDir);
 	const actualPagePaths = new Set(pagePaths.map(normalizePath));
-	const pages = pagePaths.map((path) => readPage(l2DataDir, path, findings));
+	const pages = pagePaths.map((path) => readPage(l2DataDir, path, findings, routing));
 
 	const alias = buildAliasIndex(pages);
 	for (const page of pages) {
@@ -171,11 +168,6 @@ export function runL2Lint(l2DataDir: string): L2LintReport {
 		for (const sourceId of page.frontmatter?.source_ids ?? []) {
 			if (!manifestIds.has(sourceId)) {
 				findings.push(finding("unknown_source_id", "error", page.path, `source_ids references unknown manifest id: ${sourceId}.`));
-			}
-		}
-		for (const sourcePath of page.frontmatter?.sources ?? []) {
-			if (sourcePath && !fileExistsWithin(l2DataDir, sourcePath)) {
-				findings.push(finding("missing_source_file", "error", page.path, `Frontmatter source path is missing: ${sourcePath}.`));
 			}
 		}
 	}

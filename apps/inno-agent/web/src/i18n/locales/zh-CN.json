@@ -74,9 +74,13 @@
 		"search": "搜索页面或标签…",
 		"filter": {
 			"all": "全部",
+			"source": "资料",
 			"source-summary": "资料",
 			"entity": "实体",
 			"concept": "概念",
+			"query": "研究问题",
+			"comparison": "对比",
+			"synthesis": "综合",
 			"analysis": "分析"
 		},
 		"view": {
@@ -129,9 +133,13 @@
 			"openPage": "打开页面"
 		},
 		"types": {
+			"source": "资料",
 			"source-summary": "资料摘要",
 			"entity": "实体",
 			"concept": "概念",
+			"query": "研究问题",
+			"comparison": "对比",
+			"synthesis": "综合",
 			"analysis": "分析",
 			"tag": "标签",
 			"unknown": "未分类"

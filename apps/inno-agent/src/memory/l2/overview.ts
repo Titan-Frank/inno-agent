@@ -25,6 +25,9 @@ const TYPE_LABELS: Record<string, string> = {
 	"source-summary": "资料摘要",
 	entity: "实体",
 	concept: "概念",
+	query: "研究问题",
+	comparison: "对比",
+	synthesis: "综合",
 	analysis: "分析",
 };
 
@@ -110,7 +113,7 @@ async function generateNarrative(
 					},
 				],
 			},
-			{ apiKey: auth.apiKey, headers: auth.headers, maxTokens: 1024 },
+				{ apiKey: auth.apiKey, headers: auth.headers, maxTokens: 1024, timeoutMs: 600_000, signal: AbortSignal.timeout(600_000) },
 		);
 		if (response.stopReason === "error") return "";
 		return response.content

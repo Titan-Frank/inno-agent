@@ -235,10 +235,10 @@ export function createInnoExtension(
 			pi.registerTool(tool);
 		}
 		// Backfill the retrieval index from existing wiki pages; never block boot.
-		// Index sync runs even when L2 is disabled (so re-enabling has no gap),
-		// but overview generation — a visible write to the knowledge base — is
-		// gated on L2 being enabled.
-		void l2Memory.backfill({ generateOverview: isL2Enabled() });
+		// Index sync runs even when L2 is disabled (so re-enabling has no gap).
+		// Aggregate pages remain source-driven; startup must not create model-visible
+		// context that the llm-wiki ingest path would not create.
+		void l2Memory.backfill();
 
 		// 4a. Register L3 cross-conversation memory (sqlite-backed recall).
 		// Recall (auto-inject + the l3_recall tool) is gated at runtime on

@@ -10,12 +10,16 @@ import { LazyMarkdownEditor } from "../LazyMarkdownEditor.js";
 
 function typeColor(type?: WikiPageType): string {
 	switch (type) {
+		case "source":
 		case "source-summary":
 			return "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]";
 		case "entity":
 			return "bg-[var(--inno-success-bg)] text-[var(--inno-success)]";
 		case "concept":
 			return "bg-[var(--inno-warning-bg)] text-[var(--inno-warning)]";
+		case "query":
+		case "comparison":
+		case "synthesis":
 		case "analysis":
 			return "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]";
 		default:
@@ -40,7 +44,7 @@ function FrontmatterHeader({ frontmatter }: { frontmatter: WikiPageFrontmatter }
 		<div className="border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-4 py-3">
 			<h3 className="mb-1.5 truncate text-base font-medium text-[var(--inno-text)]">{frontmatter.title}</h3>
 			<div className="flex flex-wrap items-center gap-2 text-xs">
-				<span className={`rounded px-1.5 py-0.5 ${typeColor(frontmatter.type)}`}>{t(`notebook.types.${frontmatter.type}`)}</span>
+				<span className={`rounded px-1.5 py-0.5 ${typeColor(frontmatter.type)}`}>{t(`notebook.types.${frontmatter.type}`, { defaultValue: frontmatter.type })}</span>
 				<span className={`rounded px-1.5 py-0.5 ${statusColors[frontmatter.status] ?? ""}`}>{t(`notebook.status.${frontmatter.status}`)}</span>
 				<span className={`rounded px-1.5 py-0.5 ${confidenceColors[frontmatter.confidence] ?? ""}`}>{t(`notebook.confidence.${frontmatter.confidence}`)}</span>
 				{frontmatter.contested ? <span className="rounded bg-[var(--inno-danger-bg)] px-1.5 py-0.5 text-[var(--inno-danger)]">{t("notebook.contested")}</span> : null}

@@ -40,7 +40,12 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 	get filteredPages(): WikiPageSummary[] {
 		let result = this.pages;
 		if (this.filterType !== "all") {
-			result = result.filter((p) => p.frontmatter?.type === this.filterType);
+			result = result.filter((p) => {
+				const type = p.frontmatter?.type;
+				return this.filterType === "source"
+					? type === "source" || type === "source-summary"
+					: type === this.filterType;
+			});
 		}
 		if (this.searchQuery) {
 			const q = this.searchQuery.toLowerCase();

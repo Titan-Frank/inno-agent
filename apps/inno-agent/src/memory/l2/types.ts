@@ -5,8 +5,18 @@
 /** Raw source types. MVP supports text, markdown, conversation. */
 export type RawSourceType = "text" | "markdown" | "conversation" | "pdf" | "word" | "image";
 
-/** Wiki page types. */
-export type WikiPageType = "source-summary" | "entity" | "concept" | "analysis";
+/** Built-in wiki page types. Project schemas may add further string types. */
+export type BuiltInWikiPageType =
+	| "source-summary"
+	| "source"
+	| "entity"
+	| "concept"
+	| "query"
+	| "comparison"
+	| "synthesis"
+	| "analysis";
+
+export type WikiPageType = BuiltInWikiPageType | (string & {});
 
 /** Page review status. */
 export type WikiPageStatus = "draft" | "reviewed" | "outdated";
@@ -33,6 +43,8 @@ export interface ManifestEntry {
 	status: ManifestStatus;
 	source: {
 		origin: "user_upload" | "conversation" | "web" | "research" | "agent_inferred";
+		/** Stable model-visible identity used by ingest and merge prompts. */
+		identity?: string;
 		url?: string;
 		sessionId?: string;
 	};
@@ -48,6 +60,8 @@ export interface WikiPageFrontmatter {
 	created: string;
 	type: WikiPageType;
 	tags: string[];
+	/** Bare page slugs, union-preserved across ingests. */
+	related?: string[];
 	sources: string[];
 	source_ids: string[];
 	updated: string;

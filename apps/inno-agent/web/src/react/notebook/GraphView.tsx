@@ -8,18 +8,26 @@ import type { WikiGraphEdge, WikiGraphNode } from "../../types/wiki.js";
 import { notebookStore } from "../../stores/notebook-store.js";
 import { useStoreSnapshot } from "../hooks.js";
 
-type NodeCategory = "source-summary" | "entity" | "concept" | "analysis" | "tag";
+type NodeCategory = "source" | "entity" | "concept" | "query" | "comparison" | "synthesis" | "analysis" | "tag";
 type GraphColorMode = "type" | "community";
-const ALL_CATEGORIES: NodeCategory[] = ["source-summary", "entity", "concept", "analysis", "tag"];
-const DEFAULT_VISIBLE: NodeCategory[] = ["source-summary", "entity", "concept", "analysis"];
+const ALL_CATEGORIES: NodeCategory[] = ["source", "entity", "concept", "query", "comparison", "synthesis", "analysis", "tag"];
+const DEFAULT_VISIBLE: NodeCategory[] = ["source", "entity", "concept", "comparison", "synthesis", "analysis"];
 
 const TYPE_COLORS: Record<string, string> = {
+	source: "#4b8ef0",
 	"source-summary": "#4b8ef0",
 	entity: "#3dba6f",
 	concept: "#e8993a",
+	query: "#ef6b73",
+	comparison: "#2aa9a1",
+	synthesis: "#9b5de5",
 	analysis: "#9b5de5",
 	tag: "#8b949e",
 };
+
+function graphCategory(type: string): NodeCategory {
+	return type === "source-summary" ? "source" : (type as NodeCategory);
+}
 
 const COMMUNITY_COLORS = [
 	"#4b8ef0",
@@ -103,17 +111,17 @@ function buildElements(nodes: WikiGraphNode[], edges: WikiGraphEdge[]): ElementD
 	const els: ElementDefinition[] = nodes.map((n) => {
 		const nodeDegree = degree.get(n.id) ?? n.degree ?? 0;
 		const fullLabel = n.title || n.id;
-		const showLabel = n.type === "source-summary" || n.type === "analysis" || nodeDegree >= labelThreshold;
+		const showLabel = graphCategory(n.type) === "source" || n.type === "analysis" || nodeDegree >= labelThreshold;
 		const seed = seedPositions.get(n.id) ?? { x: 0, y: 0 };
 		return {
 			data: {
 				id: n.id,
 				label: showLabel ? truncateLabel(fullLabel) : "",
 				fullLabel,
-				type: n.type,
-				typeColor: TYPE_COLORS[n.type] ?? TYPE_COLORS.tag,
+					type: graphCategory(n.type),
+					typeColor: TYPE_COLORS[graphCategory(n.type)] ?? TYPE_COLORS.tag,
 				communityColor: communityColor(n),
-				color: TYPE_COLORS[n.type] ?? TYPE_COLORS.tag,
+					color: TYPE_COLORS[graphCategory(n.type)] ?? TYPE_COLORS.tag,
 				community: n.community ?? 0,
 				degree: nodeDegree,
 				size: 9 + Math.min(20, Math.sqrt(nodeDegree) * 3.5),
@@ -526,12 +534,12 @@ export function GraphView() {
 	}
 
 	const visibleNodeCount = useMemo(
-		() => state.nodes.filter((n) => visibleCategories.has(n.type as NodeCategory)).length,
+		() => state.nodes.filter((n) => visibleCategories.has(graphCategory(n.type))).length,
 		[state.nodes, visibleCategories],
 	);
 	const visibleEdgeCount = useMemo(() => {
 		const visibleIds = new Set(
-			state.nodes.filter((n) => visibleCategories.has(n.type as NodeCategory)).map((n) => n.id),
+			state.nodes.filter((n) => visibleCategories.has(graphCategory(n.type))).map((n) => n.id),
 		);
 		return state.edges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target)).length;
 	}, [state.nodes, state.edges, visibleCategories]);

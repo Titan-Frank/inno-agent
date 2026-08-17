@@ -7,16 +7,20 @@ import { useStoreSnapshot } from "./hooks.js";
 import { GraphView } from "./notebook/GraphView.js";
 import { PageView } from "./notebook/PageView.js";
 
-const FILTER_TYPES: (WikiPageType | "all")[] = ["all", "source-summary", "entity", "concept", "analysis"];
+const FILTER_TYPES: (WikiPageType | "all")[] = ["all", "source", "entity", "concept", "query", "comparison", "synthesis", "analysis"];
 
 function typeColor(type?: WikiPageType): string {
 	switch (type) {
+		case "source":
 		case "source-summary":
 			return "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]";
 		case "entity":
 			return "bg-[var(--inno-success-bg)] text-[var(--inno-success)]";
 		case "concept":
 			return "bg-[var(--inno-warning-bg)] text-[var(--inno-warning)]";
+		case "query":
+		case "comparison":
+		case "synthesis":
 		case "analysis":
 			return "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]";
 		default:
@@ -94,7 +98,7 @@ export function Notebook() {
 							}`}
 							onClick={() => notebookStore.setFilterType(type)}
 						>
-							{t(`notebook.filter.${type}`)}
+							{t(`notebook.filter.${type}`, { defaultValue: type })}
 						</button>
 					))}
 				</div>
@@ -117,7 +121,7 @@ export function Notebook() {
 									<div className="truncate font-medium text-[var(--inno-text)]">{title}</div>
 									<div className="mt-1 flex items-center gap-1.5">
 										<span className={`rounded px-1.5 text-xs ${typeColor(page.frontmatter?.type)}`}>
-											{page.frontmatter?.type ? t(`notebook.types.${page.frontmatter.type}`) : t("notebook.types.unknown")}
+											{page.frontmatter?.type ? t(`notebook.types.${page.frontmatter.type}`, { defaultValue: page.frontmatter.type }) : t("notebook.types.unknown")}
 										</span>
 										<span className="truncate text-xs text-[var(--inno-text-muted)]">{page.frontmatter?.updated || ""}</span>
 									</div>
