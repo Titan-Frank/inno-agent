@@ -129,6 +129,23 @@ export default defineConfig({
 		// Serve mini-lit as plain ESM so patchMiniLitMarkedPlugin's transform
 		// hook sees MarkdownBlock.js in dev mode (prebundled deps skip transforms).
 		exclude: ["@mariozechner/mini-lit"],
+		// mini-lit is deliberately excluded, but both it and pi-web-ui import
+		// highlight.js. Its ESM facade default-imports a CommonJS core module;
+		// serving that facade raw makes browsers fail with "does not provide an
+		// export named default" when the first assistant Markdown is rendered.
+		// Prebundle highlight.js so Vite supplies the required CJS interop wrapper.
+		include: [
+			"highlight.js",
+			"highlight.js/lib/core",
+			"highlight.js/lib/languages/bash",
+			"highlight.js/lib/languages/css",
+			"highlight.js/lib/languages/javascript",
+			"highlight.js/lib/languages/json",
+			"highlight.js/lib/languages/python",
+			"highlight.js/lib/languages/sql",
+			"highlight.js/lib/languages/typescript",
+			"highlight.js/lib/languages/xml",
+		],
 	},
 	plugins: [
 		stubLmStudioPlugin,
