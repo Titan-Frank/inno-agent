@@ -673,7 +673,6 @@
 		"send": "Send",
 		"describeImage": "Please describe this image",
 		"uploadedToWorkspace": "[Uploaded to workspace]",
-		"newChatHere": "New conversations will be created in this workspace",
 		"wsTemp": "Temporary · disposable",
 		"wsNew": "New workspace",
 		"wsExisting": "Existing workspace",
@@ -748,12 +747,13 @@
 		"deleteWsEmpty": "This workspace has no conversations; the workspace record will be removed."
 	},
 	"mode": {
+		"selectorLabel": "Work mode",
+		"simpleLabel": "Simple Mode",
+		"normalLabel": "Normal Mode",
 		"currentSimpleClickNormal": "Current: Simple Mode · click to switch to Normal Mode",
 		"currentNormalClickSimple": "Current: Normal Mode · click to switch to Simple Mode",
 		"switchToNormal": "Switch to Normal Mode",
 		"switchToSimple": "Switch to Simple Mode",
-		"simpleShort": "Simple Mode · switch to Normal",
-		"normalShort": "Normal Mode · switch to Simple",
 		"simpleTag": "(Simple Mode)"
 	},
 	"terminal": {

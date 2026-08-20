@@ -51,6 +51,10 @@ type WsMode = "temp" | "new" | "existing";
 const LAST_WS_MODE_KEY = "inno.lastWorkspaceMode";
 const LAST_WS_ID_KEY = "inno.lastWorkspaceId";
 
+interface ChatCenterProps {
+	onOpenPresetPanels: () => void | Promise<void>;
+}
+
 function readLastWsMode(): WsMode {
 	if (typeof window === "undefined") return "temp";
 	const value = window.localStorage.getItem(LAST_WS_MODE_KEY);
@@ -68,7 +72,7 @@ function rememberWsChoice(mode: WsMode, existingId: string): void {
 	if (mode === "existing" && existingId) window.localStorage.setItem(LAST_WS_ID_KEY, existingId);
 }
 
-export function ChatCenter() {
+export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 	const { t } = useTranslation();
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const welcomeLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -188,12 +192,6 @@ export function ChatCenter() {
 	const activeWorkspaceId = useStoreSnapshot(workspaceStore, () => workspaceStore.activeWorkspaceId);
 	const isWelcome = sessions.isWelcome;
 
-	const preselectedWs = useMemo(
-		() => sessions.preselectedWorkspaceId
-			? workspaces.list.find((workspace) => workspace.id === sessions.preselectedWorkspaceId) ?? null
-			: null,
-		[sessions.preselectedWorkspaceId, workspaces.list],
-	);
 	const selectableWorkspaces = useMemo(
 		() => workspaces.list.filter((workspace) => !workspace.isTemp && !workspace.id.startsWith("channel-")),
 		[workspaces.list],
@@ -464,10 +462,10 @@ export function ChatCenter() {
 		setOpeningPresetId(presetId);
 		void (async () => {
 			try {
-				await sessionsStore.createSessionWith({ presetId });
-				appStore.setRightPanelTab("preview");
-				appStore.setWorkspaceWidth(560);
-				appStore.setWorkspaceMode("half");
+				await Promise.all([
+					sessionsStore.createSessionWith({ presetId }),
+					onOpenPresetPanels(),
+				]);
 			} catch (err) {
 				const unavailable = err instanceof ApiError
 					&& err.status === 404
@@ -482,7 +480,7 @@ export function ChatCenter() {
 				setOpeningPresetId(null);
 			}
 		})();
-	}, [t]);
+	}, [onOpenPresetPanels, t]);
 
 	const handleSend = useCallback(() => {
 		const rawValue = inputRef.current?.value ?? draftValue;
@@ -685,23 +683,20 @@ export function ChatCenter() {
 	);
 
 	const renderWorkspaceContext = (context: "welcome" | "session") => {
-		const draftWorkspaceId = context === "welcome" && wsMode === "existing" ? wsExistingId : null;
-		const sessionWorkspace = context === "session" && activeWorkspaceId
-			? workspaces.list.find((workspace) => workspace.id === activeWorkspaceId)
-			: undefined;
-		const selectedKind: "workspace" | "temp" | "new" = context === "welcome"
-			? wsMode === "existing" ? "workspace" : wsMode
-			: sessionWorkspace?.isTemp || !activeWorkspaceId ? "temp" : "workspace";
+		// The workspace selector belongs to the new-chat home page. A real
+		// conversation already has a fixed workspace context and should keep the
+		// composer uncluttered.
+		if (context === "session") return null;
+		const selectedWorkspaceId = wsMode === "existing" ? wsExistingId : null;
+		const selectedKind: "workspace" | "temp" | "new" = wsMode === "existing" ? "workspace" : wsMode;
 		return (
 			<WorkspaceContext
-				context={context}
 				workspaces={workspaces.list}
-				selectedWorkspaceId={context === "welcome" ? draftWorkspaceId : activeWorkspaceId}
+				selectedWorkspaceId={selectedWorkspaceId}
 				selectedKind={selectedKind}
-				newWorkspaceName={context === "welcome" && wsMode === "new" ? wsName : ""}
+				newWorkspaceName={wsMode === "new" ? wsName : ""}
 				busy={isSwitchingWorkspace}
-				disabled={isUploading || Boolean(chat.pendingQuestion) || (context === "session" && chat.isSending)}
-				showHint={Boolean(preselectedWs)}
+				disabled={isUploading || Boolean(chat.pendingQuestion)}
 				onChange={handleWorkspaceChange}
 			/>
 		);
