@@ -204,6 +204,22 @@ export interface InnoConfig {
 	tavily?: {
 		apiKey: string;
 	};
+	/**
+	 * Third-party PI extensions bundled with inno-agent. Both default to
+	 * enabled; set `enabled: false` to opt out without uninstalling.
+	 *
+	 * - `todo` (@juicesharp/rpiv-todo): registers the `todo` task-list tool.
+	 *   TUI overlay/shortcuts activate only in CLI mode (ctx.hasUI).
+	 * - `webAccess` (pi-web-access): registers `fetch_content` +
+	 *   `get_search_content` (URL/GitHub/PDF/YouTube extraction). Its own
+	 *   `web_search`/`source_check` tools stay disabled via the managed
+	 *   `<configDir>/web-search.json` default so the built-in Tavily
+	 *   `web_search` remains the single search tool.
+	 */
+	plugins?: {
+		todo?: { enabled?: boolean };
+		webAccess?: { enabled?: boolean };
+	};
 }
 
 interface LegacyInnoConfig extends Partial<InnoConfig> {
@@ -376,6 +392,7 @@ export function normalizeConfig(config: LegacyInnoConfig): InnoConfig {
 		scheduler: normalizeSchedulerConfig(config.scheduler),
 		ocrApi: config.ocrApi,
 		tavily: config.tavily,
+		plugins: config.plugins,
 	} as InnoConfig;
 }
 

@@ -90,6 +90,16 @@ L2 目录边界（重要，违反会破坏知识库引用）：
 - 回答时基于搜索结果作答，并标注关键信息的来源（标题/链接）。
 - 若未配置 Tavily API Key，工具会返回提示——此时直接告诉用户「尚未配置 Tavily API Key，请在设置里填入后重试」，不要编造搜索结果。`;
 
+/**
+ * Prompt hint for the pi-web-access fetch tools, injected only when the
+ * plugin is enabled (config.plugins.webAccess.enabled !== false).
+ */
+export const WEB_ACCESS_PROMPT_HINT = `
+网页内容抓取（fetch_content / get_search_content）：
+- 当需要读取具体链接的正文时调用 fetch_content：普通网页会提取为 markdown，也支持 GitHub 仓库、PDF、YouTube 字幕和本地视频。
+- 与 web_search 搭配使用：先搜索拿到链接，再用 fetch_content 精读全文；不要凭搜索结果摘要臆造原文细节。
+- fetch_content 返回内容较长时，可用 get_search_content 按 responseId 分段读取或检索其中的段落。`;
+
 export const ONBOARDING_GUIDE = `
 ## 新手引导（仅在用户画像为空时生效）
 

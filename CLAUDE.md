@@ -17,7 +17,7 @@ This is an npm workspaces monorepo (Node.js >=20.6.0, ES modules) for **Inno Age
 
 PI SDK packages (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-web-ui`) are pulled from npm.
 
-Key dependencies: `ws` (WebSocket), `node-pty` (PTY terminal), `cron-parser` (scheduler), `@larksuiteoapi/node-sdk` (Feishu), `typebox` (validation), `undici` (HTTP client), `@juicesharp/rpiv-ask-user-question` (bridges agent `ask_user_question` tool calls to the web UI), `pi-subagents` (optional subagent support), `pi-sandbox` (optional OS-level sandboxing), `graphology` + `graphology-communities-louvain` (wiki knowledge graph), `yaml` (YAML parsing), `@llamaindex/liteparse` (document parsing).
+Key dependencies: `ws` (WebSocket), `node-pty` (PTY terminal), `cron-parser` (scheduler), `@larksuiteoapi/node-sdk` (Feishu), `typebox` (validation), `undici` (HTTP client), `@juicesharp/rpiv-ask-user-question` (bridges agent `ask_user_question` tool calls to the web UI), `@juicesharp/rpiv-todo` (`todo` task-list tool), `pi-web-access` (`fetch_content`/`get_search_content` URL/GitHub/PDF/YouTube extraction), `pi-subagents` (optional subagent support), `pi-sandbox` (optional OS-level sandboxing), `graphology` + `graphology-communities-louvain` (wiki knowledge graph), `yaml` (YAML parsing), `@llamaindex/liteparse` (document parsing).
 
 Tests run with `npm test` (`vitest run`, root script) and also execute in the release CI. The suite is ~38 files (282 tests) and skewed toward `memory/l2`; coverage for channels/scheduler/terminal/L1/L3 is tracked in `docs/quality-remediation-plan.md`. The TypeScript build (`npm run build`) remains the primary sanity check. No ESLint or Prettier configuration exists.
 
@@ -184,6 +184,7 @@ Key files in `apps/inno-agent/src/agent/`:
 - `practice-tools.ts` — Practice Lab tools (run commands, read run records).
 - `document-tools.ts` — file uploads, workspace file reading, document preview (CSV, Office formats).
 - `ocr-tools.ts` — OCR via external PaddleOCR-VL API, configured by `ocrApi` in config.json.
+- `web-access-config.ts` — integration support for the bundled `pi-web-access` plugin: writes the managed `<configDir>/web-search.json` default (keeps pi-web-access's own `web_search`/`source_check` disabled so inno's Tavily `web_search` stays the single search tool — PI's tool registry is silent last-wins on name collisions; forces `workflow: "none"` so no browser curator opens) and builds the jiti alias that pins `@earendil-works/pi-ai` to the backend's 0.84.x copy (the monorepo root hoists pi-ai 0.75.x for pi-web-ui, which lacks the `./compat` export pi-web-access imports). Both bundled plugins (`@juicesharp/rpiv-todo`, `pi-web-access`) ship TS-only sources and load through jiti like pi-subagents; gated by `plugins.todo.enabled` / `plugins.webAccess.enabled` in config.json (default on).
 - `workspace-path-guard.ts` — security path validation ensuring agent file operations stay within workspace bounds.
 - `observability-extension.ts` — two-layer observability: (1) extension layer for session lifecycle/model changes/compaction events, (2) prompt observer for per-turn execution, tool call details (args + results), message lifecycle, and usage/cost extraction. All handlers are wrapped in try-catch so observability never breaks the agent loop. Uses a dedicated child logger (`logger.child({ module: "observability" })`).
 
@@ -388,6 +389,10 @@ Full config.json structure (see `config.example.json`):
   },
   "bridge": { "token": "replace-me-with-a-secret" },
   "subagents": { "enabled": false },
+  "plugins": {
+    "todo": { "enabled": true },
+    "webAccess": { "enabled": true }
+  },
   "contentHub": {
     "type": "github",
     "owner": "Chloris-Blaxk",

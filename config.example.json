@@ -71,5 +71,9 @@
 		"token": "",
 		"model": "PaddleOCR-VL-1.6",
 		"baseUrl": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+	},
+	"plugins": {
+		"todo": { "enabled": true },
+		"webAccess": { "enabled": true }
 	}
 }
