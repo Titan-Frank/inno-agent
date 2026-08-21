@@ -266,6 +266,12 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 				setWsMode("temp");
 				setWsName("");
 				setWsExistingId("");
+				// The welcome-page choice is draft state, but the workspace panel
+				// should still preview the same workspace before a session exists.
+				// Without this, switching back to temp leaves the last session's
+				// workspace visible in the file area.
+				const tempWorkspace = workspaces.list.find((workspace) => workspace.isTemp);
+				void workspaceStore.setActiveWorkspace(tempWorkspace?.id ?? null);
 			} else if (choice.kind === "workspace") {
 				setWsMode("existing");
 				setWsExistingId(choice.workspaceId);
