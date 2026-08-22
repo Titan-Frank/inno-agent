@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { PendingUpload } from "./composer-utils.js";
 import { kindFromName } from "./smart-input/kinds.js";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu.js";
+import { hiddenDragImage } from "./smart-input/drag-utils.js";
 import { workspaceFileUrl } from "../../api/workspace.js";
 import { FileName } from "../FileName.js";
 import { FileTypeIcon } from "../FileTypeIcon.js";
@@ -164,11 +165,17 @@ export function ChatUploadChips({ uploads, onRemove, onRetry, onInsertAsBubble, 
 							event.dataTransfer.setData("application/x-inno-file", JSON.stringify({ name: file.fileName, path: file.path, source: file.source }));
 							event.dataTransfer.setData("text/plain", `ws:${file.path}`);
 							event.dataTransfer.effectAllowed = "copy";
-							// Keep the preview above the pointer so it does not cover the
-							// attachment row or the smart-input drop feedback.
-							event.dataTransfer.setDragImage(dragImage, dragImage.offsetWidth / 2, dragImage.offsetHeight + 2);
-							window.setTimeout(() => dragImage.remove(), 0);
 							startPageDrag(file);
+							// Smart input renders its own live follower (file panel +
+							// drop status); hide the native snapshot so only one panel shows.
+							if (document.body.classList.contains("inno-smart-dragging")) {
+								event.dataTransfer.setDragImage(hiddenDragImage(), 0, 0);
+							} else {
+								// Keep the preview above the pointer so it does not cover the
+								// attachment row or the smart-input drop feedback.
+								event.dataTransfer.setDragImage(dragImage, dragImage.offsetWidth / 2, dragImage.offsetHeight + 2);
+							}
+							window.setTimeout(() => dragImage.remove(), 0);
 						}}
 							onDragEnd={() => {
 								setDraggingId(null);

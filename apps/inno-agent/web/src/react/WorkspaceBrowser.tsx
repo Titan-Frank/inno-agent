@@ -20,6 +20,7 @@ import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { ContextMenu, type ContextMenuItem } from "./ui/ContextMenu.js";
 import { FileName } from "./FileName.js";
+import { hiddenDragImage } from "./chat/smart-input/drag-utils.js";
 import "@earendil-works/pi-web-ui";
 
 // Heavy office renderers are lazy-loaded so docx-preview / xlsx stay off the
@@ -711,12 +712,17 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 				event.dataTransfer.setData("text/plain", `ws:${node.data.path}`);
 				event.dataTransfer.effectAllowed = "copy";
 				const dragImage = createWorkspaceDragImage(items, t);
-				// Keep the drag preview above the pointer. The composer uses the area
-				// under the pointer for attachment chips and smart-input feedback; a
-				// centered preview would cover that target while dragging.
-				event.dataTransfer.setDragImage(dragImage, 6, dragImage.offsetHeight + 2);
-				window.setTimeout(() => dragImage.remove(), 0);
 				window.dispatchEvent(new CustomEvent("inno-smart-dragstart", { detail: { items } }));
+				if (document.body.classList.contains("inno-smart-dragging")) {
+					// Smart input renders its own live follower; hide the native snapshot.
+					event.dataTransfer.setDragImage(hiddenDragImage(), 0, 0);
+				} else {
+					// Keep the drag preview above the pointer. The composer uses the area
+					// under the pointer for attachment chips and smart-input feedback; a
+					// centered preview would cover that target while dragging.
+					event.dataTransfer.setDragImage(dragImage, 6, dragImage.offsetHeight + 2);
+				}
+				window.setTimeout(() => dragImage.remove(), 0);
 			}}
 			onDragEnd={(event) => {
 				if (!isFileDragSource) return;

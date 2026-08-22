@@ -809,6 +809,7 @@
 			"pickFileTitle": "Choose {{kind}} files (workspace)",
 			"pickGenericFileTitle": "Choose \"{{kind}}\" files (workspace)",
 			"batchAdd": "Batch add",
+			"backToBound": "Back to bound files",
 			"workspaceLoading": "Loading workspace files…",
 			"workspaceNoMatch": "No workspace files match this rule",
 			"removeBinding": "Remove binding"

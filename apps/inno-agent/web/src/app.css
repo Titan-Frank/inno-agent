@@ -1029,6 +1029,9 @@ inno-workspace-panel textarea {
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
 	vertical-align: 0.14em;
+	/* CJK glyphs sit slightly above their line-box center, so the badge needs
+	   a tiny lift to optically align with 便捷输入-style labels. */
+	transform: translateY(-1.5px);
 	user-select: none;
 }
 
@@ -2416,93 +2419,167 @@ body.inno-smart-dragging .inno-smart-kw-hit::before {
 		0 0 12px color-mix(in srgb, var(--inno-accent) 16%, transparent);
 	pointer-events: none;
 }
+.inno-smart-dwell-follower.is-inline {
+	position: static;
+	flex: 0 0 auto;
+	width: 14px;
+	height: 14px;
+	margin-left: auto;
+	margin-top: 2px;
+}
+
 .inno-smart-dwell-follower i {
 	display: none;
 }
 
-.inno-smart-drop-status {
+.inno-drag-follower {
 	position: fixed;
 	z-index: 220;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 	box-sizing: border-box;
-	min-height: 28px;
-	max-width: 240px;
-	padding: 4px 8px;
+	max-width: 260px;
+	padding: 5px 8px;
 	border: 1px solid var(--inno-border);
-	border-radius: 8px;
-	background: var(--inno-surface-raised);
-	box-shadow: 0 4px 14px rgba(31, 35, 40, 0.18);
+	border-radius: 12px;
+	background: var(--inno-surface-muted);
+	box-shadow: 0 6px 18px rgba(31, 35, 40, 0.16);
 	color: var(--inno-text);
-	font-size: 11px;
-	font-weight: 600;
+	font-size: 12px;
 	line-height: 18px;
-	white-space: nowrap;
 	pointer-events: none;
 }
-.inno-smart-drop-status.is-match {
-	border-color: color-mix(in srgb, var(--inno-success) 42%, var(--inno-border));
+
+.inno-drag-follower-files {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
 }
-.inno-smart-drop-status.is-mismatch {
-	border-color: color-mix(in srgb, var(--inno-danger) 42%, var(--inno-border));
+
+.inno-drag-follower-file {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	max-width: 240px;
+	white-space: nowrap;
 }
-.inno-smart-drop-status.is-partial {
-	border-color: color-mix(in srgb, var(--inno-warning) 48%, var(--inno-border));
-}
-.inno-smart-drop-status-icon {
+
+.inno-drag-follower-ext {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 16px;
+	flex: 0 0 auto;
+	min-width: 26px;
 	height: 16px;
-	flex: 0 0 16px;
-	font-size: 16px;
-	font-weight: 800;
-	line-height: 16px;
+	padding: 0 4px;
+	border: 1px solid var(--inno-border);
+	border-radius: 4px;
+	background: var(--inno-surface);
+	color: var(--inno-text-subtle);
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.03em;
 }
-.inno-smart-drop-status-icon.is-match {
-	color: var(--inno-success);
-}
-.inno-smart-drop-status-icon.is-mismatch {
-	color: var(--inno-danger);
-}
-.inno-smart-drop-status-icon.is-partial {
-	position: relative;
-}
-.inno-smart-drop-status-icon.is-partial > svg {
-	display: block;
-	width: 16px;
-	height: 16px;
-	overflow: visible;
-}
-.inno-smart-drop-status-icon.is-partial .is-positive {
-	color: var(--inno-success);
-}
-.inno-smart-drop-status-icon.is-partial .is-negative {
-	color: var(--inno-danger);
-}
-.inno-smart-drop-status-name {
+
+.inno-drag-follower-name {
 	min-width: 0;
-	max-width: 140px;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	white-space: nowrap;
 }
-.inno-smart-drop-status-label {
+
+.inno-drag-follower-count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	flex: 0 0 auto;
+	margin-left: auto;
+	min-width: 24px;
+	height: 16px;
+	padding: 0 6px;
+	border-radius: 999px;
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
 	font-size: 10px;
 	font-weight: 600;
-	color: var(--inno-text-muted);
+	line-height: 1;
 }
-.inno-smart-drop-status.is-match .inno-smart-drop-status-label {
+
+/* Stacked-sheet hint behind a multi-file drag panel. */
+.inno-drag-follower.is-multi {
+	box-shadow:
+		3px 3px 0 -1px var(--inno-surface-muted),
+		3px 3px 0 0 var(--inno-border),
+		6px 6px 0 -1px var(--inno-surface-muted),
+		6px 6px 0 0 var(--inno-border),
+		0 6px 18px rgba(31, 35, 40, 0.16);
+}
+
+.inno-drag-follower-more {
+	color: var(--inno-text-subtle);
+	font-size: 10px;
+}
+
+.inno-drag-follower-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 22px;
+	padding: 2px 6px;
+	border-radius: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.inno-drag-follower.has-status .inno-drag-follower-status {
+	border-top: 1px solid var(--inno-border);
+	padding-top: 5px;
+	margin-top: 1px;
+}
+
+.inno-drag-follower-status.is-match {
 	color: var(--inno-success);
 }
-.inno-smart-drop-status.is-mismatch .inno-smart-drop-status-label {
+.inno-drag-follower-status.is-mismatch {
 	color: var(--inno-danger);
 }
-.inno-smart-drop-status.is-partial .inno-smart-drop-status-label {
+.inno-drag-follower-status.is-partial {
 	color: var(--inno-warning);
+}
+
+.inno-drag-follower-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	font-size: 12px;
+	line-height: 1;
+}
+.inno-drag-follower-icon > svg {
+	width: 14px;
+	height: 14px;
+}
+.inno-drag-follower-icon .is-positive {
+	color: var(--inno-success);
+}
+.inno-drag-follower-icon .is-negative {
+	color: var(--inno-danger);
+}
+
+.inno-drag-follower-word {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.inno-drag-follower-label {
+	color: var(--inno-text-subtle);
+	font-weight: 500;
 }
 
 @keyframes inno-smart-materialize {
@@ -2563,17 +2640,20 @@ body.inno-smart-dragging .inno-smart-kw-hit::before {
 	justify-content: space-between;
 	gap: 8px;
 	padding: 0 2px;
-	margin-bottom: 5px;
+	margin-bottom: 9px;
 }
 .inno-smart-fill-head .inno-smart-panel-title {
-	padding: 2px 0 6px;
+	/* Match the 22px control height exactly so the title's line box and the
+	   buttons share one center line; padding would offset the glyphs. */
+	padding: 0;
+	line-height: 22px;
 }
 .inno-smart-fill-plus {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 20px;
-	height: 20px;
+	width: 22px;
+	height: 22px;
 	border-radius: 6px;
 	border: 1px solid var(--inno-border);
 	background: var(--inno-surface);
@@ -2597,7 +2677,7 @@ body.inno-smart-dragging .inno-smart-kw-hit::before {
 	align-items: center;
 	justify-content: center;
 	gap: 3px;
-	min-height: 24px;
+	min-height: 22px;
 	padding: 2px 7px;
 	font-size: 11px;
 	white-space: nowrap;

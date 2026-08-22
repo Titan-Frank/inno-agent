@@ -114,3 +114,24 @@ export function dropMatchState(files: EngineAttachmentItem[], accepts: (name: st
 	if (matched === files.length) return "match";
 	return "partial";
 }
+
+let hiddenImageEl: HTMLCanvasElement | null = null;
+
+/**
+ * 1x1 transparent canvas used as the native drag image when the smart-input
+ * engine owns the live drag follower, so only one drag panel is visible.
+ */
+export function hiddenDragImage(): HTMLCanvasElement {
+	if (!hiddenImageEl) {
+		hiddenImageEl = document.createElement("canvas");
+		hiddenImageEl.width = 1;
+		hiddenImageEl.height = 1;
+		// Must live in the DOM (offscreen) or Chromium renders the drag image
+		// as a visible dot at the cursor.
+		hiddenImageEl.style.position = "fixed";
+		hiddenImageEl.style.top = "-10000px";
+		hiddenImageEl.style.left = "-10000px";
+		document.body.appendChild(hiddenImageEl);
+	}
+	return hiddenImageEl;
+}

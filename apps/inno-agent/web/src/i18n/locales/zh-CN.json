@@ -809,6 +809,7 @@
 			"pickFileTitle": "选择{{kind}}文件（工作区）",
 			"pickGenericFileTitle": "选择「{{kind}}」文件（工作区）",
 			"batchAdd": "批量添加",
+			"backToBound": "返回绑定列表",
 			"workspaceLoading": "正在加载工作区文件…",
 			"workspaceNoMatch": "工作区暂无匹配该规则的文件",
 			"removeBinding": "移除绑定"

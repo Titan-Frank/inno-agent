@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Check, ListChecks, Plus, RotateCcw, X } from "lucide-react";
+import { ArrowLeft, Check, ListChecks, Plus, RotateCcw, X } from "lucide-react";
 import type { EngineAttachmentItem, SmartInputEngine } from "./engine.js";
 import { KIND_LABEL_KEYS, kindFromName, kindFromRule, nameMatchesRule } from "./kinds.js";
 import type { PendingUpload } from "../composer-utils.js";
@@ -357,8 +357,24 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 			style={{ left: panel.anchor.left, top: panel.anchor.bottom + 4 }}
 		>
 			<div className="inno-smart-fill-head">
-				<div className="inno-smart-panel-title">
-					{pickFileTitle}
+				<div className="flex min-w-0 items-center gap-1.5">
+					{slot.files.length > 0 ? (
+						<button
+							type="button"
+							className="inno-smart-fill-plus"
+							title={t("chat.smartInput.backToBound", "返回绑定列表")}
+							aria-label={t("chat.smartInput.backToBound", "返回绑定列表")}
+							onClick={(event) => {
+								pin(event);
+								openStatus();
+							}}
+						>
+							<ArrowLeft size={14} aria-hidden="true" />
+						</button>
+					) : null}
+					<div className="inno-smart-panel-title">
+						{pickFileTitle}
+					</div>
 				</div>
 				{fillCandidates.length > 0 ? (
 					multiSelect ? (
