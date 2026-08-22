@@ -325,6 +325,7 @@ describe("ChatStore stream ownership", () => {
 			CLIENT_REQUEST_ID,
 			expect.any(AbortSignal),
 			images,
+			undefined,
 		);
 
 		store.detach();

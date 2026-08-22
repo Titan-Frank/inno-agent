@@ -27,6 +27,10 @@ import {
 } from "../../showcase/case-exporter.js";
 import { readJson, writeJson } from "../../storage/file-store.js";
 import { TEMP_WORKSPACE_ID, type WorkspaceRegistry } from "../../workspace/workspace-registry.js";
+import {
+	clearSessionAttachments,
+	mergeSessionAttachments,
+} from "../attachments-store.js";
 import { contentDispositionAttachment } from "../file-helpers.js";
 import { HttpError, json, matchRoute, readBody } from "../http-helpers.js";
 import {
@@ -381,13 +385,14 @@ export async function handleSessionsRoutes(
 		}
 		const channelMetadata = readSessionChannelMetadata();
 		const topicMetadata = readSessionTopicMetadata();
+		const sessionId = basename(sessionPath);
 		const summary = withRecordedTopic(
 			withRecordedChannels(parsed.summary, channelMetadata),
 			topicMetadata,
 		);
 		json(res, 200, {
 			...summary,
-			messages: parsed.messages,
+			messages: mergeSessionAttachments(dataDir, sessionId, parsed.messages),
 			messageCount: parsed.messages.length,
 			sessionRevision: sessionRevision(sessionPath),
 			// Attach any persisted pending question so the frontend can restore
@@ -616,6 +621,7 @@ export async function handleSessionsRoutes(
 				delete questionMeta[sessionId];
 				writeSessionQuestionMetadata(questionMeta);
 			}
+			clearSessionAttachments(dataDir, sessionId);
 			workspaceRegistry.unbindSession(sessionId);
 			if (shouldDropTempWorkspace) {
 				workspaceRegistry.deleteWorkspace(boundWorkspaceId, { removeFiles: true });

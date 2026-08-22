@@ -11,12 +11,14 @@ import {
 	deleteModel,
 	deleteProvider,
 	normalizeContentHubConfig,
+	normalizeSmartInputConfig,
 	saveConfig,
 	setDefaultModel,
 	upsertProvider,
 	type InnoConfig,
 	type InnoModelConfig,
 	type InnoProviderConfig,
+	type InnoSmartInputConfig,
 } from "../../config.js";
 import { logger } from "../../logger.js";
 import {
@@ -421,6 +423,20 @@ export async function handleSettingsRoutes(
 			return true;
 		}
 		config.simpleMode = { enabled: body.enabled };
+		save(saveConfig(paths.configPath, config));
+		syncConfig(config);
+		json(res, 200, buildSafeSettings(config));
+		return true;
+	}
+
+	// --- Smart Input (便捷输入): composer keyword bubbles + file bindings.
+	// Accepts the full settings object; rules are normalized (trimmed keywords,
+	// deduped, extensions lowercased with a leading dot) before persisting so
+	// a partial or hand-edited payload can never produce a broken rule set. ---
+	if (method === "PUT" && url === "/api/settings/smart-input") {
+		const body = (await readBody(req)) as Record<string, unknown>;
+		const next = normalizeSmartInputConfig(body as Partial<InnoSmartInputConfig>);
+		config.smartInput = next;
 		save(saveConfig(paths.configPath, config));
 		syncConfig(config);
 		json(res, 200, buildSafeSettings(config));

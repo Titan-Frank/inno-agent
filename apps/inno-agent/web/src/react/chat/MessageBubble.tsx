@@ -1,12 +1,14 @@
-import { Fragment, memo, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { X, AlertTriangle, FileCode2 } from "lucide-react";
-import type { ChatMessage, ChatToolRecord } from "../../types/chat.js";
+import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
+import { splitContentByBindings } from "../../utils/attachment-render.js";
 import { answeredQuestionnaireFromTool, buildAnsweredQuestionnaireTimeline } from "../../utils/questionnaire.js";
 import type { AnsweredQuestionnaireView } from "../../utils/questionnaire.js";
+import { KIND_COLORS, KIND_LABEL_KEYS } from "./smart-input/kinds.js";
 import { MarkdownArtifact } from "../MarkdownArtifact.js";
 import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
 
@@ -78,6 +80,178 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
  * default and reveals the full backend message when expanded, so users know
  * something failed instead of seeing a silent dead end.
  */
+export type AttachmentUrlResolver = (file: AttachmentRef) => string | undefined;
+
+function AttachmentFileChip({ file, resolveUrl }: {
+	file: AttachmentRef;
+	resolveUrl?: AttachmentUrlResolver;
+}) {
+	const url = resolveUrl?.(file);
+	const inner = (
+		<>
+			<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[file.kind] }} />
+			<span className="min-w-0 truncate">{file.path.split("/").pop() ?? file.path}</span>
+		</>
+	);
+	const className = "inno-smart-ref-chip";
+	return url
+		? <a className={className} href={url} target="_blank" rel="noreferrer" title={file.path}>{inner}</a>
+		: <span className={className} title={file.path}>{inner}</span>;
+}
+
+/** Read-only hover panel for a sent bubble: bound files with source + path.
+ *  Mirrors the composer status panel's look, but every action is removed. */
+function SentBindingPanel({ binding, anchor }: { binding: AttachmentBinding; anchor: HTMLElement | null }) {
+	const { t } = useTranslation();
+	const [rect, setRect] = useState<DOMRect | null>(null);
+
+	useEffect(() => {
+		setRect(anchor?.getBoundingClientRect() ?? null);
+	}, [anchor]);
+
+	if (!rect) return null;
+	const width = 260;
+	const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+	const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 190));
+
+	return createPortal(
+		<div
+			className="inno-smart-panel inno-smart-panel--readonly"
+			style={{ left, top, width }}
+			role="tooltip"
+		>
+			<div className="inno-smart-panel-title">
+				{t("chat.smartInput.boundFilesTitle", "「{{word}}」绑定的文件（{{count}}）", { word: binding.word, count: binding.files.length })}
+			</div>
+			<div className="inno-smart-panel-list">
+				{binding.files.map((file) => (
+					<div key={file.path} className="inno-smart-panel-row">
+						<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[file.kind] }} />
+						<span className="inno-smart-panel-name" title={file.path}>{file.path.split("/").pop() ?? file.path}</span>
+						<span className="inno-smart-src-tag">
+							{file.source === "workspace" ? t("chat.smartInput.sourceWorkspace", "工作区") : t("chat.smartInput.sourceUpload", "本地上传")}
+						</span>
+						<span className="inno-smart-status-done" title={file.path}>✓</span>
+					</div>
+				))}
+			</div>
+			<div className="inno-smart-panel-caption">
+				{t("chat.smartInput.kindLabel", "类型")}: {t(KIND_LABEL_KEYS[binding.files[0]?.kind ?? "file"])}
+				{" · "}
+				{t("chat.smartInput.sentReadonly", "已随消息发送 · 只读")}
+			</div>
+		</div>,
+		document.body,
+	);
+}
+
+/**
+ * Renders a sent user message with inline binding bubbles: the recorded word
+ * occurrence is replaced by a word pill + one ref-chip per bound file, loose
+ * attachments render as a chip row, and a collapsible details block exposes
+ * the exact structured payload the agent received.
+ */
+function UserAttachmentContent({ content, attachments, resolveUrl }: {
+	content: string;
+	attachments: NonNullable<ChatMessage["attachments"]>;
+	resolveUrl?: AttachmentUrlResolver;
+}) {
+	const { t } = useTranslation();
+	const { segments, unplaced } = useMemo(
+		() => splitContentByBindings(content, attachments.bindings),
+		[content, attachments.bindings],
+	);
+	const [hovered, setHovered] = useState<{ binding: AttachmentBinding; anchor: HTMLElement } | null>(null);
+	const openTimer = useRef<number | null>(null);
+	const closeTimer = useRef<number | null>(null);
+
+	useEffect(() => () => {
+		if (openTimer.current) window.clearTimeout(openTimer.current);
+		if (closeTimer.current) window.clearTimeout(closeTimer.current);
+	}, []);
+
+	const showBinding = (binding: AttachmentBinding, event: React.MouseEvent) => {
+		if (closeTimer.current) window.clearTimeout(closeTimer.current);
+		const anchor = event.currentTarget as HTMLElement;
+		if (hovered?.binding === binding) return;
+		if (openTimer.current) window.clearTimeout(openTimer.current);
+		openTimer.current = window.setTimeout(() => setHovered({ binding, anchor }), 300);
+	};
+	const scheduleHide = () => {
+		if (openTimer.current) window.clearTimeout(openTimer.current);
+		if (closeTimer.current) window.clearTimeout(closeTimer.current);
+		closeTimer.current = window.setTimeout(() => setHovered(null), 260);
+	};
+
+	const renderBinding = (binding: AttachmentBinding) => (
+		<span
+			key={`${binding.word}-${binding.wordIndex}`}
+			className="inno-smart-ref-inline"
+			onMouseEnter={(event) => showBinding(binding, event)}
+			onMouseLeave={scheduleHide}
+		>
+			<span className="inno-smart-ref-word" title={t("chat.smartInput.sentBubbleHint", "已绑定 {{count}} 个文件", { count: binding.files.length })}>
+				<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[binding.files[0]?.kind ?? "file"] }} />
+				{binding.word}
+			</span>
+			{binding.files.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
+		</span>
+	);
+
+	const looseRow = attachments.loose.length > 0 ? (
+		<div className="mt-1.5 flex flex-wrap gap-1.5">
+			{attachments.loose.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
+		</div>
+	) : null;
+
+	const trailingBindings = unplaced.length > 0 ? (
+		<div className="mt-1.5 flex flex-wrap gap-1.5">
+			{unplaced.map((binding) => (
+				<span key={`unplaced-${binding.word}-${binding.wordIndex}`} className="inno-smart-ref-inline">
+					<span className="inno-smart-ref-word">
+						<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[binding.files[0]?.kind ?? "file"] }} />
+						{binding.word}
+					</span>
+					{binding.files.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
+				</span>
+			))}
+		</div>
+	) : null;
+
+	const aiView = {
+		text_for_model: content,
+		bindings: attachments.bindings.map((binding) => ({
+			word: binding.word,
+			files: binding.files.map((file) => file.path),
+		})),
+		loose_attachments: attachments.loose.map((file) => file.path),
+	};
+	const details = (attachments.bindings.length > 0 || attachments.loose.length > 0) ? (
+		<details className="inno-smart-details mt-1.5">
+			<summary>{t("chat.smartInput.receivedPayload", "AI 收到的结构化附件")}</summary>
+			<pre>{JSON.stringify(aiView, null, 2)}</pre>
+		</details>
+	) : null;
+
+	return (
+		<>
+			{segments.map((segment, index) =>
+				segment.kind === "text"
+					? <Fragment key={index}>{segment.text}</Fragment>
+					: renderBinding(segment.binding),
+			)}
+			{looseRow}
+			{trailingBindings}
+			{details}
+			{hovered ? (
+				<span onMouseEnter={() => { if (closeTimer.current) window.clearTimeout(closeTimer.current); }} onMouseLeave={scheduleHide}>
+					<SentBindingPanel binding={hovered.binding} anchor={hovered.anchor} />
+				</span>
+			) : null}
+		</>
+	);
+}
+
 export function ErrorBlock({ error }: { error: string }) {
 	const isLong = error.length > 80 || error.includes("\n");
 	return (
@@ -179,7 +353,13 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel }: { message: ChatMessage; showChannel?: boolean }) {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl }: {
+	message: ChatMessage;
+	showChannel?: boolean;
+	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
+	 *  a prop so this module stays store/api-free for showcase replay. */
+	resolveAttachmentUrl?: AttachmentUrlResolver;
+}) {
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
 		const questionnaire = answeredQuestionnaireFromTool(tool);
@@ -215,7 +395,15 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel 
 						</div>
 					) : null}
 					{lightboxSrc ? <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} /> : null}
-					{message.content.trim()}
+					{message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0) ? (
+						<UserAttachmentContent
+							content={message.content.trim()}
+							attachments={message.attachments}
+							resolveUrl={resolveAttachmentUrl}
+						/>
+					) : (
+						message.content.trim()
+					)}
 				</div>
 			</motion.div>
 		);

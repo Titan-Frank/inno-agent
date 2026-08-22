@@ -1,9 +1,10 @@
-import { useEffect, useRef, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { Paperclip, X, ArrowUp, Square, RotateCcw, Image, FileText, Check, ChevronDown, Settings2 } from "lucide-react";
+import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { Paperclip, X, ArrowUp, Square, RotateCcw, Image, FileText, Check, ChevronDown, Settings2, HardDriveUpload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Spinner } from "../ui/Spinner.js";
 import type { InnoModelInfo } from "../../types/settings.js";
 import type { PreparedInlineImage, PendingPasteBlock } from "./composer-utils.js";
+import { KIND_COLORS, kindFromName } from "./smart-input/kinds.js";
 import { ModelProviderIcon } from "./ModelProviderIcon.js";
 
 export interface ChatComposerModelState {
@@ -26,6 +27,11 @@ export interface ChatComposerProps {
 	modelOptions: InnoModelInfo[];
 	currentModel?: InnoModelInfo;
 	modelPickerOpen: boolean;
+	attachMenuOpen: boolean;
+	workspaceFiles: Array<{ name: string; path: string }>;
+	smartInputEnabled: boolean;
+	mirrorRef: RefObject<HTMLDivElement | null>;
+	hitRef: RefObject<HTMLDivElement | null>;
 	chatIsSending: boolean;
 	canReconnect: boolean;
 	lastUserPrompt: string | null;
@@ -46,6 +52,10 @@ export interface ChatComposerProps {
 	onCloseModelPicker: () => void;
 	onModelSelect: (model: InnoModelInfo) => void;
 	onOpenModelSettings: () => void;
+	onToggleAttachMenu: () => void;
+	onCloseAttachMenu: () => void;
+	onPickWorkspaceFile: (path: string) => void;
+	onDropFiles: (files: File[]) => void;
 	onSend: () => void;
 	onStop: () => void;
 	onReconnect: () => void;
@@ -64,6 +74,11 @@ export function ChatComposer({
 	modelOptions,
 	currentModel,
 	modelPickerOpen,
+	attachMenuOpen,
+	workspaceFiles,
+	smartInputEnabled,
+	mirrorRef,
+	hitRef,
 	chatIsSending,
 	canReconnect,
 	lastUserPrompt,
@@ -84,6 +99,10 @@ export function ChatComposer({
 	onCloseModelPicker,
 	onModelSelect,
 	onOpenModelSettings,
+	onToggleAttachMenu,
+	onCloseAttachMenu,
+	onPickWorkspaceFile,
+	onDropFiles,
 	onSend,
 	onStop,
 	onReconnect,
@@ -91,6 +110,8 @@ export function ChatComposer({
 }: ChatComposerProps) {
 	const { t } = useTranslation();
 	const modelPickerRef = useRef<HTMLDivElement | null>(null);
+	const attachMenuRef = useRef<HTMLDivElement | null>(null);
+	const [osFileDragOver, setOsFileDragOver] = useState(false);
 	const currentModelLabel = currentModel?.name || currentModel?.id || modelState.defaultModel || t("chat.modelUnavailable");
 
 	useEffect(() => {
@@ -108,6 +129,39 @@ export function ChatComposer({
 			window.removeEventListener("keydown", handleKeyDown);
 		};
 	}, [modelPickerOpen, onCloseModelPicker]);
+
+	useEffect(() => {
+		if (!attachMenuOpen) return;
+		const handlePointerDown = (event: PointerEvent) => {
+			if (!attachMenuRef.current?.contains(event.target as Node)) onCloseAttachMenu();
+		};
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") onCloseAttachMenu();
+		};
+		document.addEventListener("pointerdown", handlePointerDown);
+		window.addEventListener("keydown", handleKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown);
+			window.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [attachMenuOpen, onCloseAttachMenu]);
+
+	const isOsFileDrag = (event: ReactDragEvent<HTMLElement>): boolean =>
+		Array.from(event.dataTransfer?.types ?? []).includes("Files");
+
+	const handleComposerDragOver = (event: ReactDragEvent<HTMLElement>) => {
+		if (!isOsFileDrag(event)) return;
+		event.preventDefault();
+		setOsFileDragOver(true);
+	};
+
+	const handleComposerDrop = (event: ReactDragEvent<HTMLElement>) => {
+		if (!isOsFileDrag(event)) return;
+		event.preventDefault();
+		setOsFileDragOver(false);
+		const files = Array.from(event.dataTransfer?.files ?? []);
+		if (files.length > 0) onDropFiles(files);
+	};
 
 	const renderInlineImagePreviews = () => (
 		inlineImages.length > 0 ? (
@@ -167,6 +221,63 @@ export function ChatComposer({
 		) : null
 	);
 
+	const renderAttachMenu = () => (
+		<div ref={attachMenuRef} className="inno-composer-model-picker relative shrink-0">
+			<button
+				type="button"
+				className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
+				title={t("chat.uploadFiles")}
+				disabled={chatIsSending || isUploading}
+				aria-haspopup="menu"
+				aria-expanded={attachMenuOpen}
+				onClick={onToggleAttachMenu}
+			>
+				{isUploading ? <Spinner size={16} /> : <Paperclip size={16} />}
+			</button>
+			{attachMenuOpen ? (
+				<div className="inno-composer-model-menu inno-smart-attach-menu" role="menu" aria-label={t("chat.uploadFiles")}>
+					<button
+						type="button"
+						role="menuitem"
+						className="inno-composer-model-option"
+						onClick={() => {
+							onCloseAttachMenu();
+							fileInputRef.current?.click();
+						}}
+					>
+						<span className="flex min-w-0 items-center gap-2">
+							<HardDriveUpload size={14} className="shrink-0 text-[var(--inno-text-muted)]" />
+							<span className="truncate">{t("chat.smartInput.attachFromThisDevice", "本机文件…")}</span>
+						</span>
+					</button>
+					{workspaceFiles.length > 0 ? (
+						<div className="inno-smart-attach-menu-caption">{t("chat.smartInput.attachFromWorkspace", "从工作区添加")}</div>
+					) : (
+						<div className="inno-smart-attach-menu-caption">{t("chat.smartInput.workspaceEmpty", "工作区暂无文件")}</div>
+					)}
+					{workspaceFiles.map((file) => (
+						<button
+							key={file.path}
+							type="button"
+							role="menuitem"
+							className="inno-composer-model-option"
+							title={file.path}
+							onClick={() => {
+								onCloseAttachMenu();
+								onPickWorkspaceFile(file.path);
+							}}
+						>
+							<span className="flex min-w-0 items-center gap-2">
+								<span aria-hidden="true" className="inno-smart-type-dot shrink-0" style={{ backgroundColor: KIND_COLORS[kindFromName(file.name)] }} />
+								<span className="min-w-0 truncate">{file.name}</span>
+							</span>
+						</button>
+					))}
+				</div>
+			) : null}
+		</div>
+	);
+
 	const renderModelPicker = () => (
 		<div ref={modelPickerRef} className="inno-composer-model-picker relative ml-auto shrink-0">
 			<button
@@ -219,35 +330,38 @@ export function ChatComposer({
 
 	const sendDisabled = !hasSendableContent || isUploading;
 	return (
-		<div className="inno-composer rounded-2xl p-2">
+		<div
+			className={`inno-composer rounded-2xl p-2 ${osFileDragOver ? "is-osfile-over" : ""}`}
+			onDragOver={handleComposerDragOver}
+			onDragLeave={(event) => {
+				if (!event.currentTarget.contains(event.relatedTarget as Node)) setOsFileDragOver(false);
+			}}
+			onDrop={handleComposerDrop}
+		>
 			<input ref={fileInputRef} id="file-input" type="file" className="hidden" multiple onChange={onFiles} />
 			<input ref={imageInputRef} id="image-input" type="file" className="hidden" multiple accept="image/*" onChange={onImageFiles} />
 			{renderComposerAttachments()}
-			<textarea
-				ref={inputRef}
-				id="chat-input"
-				defaultValue={defaultValue}
-				className="inno-composer-textarea w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-5 text-[var(--inno-text)] outline-none placeholder:text-[var(--inno-text-subtle)] disabled:opacity-60"
-				placeholder={placeholder}
-				rows={2}
-				onKeyDown={onKeyDown}
-				onInput={onInput}
-				onCompositionStart={onCompositionStart}
-				onCompositionEnd={onCompositionEnd}
-				onPaste={onPaste}
-				disabled={chatIsSending || isUploading || hasPendingQuestion}
-			/>
+			<div className={`inno-smart-wrap ${smartInputEnabled ? "is-active" : ""}`}>
+				{smartInputEnabled ? <div ref={mirrorRef} className="inno-smart-mirror" aria-hidden="true" /> : null}
+				<textarea
+					ref={inputRef}
+					id="chat-input"
+					defaultValue={defaultValue}
+					className="inno-composer-textarea w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-5 text-[var(--inno-text)] outline-none placeholder:text-[var(--inno-text-subtle)] disabled:opacity-60"
+					placeholder={placeholder}
+					rows={2}
+					onKeyDown={onKeyDown}
+					onInput={onInput}
+					onCompositionStart={onCompositionStart}
+					onCompositionEnd={onCompositionEnd}
+					onPaste={onPaste}
+					disabled={chatIsSending || isUploading || hasPendingQuestion}
+				/>
+				{smartInputEnabled ? <div ref={hitRef} className="inno-smart-hit" /> : null}
+			</div>
 			<div className="inno-composer-toolbar flex shrink-0 items-center justify-between gap-2">
 				<div className="flex min-w-0 items-center gap-1">
-					<button
-						type="button"
-						className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
-						title={t("chat.uploadFiles")}
-						disabled={chatIsSending || isUploading}
-						onClick={() => fileInputRef.current?.click()}
-					>
-						{isUploading ? <Spinner size={16} /> : <Paperclip size={16} />}
-					</button>
+					{renderAttachMenu()}
 					<button
 						type="button"
 						className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"

@@ -9,6 +9,7 @@ import {
 	type KeyboardEvent,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { InnoModelInfo } from "../types/settings.js";
 import { chatStore } from "../stores/chat-store.js";
@@ -22,7 +23,8 @@ import { bindSessionWorkspace } from "../api/workspaces.js";
 import { ApiError } from "../api/client.js";
 import type { PresetMeta } from "../types/presets.js";
 import { arrayBufferToBase64 } from "../api/uploads.js";
-import { uploadWorkspaceFiles } from "../api/workspace.js";
+import { uploadWorkspaceFileWithProgress } from "../api/workspace.js";
+import type { AttachmentRef } from "../types/chat.js";
 import { fetchPresetList, readCachedPresets, removeCachedPreset } from "../utils/preset-cache.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { ChatComposer } from "./chat/ChatComposer.js";
@@ -33,13 +35,20 @@ import { ChatWelcome } from "./chat/ChatWelcome.js";
 import { WorkspaceContext } from "./chat/WorkspaceContext.js";
 import type { WorkspaceChoice } from "./WorkspaceSwitcher.js";
 import {
+	flattenWorkspaceFiles,
 	isLargeTextPaste,
+	localPendingUpload,
 	prepareInlineImage,
 	resizeComposerTextarea,
+	workspacePendingUpload,
 	type PendingPasteBlock,
 	type PendingUpload,
 	type PreparedInlineImage,
 } from "./chat/composer-utils.js";
+import { kindFromName } from "./chat/smart-input/kinds.js";
+import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
+import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
+import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
 
 type PresetRefreshStatus = "success" | "error";
 
@@ -86,6 +95,17 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 	const pasteBlockIdRef = useRef(0);
 	const [uploads, setUploads] = useState<PendingUpload[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
+	const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+	const [smartToast, setSmartToast] = useState<{ message: string; error?: boolean } | null>(null);
+	const [smartHasSlots, setSmartHasSlots] = useState(false);
+	const [smartPanel, setSmartPanel] = useState<SmartPanelState | null>(null);
+	const smartToastTimer = useRef<number | null>(null);
+	const smartHoverTimer = useRef<number | null>(null);
+	const smartHoverCloseTimer = useRef<number | null>(null);
+	const mirrorRef = useRef<HTMLDivElement | null>(null);
+	const hitRef = useRef<HTMLDivElement | null>(null);
+	const uploadsRef = useRef<PendingUpload[]>([]);
+	uploadsRef.current = uploads;
 	const [inlineImages, setInlineImages] = useState<PreparedInlineImage[]>([]);
 	const [draftValue, setDraftValue] = useState(draftRef.current);
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -190,6 +210,8 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 	// pre-seeded by the useEffect below when the welcome screen's "existing"
 	// workspace picker selects one.
 	const activeWorkspaceId = useStoreSnapshot(workspaceStore, () => workspaceStore.activeWorkspaceId);
+	const workspaceTree = useStoreSnapshot(workspaceStore, () => workspaceStore.tree);
+	const workspaceFiles = useMemo(() => workspaceTree ? flattenWorkspaceFiles(workspaceTree) : [], [workspaceTree]);
 	const isWelcome = sessions.isWelcome;
 
 	const selectableWorkspaces = useMemo(
@@ -276,9 +298,10 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 		: activeWorkspaceId;
 	const hasSendableContent = Boolean(
 		draftValue.trim()
-		|| pasteBlocks.some((block) => block.text.trim())
-		|| uploads.length > 0
-		|| inlineImages.length > 0,
+			|| pasteBlocks.some((block) => block.text.trim())
+			|| uploads.some((upload) => upload.status !== "failed")
+			|| inlineImages.length > 0
+			|| smartHasSlots,
 	);
 
 	useEffect(() => {
@@ -412,6 +435,106 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 		resizeInput();
 	}, [resizeInput]);
 
+	// ── Smart input engine (便捷输入) ─────────────────────────────────────
+	const smartSettings = useStoreSnapshot(settingsStore, () => settingsStore.settings?.smartInput);
+	const smartInputEnabled = smartSettings?.enabled === true;
+
+	const showSmartToast = useCallback((message: string, error?: boolean) => {
+		setSmartToast({ message, error });
+		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
+		smartToastTimer.current = window.setTimeout(() => setSmartToast(null), 2200);
+	}, []);
+	useEffect(() => () => {
+		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
+	}, []);
+
+	const takeAttachment = useCallback((path: string): EngineAttachmentItem | undefined => {
+		const item = uploadsRef.current.find((entry) => entry.path === path || entry.fileName === path);
+		if (!item) return undefined;
+		setUploads((current) => current.filter((entry) => entry !== item));
+		return { name: item.fileName, path: item.path, source: item.source, file: item.file };
+	}, []);
+
+	const returnAttachment = useCallback((item: EngineAttachmentItem) => {
+		setUploads((current) => {
+			if (current.some((entry) => entry.path === item.path && entry.source === item.source)) return current;
+			return [...current, item.source === "workspace"
+				? workspacePendingUpload(item.path)
+				: { fileName: item.name, path: item.path, source: "local", status: "ready", pct: 0, file: item.file }];
+		});
+	}, []);
+
+	const handleSmartChange = useCallback(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		draftRef.current = el.value;
+		setDraftValue(el.value);
+		resizeInput();
+	}, [resizeInput]);
+
+	const rectOfChip = (chip: HTMLElement): SmartPanelState["anchor"] => {
+		const rect = chip.getBoundingClientRect();
+		return { left: rect.left, bottom: rect.bottom };
+	};
+
+	const openSmartPanel = useCallback((kind: SmartPanelState["kind"], slot: { id: number }, chip: HTMLElement) => {
+		setSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
+	}, []);
+
+	const handleChipHover = useCallback((slot: { id: number; files: unknown[] }, chip: HTMLElement, entering: boolean) => {
+		if (smartHoverCloseTimer.current !== null) {
+			window.clearTimeout(smartHoverCloseTimer.current);
+			smartHoverCloseTimer.current = null;
+		}
+		if (entering) {
+			if (smartHoverTimer.current !== null) return;
+			smartHoverTimer.current = window.setTimeout(() => {
+				smartHoverTimer.current = null;
+				openSmartPanel("status", slot, chip);
+			}, 450);
+			return;
+		}
+		if (smartHoverTimer.current !== null) {
+			window.clearTimeout(smartHoverTimer.current);
+			smartHoverTimer.current = null;
+		}
+		// Left the chip: if the status panel for this slot is open but the
+		// pointer did not move onto it, close it shortly (panel parity).
+		smartHoverCloseTimer.current = window.setTimeout(() => {
+			smartHoverCloseTimer.current = null;
+			const overPanel = document.querySelector(".inno-smart-panel:hover");
+			const overChip = document.querySelector(".inno-smart-chip:hover");
+			if (!overPanel && !overChip) setSmartPanel(null);
+		}, 260);
+	}, [openSmartPanel]);
+
+	const highlightWorkspace = useCallback((paths: string[] | null) => {
+		window.dispatchEvent(new CustomEvent("inno-smart-highlight", { detail: paths }));
+	}, []);
+
+	const engineRef = useSmartInput({
+		enabled: smartInputEnabled,
+		remountKey: isWelcome ? "welcome" : "session",
+		textareaRef: inputRef,
+		mirrorRef,
+		hitRef,
+		getSettings: () => smartSettings,
+		getWorkspaceFiles: () => workspaceFiles,
+		takeAttachment,
+		returnAttachment,
+		onToast: showSmartToast,
+		onChange: handleSmartChange,
+		onSnapshot: (snapshot) => setSmartHasSlots(snapshot.slotCount > 0),
+		onOpenStatusPanel: (slot, chip) => openSmartPanel("status", slot, chip),
+		onOpenFillMenu: (slot, chip) => openSmartPanel("fill", slot, chip),
+		onBubbleContextMenu: (event, slot, chip) => {
+			const rect = chip.getBoundingClientRect();
+			setSmartPanel({ kind: "menu", slotId: slot.id, anchor: { left: rect.left, bottom: rect.bottom }, x: event.clientX, y: event.clientY });
+		},
+		onChipHover: handleChipHover,
+		onWorkspaceHighlight: highlightWorkspace,
+	});
+
 	const buildSessionInput = useCallback((): CreateSessionInput | { __error: string } => {
 		if (simpleMode || wsMode === "temp") return { newWorkspace: { isTemp: true } };
 		if (wsMode === "new") {
@@ -498,7 +621,11 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 	}, [onOpenPresetPanels, t]);
 
 	const handleSend = useCallback(() => {
-		const rawValue = inputRef.current?.value ?? draftValue;
+		const engine = engineRef.current;
+		const outgoing = engine ? engine.buildOutgoing() : null;
+		// Smart input active → the visible text already has tokens restored to
+		// their plain words; word indices were computed against exactly this text.
+		const rawValue = outgoing ? outgoing.visibleText : inputRef.current?.value ?? draftValue;
 		const input = [rawValue.trim(), ...pasteBlocks.map((block) => block.text.trim())].filter(Boolean).join("\n\n");
 		if ((!input && uploads.length === 0 && inlineImages.length === 0) || chat.isSending || isUploading) return;
 		shouldStickToBottomRef.current = true;
@@ -532,33 +659,92 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 				}
 
 				const targetWorkspaceId = workspaceStore.activeWorkspaceId ?? (isWelcome ? undefined : uploadWorkspaceId ?? undefined);
-				if (pendingUploads.length > 0 && targetWorkspaceId === undefined) throw new Error(t("chat.uploadHint"));
+				const toUpload = pendingUploads.filter((item) => item.source === "local" && item.status !== "failed" && item.file);
+				const enginePending = outgoing?.pendingFiles ?? [];
+				if ((toUpload.length > 0 || enginePending.length > 0) && targetWorkspaceId === undefined) throw new Error(t("chat.uploadHint"));
 
-				let uploadedFiles: Array<{ fileName: string; path: string }> = [];
-				if (pendingUploads.length > 0) {
-					const uploadItems = await Promise.all(pendingUploads.map(async ({ path, file }) => ({
-						path,
-						dataBase64: arrayBufferToBase64(await file.arrayBuffer()),
-					})));
-					const result = await uploadWorkspaceFiles(uploadItems, targetWorkspaceId);
-					uploadedFiles = (result.uploaded ?? []).map((node) => ({ fileName: node.name, path: node.path }));
+				// Local files upload one-by-one with real byte progress; failures
+				// stay in the attachment row as retryable instead of blocking the
+				// message. Workspace files are already on the server — no upload.
+				const loose: AttachmentRef[] = [];
+				const failedNames: string[] = [];
+				for (const item of pendingUploads) {
+					if (item.source === "workspace") {
+						loose.push({ path: item.path, kind: kindFromName(item.path), source: "workspace" });
+						continue;
+					}
+					if (!item.file || item.status === "failed") {
+						if (item.status === "failed") failedNames.push(item.fileName);
+						continue;
+					}
+					const key = item.path;
+					const patch = (patchItem: Partial<PendingUpload>) => setUploads((current) =>
+						current.map((entry) => entry.path === key && entry.source === "local" ? { ...entry, ...patchItem } : entry));
+					patch({ status: "uploading", pct: 0 });
+					try {
+						const dataBase64 = arrayBufferToBase64(await item.file.arrayBuffer());
+						const node = await uploadWorkspaceFileWithProgress(
+							{ path: item.path, dataBase64 },
+							targetWorkspaceId,
+							(loaded, total) => patch({ pct: total > 0 ? Math.min(100, (loaded / total) * 100) : 0 }),
+						);
+						loose.push({ path: node.path, kind: kindFromName(node.path), source: "upload" });
+						patch({ status: "ready", pct: 100, path: node.path });
+					} catch {
+						patch({ status: "failed", pct: 0 });
+						failedNames.push(item.fileName);
+					}
+				}
+
+				// Local files bound to keyword bubbles upload through the same
+				// per-file pipeline; successes fold back into their bindings,
+				// failures stay retryable and skip this message.
+				const uploadedForBindings: Array<{ word: string; wordIndex: number; uid: number; path: string }> = [];
+				let engineSkipped = 0;
+				if (engine && outgoing) {
+					for (const pending of outgoing.pendingFiles) {
+						const uid = pending.file.uid;
+						engine.setUploadProgress(uid, 0);
+						try {
+							const dataBase64 = arrayBufferToBase64(await pending.file.file.arrayBuffer());
+							const node = await uploadWorkspaceFileWithProgress(
+								{ path: pending.file.path, dataBase64 },
+								targetWorkspaceId,
+								(loaded, total) => engine.setUploadProgress(uid, total > 0 ? Math.min(100, (loaded / total) * 100) : 0),
+							);
+							engine.completeUpload(uid, node.path);
+							uploadedForBindings.push({ word: pending.word, wordIndex: pending.wordIndex, uid, path: node.path });
+						} catch {
+							engine.failUpload(uid);
+							engineSkipped++;
+						}
+					}
+				}
+
+				if (loose.length > 0 || pendingUploads.some((item) => item.source === "workspace") || uploadedForBindings.length > 0) {
 					appStore.setRightPanelTab("preview");
 					if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
 					if (workspaceStore.activeWorkspaceId !== targetWorkspaceId) await workspaceStore.setActiveWorkspace(targetWorkspaceId ?? null);
 					else await workspaceStore.loadTree();
 				}
 
-				const uploadNote = uploadedFiles.length > 0
-					? `\n\n${t("chat.uploadedToWorkspace")}\n${uploadedFiles.map((file) => `- ${file.fileName}: ${file.path}`).join("\n")}`
-					: "";
-				const messageContent = `${input}${uploadNote}` || (pendingImages.length > 0 ? t("chat.describeImage") : "");
+				const messageContent = input || (pendingImages.length > 0 ? t("chat.describeImage") : "");
 				const imagesToSend = pendingImages.length > 0 ? pendingImages.map(({ data, mimeType }) => ({ data, mimeType })) : undefined;
+				const bindings = engine && outgoing
+					? engine.finalizeBindings(outgoing.readyBindings, uploadedForBindings)
+					: [];
+				const attachments = bindings.length > 0 || loose.length > 0 ? { bindings, loose } : undefined;
 
 				resetComposer();
-				setUploads([]);
+				engine?.postSendCleanup();
+				setUploads((current) => current.filter((entry) => entry.status === "failed"));
 				setInlineImages([]);
 				setWsError("");
-				void chatStore.send(messageContent, imagesToSend, targetSessionId);
+				const skippedTotal = failedNames.length + engineSkipped;
+				if (skippedTotal > 0) {
+					showSmartToast(t("chat.smartInput.uploadSkippedCount", "有 {{count}} 个文件未上传成功，未随消息发送，已回到附件栏可重试", { count: skippedTotal }), true);
+				}
+				void chatStore.send(messageContent, imagesToSend, targetSessionId, attachments);
 			} catch (error) {
 				setWsError(error instanceof Error ? error.message : t("chat.errCreateSession"));
 			} finally {
@@ -575,6 +761,7 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 		pasteBlocks,
 		resizeInput,
 		sessions.currentSessionId,
+		showSmartToast,
 		simpleMode,
 		t,
 		uploadWorkspaceId,
@@ -643,18 +830,33 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 	const removeInlineImage = useCallback((index: number) => {
 		setInlineImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
 	}, []);
+	const addLocalFiles = useCallback((files: File[]) => {
+		if (files.length === 0) return;
+		setWsError("");
+		setUploads((current) => [...current, ...files.map(localPendingUpload)]);
+	}, []);
+
 	const handleFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(event.target.files ?? []);
 		if (files.length === 0) return;
-		setWsError("");
-		const items = files.map((file) => ({
-			fileName: file.name,
-			path: file.name.replace(/[\\/?%*:|"<>]/g, "_").trim() || `upload-${Date.now()}`,
-			file,
-		}));
-		setUploads((current) => [...current, ...items]);
+		addLocalFiles(files);
 		event.target.value = "";
+	}, [addLocalFiles]);
+
+	const pickWorkspaceFile = useCallback((path: string) => {
+		setWsError("");
+		setUploads((current) =>
+			current.some((item) => item.source === "workspace" && item.path === path)
+				? current
+				: [...current, workspacePendingUpload(path)],
+		);
 	}, []);
+
+	const retryUpload = useCallback((index: number) => {
+		setUploads((current) => current.map((item, currentIndex) =>
+			currentIndex === index && item.status === "failed" ? { ...item, status: "ready", pct: 0 } : item));
+	}, []);
+
 	const removeUpload = useCallback((index: number) => {
 		setUploads((current) => current.filter((_, currentIndex) => currentIndex !== index));
 	}, []);
@@ -672,6 +874,11 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 			modelOptions={modelOptions}
 			currentModel={currentModel}
 			modelPickerOpen={modelPickerOpen}
+			attachMenuOpen={attachMenuOpen}
+			workspaceFiles={workspaceFiles}
+			smartInputEnabled={smartInputEnabled}
+			mirrorRef={mirrorRef}
+			hitRef={hitRef}
 			chatIsSending={chat.isSending}
 			canReconnect={chat.canReconnect}
 			lastUserPrompt={chat.lastUserPrompt}
@@ -692,6 +899,10 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 			onCloseModelPicker={closeModelPicker}
 			onModelSelect={handleModelSelect}
 			onOpenModelSettings={openModelSettings}
+			onToggleAttachMenu={() => setAttachMenuOpen((open) => !open)}
+			onCloseAttachMenu={() => setAttachMenuOpen(false)}
+			onPickWorkspaceFile={pickWorkspaceFile}
+			onDropFiles={addLocalFiles}
 			onSend={handleSend}
 			onStop={handleStop}
 			onReconnect={handleReconnect}
@@ -719,12 +930,43 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 		);
 	};
 
-	const uploadChips = <ChatUploadChips uploads={uploads} onRemove={removeUpload} />;
+	const uploadChips = (
+		<ChatUploadChips
+			uploads={uploads}
+			onRemove={removeUpload}
+			onRetry={retryUpload}
+			onInsertAsBubble={smartInputEnabled && smartSettings?.allowRightClick !== false
+				? (path) => {
+					const item = takeAttachment(path);
+					if (item) engineRef.current?.insertAttachmentAsBubble(item);
+				}
+				: undefined}
+		/>
+	);
 	const questionHint = chat.pendingQuestion ? <QuestionHint scrollRef={scrollRef} /> : null;
 	const busyBlocker = <BusyBlocker busyBlocker={sessions.busyBlocker} />;
+	const smartToastNode = smartToast && typeof document !== "undefined" ? createPortal(
+		<div className={`inno-smart-toast ${smartToast.error ? "is-error" : ""}`} role="status">{smartToast.message}</div>,
+		document.body,
+	) : null;
+	const smartOverlayNode = smartInputEnabled ? (
+		<SmartInputOverlay
+			engine={engineRef.current}
+			panel={smartPanel}
+			onClose={() => setSmartPanel(null)}
+			onOpenPanel={(next) => setSmartPanel(next)}
+			workspaceFiles={workspaceFiles}
+			attachments={uploads}
+			takeAttachment={takeAttachment}
+			onWorkspaceHighlight={highlightWorkspace}
+		/>
+	) : null;
 
 	if (isWelcome) {
 		return (
+			<>
+			{smartToastNode}
+			{smartOverlayNode}
 			<ChatWelcome
 				welcomeLayoutRef={welcomeLayoutRef}
 				simpleMode={simpleMode}
@@ -749,10 +991,14 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 				onPresetQueryChange={setPresetQuery}
 				wsError={wsError}
 			/>
+			</>
 		);
 	}
 
 	return (
+		<>
+		{smartToastNode}
+		{smartOverlayNode}
 		<ChatConversation
 			chat={chat}
 			scrollRef={scrollRef}
@@ -768,5 +1014,6 @@ export function ChatCenter({ onOpenPresetPanels }: ChatCenterProps) {
 			workspaceContext={renderWorkspaceContext("session")}
 			wsError={wsError}
 		/>
+		</>
 	);
 }

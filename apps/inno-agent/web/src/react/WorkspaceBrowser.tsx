@@ -1,7 +1,7 @@
 import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Tree, type NodeRendererProps, type TreeApi, type CreateHandler, type RenameHandler, type DeleteHandler, type MoveHandler } from "react-arborist";
-import { RefreshCw, FileText, FileType, Globe, File, FolderOpen, Folder, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Sparkles, Download, FileCode2, Presentation, FileSpreadsheet, Copy, Check, ListChecks, Trash2 } from "lucide-react";
+import { RefreshCw, FileText, FileType, Globe, File, FolderOpen, Folder, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Sparkles, Download, FileCode2, Presentation, FileSpreadsheet, Copy, Check, ListChecks, Trash2, GripVertical } from "lucide-react";
 import { workspaceStore, type StreamingWorkspacePreview } from "../stores/workspace-store.js";
 import { workspaceFileUrl, workspaceFolderZipUrl, triggerDownload } from "../api/workspace.js";
 import { workspacesStore } from "../stores/workspaces-store.js";
@@ -618,6 +618,7 @@ const WorkspaceMultiSelectContext = createContext<WorkspaceMultiSelectState>({
 });
 
 function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<ArboristNode> & { onPreviewFile?: PreviewFileHandler }) {
+	const { t } = useTranslation();
 	const isDir = !node.isLeaf;
 	const multiSelect = useContext(WorkspaceMultiSelectContext);
 	const selected = multiSelect.enabled ? multiSelect.selectedIds.has(node.data.path) : node.isSelected;
@@ -626,6 +627,7 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 		<div
 			ref={dragHandle}
 			style={style}
+			data-ws-path={node.data.path}
 			className={`group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer select-none ${
 				selected
 					? "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]"
@@ -689,6 +691,27 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 			<span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--inno-text-subtle)]">
 				{nodeIcon(node.data.name, isDir, node.isOpen)}
 			</span>
+			{node.isLeaf && !node.isEditing ? (
+				<span
+					className="inno-smart-ws-grip"
+					draggable
+					title={t("chat.smartInput.dragToBind", "拖到输入框气泡绑定")}
+					onDragStart={(event) => {
+						event.stopPropagation();
+						const item = { name: node.data.name, path: node.data.path, source: "workspace" as const };
+						event.dataTransfer.setData("application/x-inno-file", JSON.stringify(item));
+						event.dataTransfer.setData("text/plain", `ws:${node.data.path}`);
+						event.dataTransfer.effectAllowed = "copy";
+						window.dispatchEvent(new CustomEvent("inno-smart-dragstart", { detail: item }));
+					}}
+					onDragEnd={(event) => {
+						event.stopPropagation();
+						window.dispatchEvent(new CustomEvent("inno-smart-dragend"));
+					}}
+				>
+					<GripVertical size={12} />
+				</span>
+			) : null}
 			{node.isEditing ? (
 				<input
 					autoFocus
@@ -849,6 +872,27 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
+	}, []);
+
+	// Smart input linkage: highlight (and scroll to) tree rows whose paths the
+	// composer panels are hovering.
+	useEffect(() => {
+		const onHighlight = (event: Event) => {
+			const paths = (event as CustomEvent<string[] | null>).detail;
+			const root = treeContainerRef.current ?? rootRef.current;
+			if (!root) return;
+			const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-ws-path]"));
+			let first: HTMLElement | null = null;
+			const active = Array.isArray(paths) ? paths : [];
+			for (const row of rows) {
+				const on = active.includes(row.dataset.wsPath ?? "");
+				row.classList.toggle("inno-smart-ws-hl", on);
+				if (on && !first) first = row;
+			}
+			if (first) first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		};
+		window.addEventListener("inno-smart-highlight", onHighlight);
+		return () => window.removeEventListener("inno-smart-highlight", onHighlight);
 	}, []);
 
 	useEffect(() => {

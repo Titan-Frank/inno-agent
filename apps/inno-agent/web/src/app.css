@@ -1510,3 +1510,892 @@ inno-workspace-panel textarea {
 	backface-visibility: hidden;
 	transform: rotateY(180deg);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Smart input (便捷输入) — keyword bubbles + structured file bindings.
+   Ported from prototypes/smart-input-bubble.html (v76) and re-skinned onto
+   --inno-* tokens. Fixed type-color hues blend into each theme via
+   color-mix; no dark-theme hardcoding.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.inno-smart {
+	/* Per-kind accent hues kept from the prototype palette. */
+	--smart-type-pdf: #ef4444;
+	--smart-type-doc: #3b82f6;
+	--smart-type-xls: #22c55e;
+	--smart-type-ppt: #f97316;
+	--smart-type-image: #a855f7;
+	--smart-type-file: #8b92a5;
+	--smart-kw: #dc2626;
+	--smart-kw-strong: #b91c1c;
+}
+
+/* ── Type dot (shared by chips, pills, panels, settings previews) ── */
+.inno-smart-type-dot {
+	flex-shrink: 0;
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 9999px;
+}
+
+/* ── Sent message: inline binding bubbles + ref-chips ── */
+.inno-smart-ref-inline {
+	display: inline;
+	white-space: normal;
+}
+.inno-smart-ref-word {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	vertical-align: baseline;
+	padding: 0 6px;
+	margin: 0 1px;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 82%, var(--inno-surface));
+	font-weight: 600;
+	font-size: 11.5px;
+	line-height: 18px;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out), border-color var(--inno-dur-fast) var(--inno-ease-out);
+	cursor: default;
+}
+.inno-smart-ref-inline:hover .inno-smart-ref-word {
+	background: color-mix(in srgb, var(--inno-accent-soft) 100%, var(--inno-surface));
+	border-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.inno-smart-ref-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	vertical-align: baseline;
+	max-width: 180px;
+	padding: 1px 8px;
+	margin: 0 1px;
+	border-radius: 9999px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface-muted);
+	font-size: 11.5px;
+	line-height: 18px;
+	color: var(--inno-text);
+	text-decoration: none;
+	transition: border-color var(--inno-dur-fast) var(--inno-ease-out), background var(--inno-dur-fast) var(--inno-ease-out);
+}
+a.inno-smart-ref-chip:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-surface);
+}
+
+/* ── Sent message: structured payload details block ── */
+.inno-smart-details {
+	border: 1px solid var(--inno-border);
+	border-radius: 8px;
+	background: var(--inno-surface-muted);
+	padding: 4px 10px;
+	font-size: 11px;
+	color: var(--inno-text-muted);
+}
+.inno-smart-details summary {
+	cursor: pointer;
+	user-select: none;
+	font-weight: 500;
+	color: var(--inno-text-muted);
+}
+.inno-smart-details pre {
+	margin: 6px 0 2px;
+	max-height: 180px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+	font-size: 10.5px;
+	line-height: 1.5;
+}
+
+/* ── Floating panels (read-only binding panel + composer status/fill menus) ── */
+.inno-smart-panel {
+	position: fixed;
+	z-index: 60;
+	border: 1px solid var(--inno-border);
+	border-radius: 10px;
+	background: var(--inno-surface-raised);
+	box-shadow: var(--inno-shadow-soft), 0 0 0 1px color-mix(in srgb, var(--inno-text) 3%, transparent);
+	padding: 8px;
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-panel.is-closing {
+	opacity: 0;
+	transform: translateY(4px);
+	transition: opacity 130ms var(--inno-ease-out), transform 130ms var(--inno-ease-out);
+}
+.inno-smart-panel-title {
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--inno-text);
+	padding: 2px 4px 6px;
+}
+.inno-smart-panel-list {
+	display: grid;
+	gap: 2px;
+	max-height: 212px;
+	overflow-y: auto;
+}
+.inno-smart-panel-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 4px 6px;
+	border-radius: 6px;
+	font-size: 11.5px;
+	background: var(--inno-surface-muted);
+	color: var(--inno-text);
+}
+.inno-smart-panel-row:hover {
+	background: color-mix(in srgb, var(--inno-accent-soft) 60%, var(--inno-surface-muted));
+}
+.inno-smart-panel-name {
+	min-width: 0;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-smart-src-tag {
+	flex-shrink: 0;
+	font-size: 10px;
+	padding: 0 4px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--inno-text-subtle) 12%, transparent);
+	color: var(--inno-text-muted);
+}
+.inno-smart-status-done {
+	flex-shrink: 0;
+	color: var(--inno-success);
+	font-size: 11px;
+	font-weight: 700;
+}
+.inno-smart-panel-caption {
+	margin-top: 6px;
+	padding: 0 4px;
+	font-size: 10.5px;
+	color: var(--inno-text-subtle);
+}
+
+@keyframes inno-smart-panel-in {
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Composer attachment menu (📎 workspace + local files) ── */
+.inno-smart-attach-menu {
+	max-height: 264px;
+	overflow-y: auto;
+}
+.inno-smart-attach-menu-caption {
+	padding: 6px 10px 4px;
+	font-size: 10.5px;
+	font-weight: 600;
+	color: var(--inno-text-subtle);
+	text-transform: none;
+	letter-spacing: 0.02em;
+}
+
+/* ── OS-file drag-over affordance on the composer ── */
+.inno-composer.is-osfile-over {
+	border-color: color-mix(in srgb, var(--inno-success) 45%, transparent);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--inno-success) 12%, transparent);
+}
+
+/* ── Upload progress ring (conic-gradient + radial mask) ── */
+.inno-smart-progress-ring {
+	--p: 0;
+	flex-shrink: 0;
+	width: 12px;
+	height: 12px;
+	border-radius: 9999px;
+	background:
+		radial-gradient(closest-side, var(--inno-surface-muted) 74%, transparent 75% 100%),
+		conic-gradient(var(--inno-accent) calc(var(--p) * 1%), color-mix(in srgb, var(--inno-border-strong) 60%, transparent) 0);
+}
+
+/* ── Retry affordance for failed uploads ── */
+.inno-smart-retry-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	color: var(--inno-danger);
+	transition: background var(--inno-dur-fast) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-retry-btn:hover {
+	background: var(--inno-danger-bg);
+}
+.inno-smart-retry-btn:active {
+	transform: scale(0.94);
+}
+
+/* ── Three-layer composer (mirror / textarea / hit) ── */
+.inno-smart-wrap {
+	position: relative;
+}
+.inno-smart-wrap.is-active {
+	--inno-smart-font-size: 16px;
+	--inno-smart-line-height: 24px;
+}
+.inno-smart-wrap .inno-composer-textarea {
+	position: relative;
+	z-index: 2;
+	background: transparent;
+}
+.inno-smart-wrap.is-active textarea.inno-composer-textarea {
+	color: transparent;
+	caret-color: var(--inno-accent);
+	font-size: var(--inno-smart-font-size);
+	line-height: var(--inno-smart-line-height);
+}
+.inno-smart-mirror {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	pointer-events: none;
+	overflow: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	word-break: break-word;
+	/* Must mirror .inno-composer-textarea metrics exactly. */
+	padding: 8px 8px;
+	font-size: var(--inno-smart-font-size, 14px);
+	line-height: var(--inno-smart-line-height, 20px);
+	font-family: inherit;
+	font-weight: inherit;
+	letter-spacing: inherit;
+}
+/* Slot tokens reserve the textarea width for the overlaid bubble, but must
+   not be painted as raw token text beneath it. */
+.inno-smart-slot-tok {
+	display: inline-block;
+	vertical-align: baseline;
+	white-space: pre;
+	color: transparent;
+}
+.inno-smart-hit {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	pointer-events: none;
+}
+.inno-smart-hit > * {
+	pointer-events: auto;
+}
+
+/* Measurement probes — never visible, sized like their real counterparts. */
+.inno-smart-ta-probe {
+	position: absolute;
+	visibility: hidden;
+	white-space: pre;
+	font-size: var(--inno-smart-font-size, 14px);
+	line-height: var(--inno-smart-line-height, 20px);
+	font-family: inherit;
+	font-weight: inherit;
+	letter-spacing: inherit;
+}
+.inno-smart-chip-probe {
+	position: absolute;
+	visibility: hidden;
+	white-space: pre;
+	font-size: 11.5px;
+	font-weight: 600;
+	line-height: 18px;
+	font-family: inherit;
+	padding: 0 6px;
+	border: 1px solid transparent;
+}
+
+/* ── Keyword underline ── */
+.inno-smart-kw {
+	text-decoration: underline dashed var(--smart-kw, var(--inno-danger));
+	text-decoration-thickness: 2px;
+	text-underline-offset: 3px;
+	transition: color var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-kw.is-hi {
+	text-decoration-style: solid;
+	text-decoration-color: var(--smart-kw-strong, var(--inno-danger));
+	font-weight: 600;
+}
+.inno-smart-kw.is-hot {
+	color: var(--smart-kw, var(--inno-danger));
+}
+.inno-smart-kw-hit {
+	position: absolute;
+	min-width: 0;
+	border-radius: 9999px;
+	background: transparent;
+	border: 0;
+	padding: 0;
+	cursor: pointer;
+	/* invisible until hover */
+	transition: background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-kw-hit:hover {
+	background: color-mix(in srgb, var(--inno-danger) 8%, transparent);
+}
+
+/* ── In-text bubble chip ── */
+.inno-smart-chip {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 36px;
+	height: 20px;
+	border-radius: 9999px;
+	font-size: 11.5px;
+	font-weight: 600;
+	line-height: 18px;
+	cursor: pointer;
+	user-select: none;
+	border: 1px solid color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 45%, transparent);
+	background: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 10%, var(--inno-surface));
+	color: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 72%, var(--inno-text));
+	box-shadow: 0 1px 2px color-mix(in srgb, var(--inno-text) 8%, transparent);
+	transition: transform var(--inno-dur-ui) var(--inno-ease-out), box-shadow var(--inno-dur-ui) var(--inno-ease-out), background var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-chip-word {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-smart-chip.is-empty {
+	border-style: dashed;
+	color: var(--inno-text-muted);
+}
+.inno-smart-chip.is-filled {
+	border-style: solid;
+}
+.inno-smart-chip.is-spawn {
+	animation: inno-smart-materialize 240ms var(--inno-ease-out) backwards;
+}
+.inno-smart-chip.is-drag-match {
+	animation: inno-smart-breathe 1.2s ease-in-out infinite;
+}
+.inno-smart-chip.is-drop-ok {
+	transform: scale(1.12);
+	box-shadow: 0 4px 14px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 38%, transparent);
+	border-color: var(--smart-bc, var(--inno-accent));
+}
+.inno-smart-chip.is-drop-bad {
+	animation: inno-smart-shake 500ms var(--inno-ease-out);
+	border-color: var(--inno-danger);
+	color: var(--inno-danger);
+}
+.inno-smart-chip.is-bubble-drag {
+	opacity: 0.35;
+}
+.inno-smart-chip.is-drag-ghost {
+	position: fixed;
+	z-index: 100;
+	pointer-events: none;
+	opacity: 0.9;
+	left: 0;
+	top: 0;
+}
+
+.inno-smart-badge {
+	position: absolute;
+	top: -7px;
+	right: -7px;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 3px;
+	border-radius: 9999px;
+	background: var(--smart-bc, var(--inno-accent));
+	color: #fff;
+	font-size: 9.5px;
+	font-weight: 700;
+	line-height: 14px;
+	text-align: center;
+	box-shadow: 0 0 0 2px var(--inno-surface);
+}
+.inno-smart-badge.is-pop {
+	animation: inno-smart-pop 260ms var(--inno-ease-out);
+}
+.inno-smart-chip-x {
+	position: absolute;
+	top: -7px;
+	left: -7px;
+	width: 14px;
+	height: 14px;
+	border-radius: 9999px;
+	border: 0;
+	padding: 0;
+	background: var(--inno-surface);
+	border: 1px solid var(--inno-border);
+	color: var(--inno-text-muted);
+	font-size: 10px;
+	line-height: 12px;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), color var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-chip:hover .inno-smart-chip-x {
+	opacity: 1;
+}
+.inno-smart-chip-x:hover {
+	color: var(--inno-danger);
+	border-color: var(--inno-danger-border);
+}
+
+/* Bigger hit zones while a file drag is live (prototype parity). */
+body.inno-smart-dragging .inno-smart-chip::before {
+	content: "";
+	position: absolute;
+	inset: -12px -18px;
+}
+body.inno-smart-dragging .inno-smart-kw-hit::before {
+	content: "";
+	position: absolute;
+	inset: -8px -10px;
+}
+
+/* ── Dwell progress follower (cursor ring while hovering a keyword 1s) ── */
+.inno-smart-dwell-follower {
+	position: fixed;
+	z-index: 90;
+	width: 84px;
+	height: 4px;
+	border-radius: 9999px;
+	background: color-mix(in srgb, var(--inno-text-subtle) 18%, transparent);
+	overflow: hidden;
+	pointer-events: none;
+}
+.inno-smart-dwell-follower i {
+	display: block;
+	height: 100%;
+	width: 0;
+	border-radius: 9999px;
+	background: var(--smart-ct, var(--inno-accent));
+}
+
+@keyframes inno-smart-materialize {
+	from { transform: scale(0.6); opacity: 0; }
+	to { transform: scale(1); opacity: 1; }
+}
+@keyframes inno-smart-breathe {
+	0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 30%, transparent); }
+	50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 14%, transparent); }
+}
+@keyframes inno-smart-shake {
+	0%, 100% { transform: translateX(0); }
+	20%, 60% { transform: translateX(-3px); }
+	40%, 80% { transform: translateX(3px); }
+}
+@keyframes inno-smart-pop {
+	0% { transform: scale(0.5); }
+	60% { transform: scale(1.25); }
+	100% { transform: scale(1); }
+}
+
+/* ── Smart input toast (auto-dismissing, bottom-center) ── */
+.inno-smart-toast {
+	position: fixed;
+	left: 50%;
+	bottom: 108px;
+	transform: translateX(-50%);
+	z-index: 70;
+	max-width: min(420px, calc(100vw - 48px));
+	padding: 6px 14px;
+	border-radius: 9999px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface-raised);
+	color: var(--inno-text);
+	font-size: 12px;
+	box-shadow: var(--inno-shadow-soft);
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+	pointer-events: none;
+}
+.inno-smart-toast.is-error {
+	border-color: var(--inno-danger-border);
+	background: color-mix(in srgb, var(--inno-danger-bg) 60%, var(--inno-surface-raised));
+	color: var(--inno-danger);
+}
+
+/* ── Fill menu / menu extras ── */
+.inno-smart-panel--fill {
+	padding: 8px;
+}
+.inno-smart-fill-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 2px;
+}
+.inno-smart-fill-head .inno-smart-panel-title {
+	padding: 2px 0 6px;
+}
+.inno-smart-fill-plus {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	color: var(--inno-text-muted);
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-fill-plus:hover,
+.inno-smart-fill-plus.is-on {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-panel-grid {
+	display: grid;
+	gap: 2px;
+}
+.inno-smart-panel-pick {
+	cursor: pointer;
+	border: 1px solid transparent;
+	text-align: left;
+}
+.inno-smart-panel-pick.is-on {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+}
+.inno-smart-panel-empty {
+	padding: 10px 12px;
+	font-size: 11.5px;
+	color: var(--inno-text-subtle);
+}
+.inno-smart-fill-foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+	margin-top: 8px;
+	padding: 0 2px;
+}
+.inno-smart-fill-btn {
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	padding: 3px 10px;
+	font-size: 11.5px;
+	color: var(--inno-text);
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-fill-btn:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--inno-accent) 40%, transparent);
+}
+.inno-smart-fill-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.inno-smart-fill-btn.is-primary {
+	background: var(--inno-accent);
+	border-color: transparent;
+	color: var(--inno-surface);
+}
+.inno-smart-fill-btn.is-primary:hover:not(:disabled) {
+	opacity: 0.9;
+}
+.inno-smart-panel-remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	border: 0;
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-panel-remove:hover {
+	color: var(--inno-danger);
+	background: var(--inno-danger-bg);
+}
+.inno-smart-status-pending {
+	flex-shrink: 0;
+	color: var(--inno-text-subtle);
+	font-size: 11px;
+}
+
+/* ── Context menu ── */
+.inno-smart-menu {
+	position: fixed;
+	z-index: 60;
+	min-width: 180px;
+	padding: 4px;
+	border: 1px solid var(--inno-border);
+	border-radius: 10px;
+	background: var(--inno-surface-raised);
+	box-shadow: var(--inno-shadow-soft);
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-menu-sep {
+	height: 1px;
+	margin: 4px 6px;
+	background: var(--inno-border);
+	opacity: 0.6;
+}
+.inno-smart-menu-item {
+	display: block;
+	width: 100%;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	padding: 6px 10px;
+	font-size: 12px;
+	text-align: left;
+	color: var(--inno-text);
+	cursor: pointer;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-menu-item:hover {
+	background: var(--inno-accent-soft);
+}
+.inno-smart-menu-item.is-danger {
+	color: var(--inno-danger);
+}
+.inno-smart-menu-item.is-danger:hover {
+	background: var(--inno-danger-bg);
+}
+
+/* ── Workspace drag-bind grip + smart-highlight row state ── */
+.inno-smart-ws-grip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
+	border-radius: 4px;
+	color: var(--inno-text-subtle);
+	opacity: 0;
+	cursor: grab;
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.group:hover .inno-smart-ws-grip {
+	opacity: 0.9;
+}
+.inno-smart-ws-grip:hover {
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-ws-hl {
+	background: color-mix(in srgb, var(--inno-accent) 12%, transparent) !important;
+	outline: 1px solid color-mix(in srgb, var(--inno-accent) 35%, transparent);
+	outline-offset: -1px;
+}
+
+/* ── Settings: smart input rule manager ── */
+.inno-smart-set-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 8px;
+	border: 1px solid transparent;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-row:hover {
+	background: var(--inno-surface-muted);
+}
+.inno-smart-set-row.is-new {
+	border-color: color-mix(in srgb, var(--inno-accent) 35%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 45%, transparent);
+}
+.inno-smart-set-row.is-off .inno-smart-set-exts,
+.inno-smart-set-row.is-off {
+	opacity: 0.72;
+}
+.inno-smart-set-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 2px 10px;
+	min-width: 56px;
+	justify-content: center;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 78%, var(--inno-surface));
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 20px;
+	color: var(--inno-text);
+	cursor: text;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-pill:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+}
+.inno-smart-set-pill.is-off {
+	border-style: dashed;
+	color: var(--inno-text-muted);
+}
+.inno-smart-set-keyword-input {
+	width: 130px;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 55%, transparent);
+	background: var(--inno-surface);
+	padding: 2px 10px;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 20px;
+	color: var(--inno-text);
+	outline: none;
+	box-shadow: var(--inno-ring);
+}
+.inno-smart-set-keyword-input.is-primary {
+	box-shadow: none;
+	border-color: var(--inno-border);
+}
+.inno-smart-set-exts {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+	min-width: 0;
+	flex: 1;
+}
+.inno-smart-set-ext {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	border-radius: 6px;
+	background: var(--inno-surface-muted);
+	border: 1px solid transparent;
+	padding: 1px 4px 1px 6px;
+	font-size: 11px;
+	line-height: 16px;
+	color: var(--inno-text-muted);
+	font-variant-ligatures: none;
+}
+.inno-smart-set-ext:hover {
+	border-color: var(--inno-border);
+}
+.inno-smart-set-ext-x {
+	border: 0;
+	background: transparent;
+	padding: 0;
+	width: 12px;
+	height: 12px;
+	border-radius: 3px;
+	color: var(--inno-text-subtle);
+	font-size: 11px;
+	line-height: 12px;
+	cursor: pointer;
+	opacity: 0;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-ext:hover .inno-smart-set-ext-x,
+.inno-smart-set-row.is-new .inno-smart-set-ext-x {
+	opacity: 1;
+}
+.inno-smart-set-ext-x:hover {
+	color: var(--inno-danger);
+}
+.inno-smart-set-ext-add {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 6px;
+	border: 1px dashed var(--inno-border);
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-ext-add:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	border-style: solid;
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-set-ext-input {
+	width: 64px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 55%, transparent);
+	background: var(--inno-surface);
+	padding: 1px 6px;
+	font-size: 11px;
+	line-height: 16px;
+	outline: none;
+}
+.inno-smart-set-delete {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	border: 0;
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-delete:hover {
+	color: var(--inno-danger);
+	background: var(--inno-danger-bg);
+}
+.inno-smart-set-add {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	padding: 3px 10px;
+	font-size: 11.5px;
+	color: var(--inno-text-muted);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-add:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-set-add:active:not(:disabled),
+.inno-smart-set-action:active:not(:disabled) {
+	transform: scale(0.97);
+}
+.inno-smart-set-action {
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	padding: 2px 10px;
+	font-size: 11.5px;
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-action.is-ghost {
+	background: var(--inno-surface);
+	color: var(--inno-text-muted);
+}
+.inno-smart-set-action.is-primary {
+	background: var(--inno-accent);
+	border-color: transparent;
+	color: var(--inno-surface);
+}
+.inno-smart-set-action:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.inno-smart-set-error {
+	margin: 4px 2px 8px;
+	font-size: 11px;
+	color: var(--inno-danger);
+	animation: inno-smart-shake 400ms var(--inno-ease-out);
+}

@@ -1,9 +1,12 @@
-import { useMemo, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useMemo, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { motion } from "motion/react";
 import { Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ChatMessage, ChatToolRecord, PendingQuestion } from "../../types/chat.js";
+import type { AttachmentRef, ChatMessage, ChatToolRecord, PendingQuestion } from "../../types/chat.js";
+import { workspaceFileUrl } from "../../api/workspace.js";
+import { workspaceStore } from "../../stores/workspace-store.js";
 import { buildConversationTurns, ConversationMinimap } from "../ConversationMinimap.js";
+import { useStoreSnapshot } from "../hooks.js";
 import { Spinner } from "../ui/Spinner.js";
 import { QuestionDialog } from "../QuestionDialog.js";
 import { ErrorBlock, MessageBubble } from "./MessageBubble.js";
@@ -61,6 +64,11 @@ export function ChatConversation({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[chat.messages, chat.activeTools, chat.completedTools],
 	);
+	const activeWorkspaceId = useStoreSnapshot(workspaceStore, () => workspaceStore.activeWorkspaceId);
+	const resolveAttachmentUrl = useCallback(
+		(file: AttachmentRef) => workspaceFileUrl(file.path, activeWorkspaceId ?? undefined),
+		[activeWorkspaceId],
+	);
 
 	return (
 		<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
@@ -96,7 +104,7 @@ export function ChatConversation({
 								const turnIndex = turnIndexByStartMessage.get(index);
 								return (
 									<div key={`${message.timestamp}-${index}`} data-conversation-turn={turnIndex}>
-										<MessageBubble message={message} showChannel={multiChannel} />
+										<MessageBubble message={message} showChannel={multiChannel} resolveAttachmentUrl={resolveAttachmentUrl} />
 									</div>
 								);
 							});

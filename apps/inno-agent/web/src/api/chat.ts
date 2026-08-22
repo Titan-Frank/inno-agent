@@ -1,21 +1,39 @@
 import { apiFetch, streamSSE, streamSSEGet } from "./client.js";
-import type { QuestionnaireResult, StreamEventEnvelope, StreamSnapshot } from "../types/chat.js";
+import type { ChatAttachments, QuestionnaireResult, StreamEventEnvelope, StreamSnapshot } from "../types/chat.js";
 
 export interface InlineImage {
 	data: string;
 	mimeType: string;
 }
 
-export async function postChat(prompt: string, sessionId?: string | null, images?: InlineImage[]): Promise<string> {
+export async function postChat(prompt: string, sessionId?: string | null, images?: InlineImage[], attachments?: ChatAttachments): Promise<string> {
 	const res = await apiFetch<{ response: string }>("/api/chat", {
 		method: "POST",
-		body: JSON.stringify({ prompt, sessionId: sessionId ?? undefined, images: images?.length ? images : undefined }),
+		body: JSON.stringify({
+			prompt,
+			sessionId: sessionId ?? undefined,
+			images: images?.length ? images : undefined,
+			attachments: attachments && (attachments.bindings.length || attachments.loose.length) ? attachments : undefined,
+		}),
 	});
 	return res.response;
 }
 
-export function streamChat(prompt: string, sessionId: string, clientRequestId: string, signal?: AbortSignal, images?: InlineImage[]): AsyncGenerator<StreamEventEnvelope> {
-	return streamSSE<StreamEventEnvelope>("/api/chat/stream", { prompt, sessionId, clientRequestId, images: images?.length ? images : undefined }, signal);
+export function streamChat(
+	prompt: string,
+	sessionId: string,
+	clientRequestId: string,
+	signal?: AbortSignal,
+	images?: InlineImage[],
+	attachments?: ChatAttachments,
+): AsyncGenerator<StreamEventEnvelope> {
+	return streamSSE<StreamEventEnvelope>("/api/chat/stream", {
+		prompt,
+		sessionId,
+		clientRequestId,
+		images: images?.length ? images : undefined,
+		attachments: attachments && (attachments.bindings.length || attachments.loose.length) ? attachments : undefined,
+	}, signal);
 }
 
 /**

@@ -10,10 +10,54 @@ export interface PendingPasteBlock {
 	text: string;
 }
 
+/**
+ * A staged composer attachment. `local` items carry the OS File and upload at
+ * send time (with per-file progress); `workspace` items reference an existing
+ * workspace file and bind/attach instantly.
+ */
 export interface PendingUpload {
 	fileName: string;
+	/** Workspace-relative path: upload target for local files, existing path for workspace files. */
 	path: string;
-	file: File;
+	/** Present only for local files awaiting upload. */
+	file?: File;
+	source: "local" | "workspace";
+	/** Upload lifecycle for local files; workspace items stay "ready". */
+	status: "ready" | "uploading" | "failed";
+	/** 0-100 upload progress for local files. */
+	pct: number;
+}
+
+export function localPendingUpload(file: File): PendingUpload {
+	return {
+		fileName: file.name,
+		path: file.name.replace(/[\\/?%*:|"<>]/g, "_").trim() || `upload-${Date.now()}`,
+		file,
+		source: "local",
+		status: "ready",
+		pct: 0,
+	};
+}
+
+export function workspacePendingUpload(path: string): PendingUpload {
+	const name = path.split("/").pop() ?? path;
+	return { fileName: name, path, source: "workspace", status: "ready", pct: 100 };
+}
+
+/** Flatten a workspace tree into file rows (depth-first, stable order). */
+export function flattenWorkspaceFiles(
+	node: { type: string; children?: Array<{ name: string; path: string; type: string; children?: unknown[] }> },
+	out: Array<{ name: string; path: string }> = [],
+	limit = 60,
+): Array<{ name: string; path: string }> {
+	for (const child of node.children ?? []) {
+		if (out.length >= limit) return out;
+		if (child.type === "file") out.push({ name: child.name, path: child.path });
+		else if (child.type === "directory" && child.children) {
+			flattenWorkspaceFiles(child as never, out, limit);
+		}
+	}
+	return out;
 }
 
 export type PreparedInlineImage = InlineImage & { name: string; previewUrl: string };

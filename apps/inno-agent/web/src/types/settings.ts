@@ -109,6 +109,7 @@ export interface InnoSettings {
 	};
 	memory?: { l1Enabled: boolean; l2Enabled: boolean; l3Enabled: boolean };
 	simpleMode?: { enabled: boolean };
+	smartInput?: SmartInputSettings;
 	mcp?: { enabled: boolean };
 	ui?: { theme: string; closeBehavior: WindowCloseBehavior };
 }
@@ -134,4 +135,19 @@ export interface WebAccessSettingsPayload {
 	provider?: string;
 	/** Per-provider credential/URL updates; "****…" keeps existing, "" clears. */
 	values?: Record<string, string>;
+}
+
+/** One literal keyword → set of real file extensions (smart input bubbles). */
+export interface SmartInputRule {
+	id: string;
+	keyword: string;
+	extensions: string[];
+	enabled: boolean;
+}
+
+export interface SmartInputSettings {
+	enabled: boolean;
+	allowDrag: boolean;
+	allowRightClick: boolean;
+	rules: SmartInputRule[];
 }

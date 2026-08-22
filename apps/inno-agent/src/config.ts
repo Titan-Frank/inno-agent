@@ -65,6 +65,46 @@ export interface InnoSimpleModeConfig {
 }
 
 /**
+ * Smart Input (便捷输入). Global, opt-in (default OFF). When enabled, the web
+ * composer recognizes literal keywords (e.g. "pdf", "word") in the typed text
+ * and converts them into file-binding bubbles; files bound to a bubble are
+ * sent to the agent as structured attachments instead of relying on the model
+ * to guess which file a demonstrative ("这份") refers to.
+ *
+ * A rule matches by literal keyword only (no regex/segments). Each rule maps
+ * one keyword to a set of real file extensions; a bubble accepts exactly the
+ * files whose extension is in that set. Users manage rules in Settings →
+ * General (add / rename / edit extensions / toggle / delete).
+ */
+export interface InnoSmartInputRule {
+	id: string;
+	keyword: string;
+	extensions: string[];
+	enabled: boolean;
+}
+
+export interface InnoSmartInputConfig {
+	enabled: boolean;
+	allowDrag: boolean;
+	allowRightClick: boolean;
+	rules: InnoSmartInputRule[];
+}
+
+/** Default keyword rules — common document nouns mapped to real extensions. */
+export const DEFAULT_SMART_INPUT_RULES: InnoSmartInputRule[] = [
+	{ id: "smart-rule-pdf", keyword: "pdf", extensions: [".pdf"], enabled: true },
+	{ id: "smart-rule-word", keyword: "word", extensions: [".doc", ".docx"], enabled: true },
+	{ id: "smart-rule-excel", keyword: "excel", extensions: [".xls", ".xlsx"], enabled: true },
+	{ id: "smart-rule-ppt", keyword: "ppt", extensions: [".ppt", ".pptx"], enabled: true },
+	{
+		id: "smart-rule-image",
+		keyword: "图片",
+		extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"],
+		enabled: true,
+	},
+];
+
+/**
  * MCP (Model Context Protocol) support via the pi-mcp-adapter extension.
  * Master switch (default OFF, opt-in). Server definitions live in the standard
  * MCP config file `<configDir>/mcp.json` (managed through the web UI or edited
@@ -183,6 +223,7 @@ export interface InnoConfig {
 	subagents?: InnoSubagentsConfig;
 	memory?: InnoMemoryConfig;
 	simpleMode?: InnoSimpleModeConfig;
+	smartInput?: InnoSmartInputConfig;
 	mcp?: InnoMcpConfig;
 	ui?: InnoUiConfig;
 	scheduler?: InnoSchedulerConfig;
@@ -303,6 +344,53 @@ export function normalizeSimpleModeConfig(simpleMode: Partial<InnoSimpleModeConf
 	};
 }
 
+/** Normalize one extension: lowercase, strip whitespace, ensure a leading dot. */
+export function normalizeSmartInputExtension(raw: string): string | null {
+	const trimmed = raw.trim().toLowerCase();
+	if (!trimmed) return null;
+	const withDot = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+	// Must contain at least one letter beyond the dot to be a real extension.
+	if (!/^\.[a-z0-9][a-z0-9]*$/.test(withDot)) return null;
+	return withDot;
+}
+
+/**
+ * Normalize smart-input rules: trim keywords, drop empty/duplicate keywords
+ * (first occurrence wins), normalize/dedupe extensions (a rule whose extension
+ * list ends up empty keeps its normalized keyword but matches nothing), and
+ * backfill stable ids for rules saved without one.
+ */
+export function normalizeSmartInputConfig(
+	smartInput: Partial<InnoSmartInputConfig> | undefined,
+): InnoSmartInputConfig {
+	const seenKeywords = new Set<string>();
+	const seenIds = new Set<string>();
+	const rules: InnoSmartInputRule[] = [];
+	for (const rule of smartInput?.rules ?? []) {
+		const keyword = (rule.keyword ?? "").trim();
+		if (!keyword || seenKeywords.has(keyword)) continue;
+		const extensions: string[] = [];
+		for (const ext of rule.extensions ?? []) {
+			const normalized = normalizeSmartInputExtension(String(ext));
+			if (normalized && !extensions.includes(normalized)) extensions.push(normalized);
+		}
+		let id = typeof rule.id === "string" && rule.id.trim() ? rule.id.trim() : "";
+		if (!id || seenIds.has(id)) id = `smart-rule-${keyword}`;
+		if (seenIds.has(id)) id = `smart-rule-${keyword}-${rules.length}`;
+		seenKeywords.add(keyword);
+		seenIds.add(id);
+		rules.push({ id, keyword, extensions, enabled: rule.enabled !== false });
+	}
+	return {
+		enabled: smartInput?.enabled === true,
+		allowDrag: smartInput?.allowDrag !== false,
+		allowRightClick: smartInput?.allowRightClick !== false,
+		// Backfill defaults only when the rules array is absent (fresh config);
+		// a user who deleted every rule keeps the empty list.
+		rules: Array.isArray(smartInput?.rules) ? rules : DEFAULT_SMART_INPUT_RULES,
+	};
+}
+
 export function normalizeMcpConfig(mcp: Partial<InnoMcpConfig> | undefined): InnoMcpConfig {
 	// MCP defaults OFF; only an explicit `true` enables it.
 	return {
@@ -387,6 +475,7 @@ export function normalizeConfig(config: LegacyInnoConfig): InnoConfig {
 		subagents: config.subagents,
 		memory: normalizeMemoryConfig(config.memory),
 		simpleMode: normalizeSimpleModeConfig(config.simpleMode),
+		smartInput: normalizeSmartInputConfig(config.smartInput),
 		mcp: normalizeMcpConfig(config.mcp),
 		ui: normalizeUiConfig(config.ui),
 		scheduler: normalizeSchedulerConfig(config.scheduler),
