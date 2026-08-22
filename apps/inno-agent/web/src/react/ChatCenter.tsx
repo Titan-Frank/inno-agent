@@ -32,6 +32,7 @@ import { ChatConversation } from "./chat/ChatConversation.js";
 import { BusyBlocker, QuestionHint } from "./chat/ChatStatusBanners.js";
 import { ChatUploadChips } from "./chat/ChatUploadChips.js";
 import { ChatWelcome } from "./chat/ChatWelcome.js";
+import { SmartInputControl } from "./chat/SmartInputControl.js";
 import { WorkspaceContext } from "./chat/WorkspaceContext.js";
 import type { WorkspaceChoice } from "./WorkspaceSwitcher.js";
 import {
@@ -1035,6 +1036,16 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 			modelState={modelState}
 			modelOptions={modelOptions}
 			currentModel={currentModel}
+			smartInputControl={!isWelcome && !simpleMode ? (
+				<SmartInputControl
+					smartInputSettings={smartSettings}
+					onToggleSmartInput={toggleSmartInput}
+					onToggleSmartInputRule={toggleSmartInputRule}
+					smartInputSaving={smartInputState.isSavingSmartInput}
+					onOpenSmartInputSettings={openSmartInputSettings}
+					compact
+				/>
+			) : null}
 			modelPickerOpen={modelPickerOpen}
 			attachMenuOpen={attachMenuOpen}
 			workspaceFiles={workspaceFiles}

@@ -87,6 +87,7 @@ export function SettingsOverlay() {
 							>
 								{icon}
 								<span>{t(`settings.tabs.${id}`)}</span>
+								{id === "lab" ? <span className="inno-smart-beta">Beta</span> : null}
 							</button>
 						);
 					})}

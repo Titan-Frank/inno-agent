@@ -29,6 +29,7 @@ export interface ChatComposerProps {
 	modelState: ChatComposerModelState;
 	modelOptions: InnoModelInfo[];
 	currentModel?: InnoModelInfo;
+	smartInputControl?: ReactNode;
 	modelPickerOpen: boolean;
 	attachMenuOpen: boolean;
 	workspaceFiles: Array<{ name: string; path: string }>;
@@ -77,6 +78,7 @@ export function ChatComposer({
 	modelState,
 	modelOptions,
 	currentModel,
+	smartInputControl,
 	modelPickerOpen,
 	attachMenuOpen,
 	workspaceFiles,
@@ -356,7 +358,7 @@ export function ChatComposer({
 	);
 
 	const renderModelPicker = () => (
-		<div ref={modelPickerRef} className="inno-composer-model-picker relative ml-auto shrink-0">
+		<div ref={modelPickerRef} className="inno-composer-model-picker relative shrink-0">
 			<button
 				type="button"
 				className="inno-composer-model-trigger flex h-8 shrink-0 items-center gap-1 px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
@@ -451,7 +453,10 @@ export function ChatComposer({
 						<Image size={16} />
 					</button>
 				</div>
-				{renderModelPicker()}
+				<div className="ml-auto flex shrink-0 items-center gap-1">
+					{smartInputControl}
+					{renderModelPicker()}
+				</div>
 				<div className="flex shrink-0 items-center gap-1">
 					{chatIsSending ? (
 						<>

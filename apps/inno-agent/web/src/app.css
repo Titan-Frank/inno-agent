@@ -734,6 +734,16 @@ inno-workspace-panel textarea {
 	min-width: 0;
 }
 
+.inno-composer-smart-input {
+	flex: 0 0 auto;
+}
+
+.inno-composer-smart-input .inno-workspace-switcher-menu {
+	right: 0;
+	left: auto;
+	transform-origin: bottom right;
+}
+
 .inno-workspace-smart-input-panel {
 	/* Use the workspace picker's menu shell so both controls share the same
 	   width, radius, shadow, animation, and edge spacing. */
@@ -875,6 +885,17 @@ inno-workspace-panel textarea {
 
 .inno-workspace-smart-input-label {
 	max-width: 120px;
+}
+
+.inno-workspace-smart-input-feature-hint {
+	margin: 8px 2px 0;
+	font-size: 10.5px;
+	line-height: 1.45;
+	color: var(--inno-text-subtle);
+}
+
+.inno-workspace-smart-input-feature-hint .is-enabled {
+	color: var(--inno-text);
 }
 
 .inno-smart-beta {
