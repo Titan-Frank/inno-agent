@@ -1,5 +1,5 @@
 import { apiFetch } from "./client.js";
-import type { InnoSettings, UpsertProviderRequest, ChannelsSettingsPayload, WindowCloseBehavior } from "../types/settings.js";
+import type { InnoSettings, UpsertProviderRequest, ChannelsSettingsPayload, WindowCloseBehavior, WebAccessSettings, WebAccessSettingsPayload } from "../types/settings.js";
 
 export async function getSettings(): Promise<InnoSettings> {
 	return apiFetch<InnoSettings>("/api/settings");
@@ -104,6 +104,17 @@ export async function saveTavilySettings(apiKey: string): Promise<InnoSettings> 
 	return apiFetch<InnoSettings>("/api/settings/tavily", {
 		method: "PUT",
 		body: JSON.stringify({ apiKey }),
+	});
+}
+
+export async function getWebAccessSettings(): Promise<WebAccessSettings> {
+	return apiFetch<WebAccessSettings>("/api/settings/web-access");
+}
+
+export async function saveWebAccessSettings(payload: WebAccessSettingsPayload): Promise<WebAccessSettings> {
+	return apiFetch<WebAccessSettings>("/api/settings/web-access", {
+		method: "PUT",
+		body: JSON.stringify(payload),
 	});
 }
 

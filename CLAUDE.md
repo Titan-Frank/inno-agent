@@ -184,7 +184,7 @@ Key files in `apps/inno-agent/src/agent/`:
 - `practice-tools.ts` — Practice Lab tools (run commands, read run records).
 - `document-tools.ts` — file uploads, workspace file reading, document preview (CSV, Office formats).
 - `ocr-tools.ts` — OCR via external PaddleOCR-VL API, configured by `ocrApi` in config.json.
-- `web-access-config.ts` — integration support for the bundled `pi-web-access` plugin: writes the managed `<configDir>/web-search.json` default (keeps pi-web-access's own `web_search`/`source_check` disabled so inno's Tavily `web_search` stays the single search tool — PI's tool registry is silent last-wins on name collisions; forces `workflow: "none"` so no browser curator opens) and builds the jiti alias that pins `@earendil-works/pi-ai` to the backend's 0.84.x copy (the monorepo root hoists pi-ai 0.75.x for pi-web-ui, which lacks the `./compat` export pi-web-access imports). Both bundled plugins (`@juicesharp/rpiv-todo`, `pi-web-access`) ship TS-only sources and load through jiti like pi-subagents; gated by `plugins.todo.enabled` / `plugins.webAccess.enabled` in config.json (default on).
+- `web-access-config.ts` — integration support for the bundled `pi-web-access` plugin: writes the managed `<configDir>/web-search.json` default (renames its `web_search` to `web_research` via `toolNames` so it coexists with inno's Tavily `web_search` — PI's tool registry is silent last-wins on name collisions — and forces `workflow: "none"` so no browser curator opens; a file exactly matching the legacy search-disabled default is auto-upgraded), exposes the provider-settings read/write surface behind `GET/PUT /api/settings/web-access` (masked credentials, curated provider list), and builds the jiti alias that pins `@earendil-works/pi-ai` to the backend's 0.84.x copy (the monorepo root hoists pi-ai 0.75.x for pi-web-ui, which lacks the `./compat` export pi-web-access imports). Both bundled plugins (`@juicesharp/rpiv-todo`, `pi-web-access`) ship TS-only sources and load through jiti like pi-subagents; gated by `plugins.todo.enabled` / `plugins.webAccess.enabled` in config.json (default on).
 - `workspace-path-guard.ts` — security path validation ensuring agent file operations stay within workspace bounds.
 - `observability-extension.ts` — two-layer observability: (1) extension layer for session lifecycle/model changes/compaction events, (2) prompt observer for per-turn execution, tool call details (args + results), message lifecycle, and usage/cost extraction. All handlers are wrapped in try-catch so observability never breaks the agent loop. Uses a dedicated child logger (`logger.child({ module: "observability" })`).
 
@@ -275,6 +275,7 @@ Plain Node `http.createServer` (no framework), ~1600 lines plus route domains ex
 - `GET /api/preset-library` — list available presets from the remote content hub.
 - `GET/POST /api/workspaces[/:id]` — workspace CRUD.
 - `GET /api/settings` — current config (redacted API keys).
+- `GET/PUT /api/settings/web-access` — pi-web-access provider settings (default provider + per-provider credentials, masked on read; backed by `<configDir>/web-search.json`).
 - `PATCH /api/settings/simple-mode` — toggle Simple Mode.
 - `PATCH /api/settings/content-hub` — update content hub config.
 - `PATCH /api/settings/memory` — toggle L1/L2/L3 memory.

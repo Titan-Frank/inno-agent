@@ -95,9 +95,11 @@ L2 目录边界（重要，违反会破坏知识库引用）：
  * plugin is enabled (config.plugins.webAccess.enabled !== false).
  */
 export const WEB_ACCESS_PROMPT_HINT = `
-网页内容抓取（fetch_content / get_search_content）：
+联网调研与网页抓取（web_research / source_check / fetch_content）：
+- 两个搜索工具并存、分工不同：web_search（Tavily）用于快速查证单点事实；web_research 用于多角度、多源头调研（可用 queries 一次给 2-4 个不同角度的查询），需要更全面的资料梳理时优先用它。
+- source_check 用于核查某个论断的真伪，返回带逐段引用的证据；用户质疑信息准确性或需要严谨出处时使用。
 - 当需要读取具体链接的正文时调用 fetch_content：普通网页会提取为 markdown，也支持 GitHub 仓库、PDF、YouTube 字幕和本地视频。
-- 与 web_search 搭配使用：先搜索拿到链接，再用 fetch_content 精读全文；不要凭搜索结果摘要臆造原文细节。
+- 与搜索搭配使用：先搜索拿到链接，再用 fetch_content 精读全文；不要凭搜索结果摘要臆造原文细节。
 - fetch_content 返回内容较长时，可用 get_search_content 按 responseId 分段读取或检索其中的段落。`;
 
 export const ONBOARDING_GUIDE = `

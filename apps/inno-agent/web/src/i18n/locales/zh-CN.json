@@ -654,6 +654,16 @@
 				"not-connected": "未连接",
 				"disabled": "已禁用"
 			}
+		},
+		"webResearch": {
+			"title": "深度调研 (web_research)",
+			"desc": "多角度、多源头联网调研与事实核查（source_check），支持 Tavily / Brave / Exa / Perplexity 等 20+ 搜索源；DuckDuckGo 免配置兜底。与上方 Tavily 快速搜索并存。",
+			"summary": "默认源: {{provider}} · 已配置 {{count}} 个源",
+			"defaultProvider": "默认搜索源",
+			"keyless": "免配置",
+			"clear": "清除",
+			"saved": "已保存",
+			"hint": "更多搜索源与高级选项可直接编辑配置目录下的 web-search.json。"
 		}
 	},
 	"chat": {

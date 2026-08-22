@@ -42,11 +42,11 @@ if (dupes.length) {
 	console.error("DUPLICATE TOOLS:", dupes.join(", "));
 	process.exit(1);
 }
-for (const expected of ["todo", "fetch_content", "get_search_content", "web_search", "ask_user_question"]) {
+for (const expected of ["todo", "fetch_content", "get_search_content", "web_search", "web_research", "source_check", "ask_user_question"]) {
 	if (!tools.includes(expected)) {
 		console.error("MISSING TOOL:", expected);
 		process.exit(1);
 	}
 }
-console.log("OK: no duplicate tool names; expected plugin tools present");
+console.log("OK: no duplicate tool names; expected plugin tools present (coexistence: web_search + web_research)");
 process.exit(0);
