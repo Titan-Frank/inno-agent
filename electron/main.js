@@ -268,6 +268,22 @@ function openMainWindow() {
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
+  // 原生右键菜单：Electron 默认不弹出系统菜单，这里补上文本编辑的基础项。
+  mainWindow.webContents.on("context-menu", (event, params) => {
+    const items = [];
+    if (params.selectionText) {
+      items.push({ role: "cut", label: "剪切", enabled: params.isEditable });
+      items.push({ role: "copy", label: "复制" });
+    }
+    if (params.isEditable) {
+      items.push({ role: "paste", label: "粘贴" });
+      items.push({ role: "selectAll", label: "全选" });
+    }
+    if (items.length === 0) return;
+    const menu = Menu.buildFromTemplate(items);
+    menu.popup({ window: mainWindow });
+  });
+
   // 关闭 loading 窗口
   loadingWindow?.close();
 

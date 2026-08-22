@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { settingsStore } from "../../stores/settings-store.js";
 import { useStoreSnapshot } from "../hooks.js";
 import { Switch } from "../ui/Switch.js";
@@ -223,7 +223,7 @@ export function SmartInputSettings() {
 		const editing = extInputTarget?.id === id && extInputTarget.kind === kind;
 		return (
 			<div className="inno-smart-set-exts">
-				{values.length === 0 ? <span className="inno-smart-set-empty">{emptyText}</span> : null}
+					{values.length === 0 && emptyText ? <span className="inno-smart-set-empty">{emptyText}</span> : null}
 				{values.map((ext) => (
 					<span key={ext} className="inno-smart-set-ext">
 						{ext}
@@ -278,48 +278,50 @@ export function SmartInputSettings() {
 		onRemove: (kind: ExtensionListKind, ext: string) => void,
 		onCommit: (kind: ExtensionListKind) => void,
 	) => {
-		const canUseAllFormats = rule.isPreset !== true;
+		// Every rule — presets included — exposes the all-formats switch; the
+		// "文件" preset itself ships in all-formats mode.
+		const canUseAllFormats = true;
 		const allFormats = canUseAllFormats && rule.allExtensions;
 		return (
-		<div className="inno-smart-set-format-grid">
-			<div className="inno-smart-set-format-block">
-				<div className="inno-smart-set-format-label">
-					<span>{t("settings.smartInput.allowFormats", "允许格式")}</span>
-					<span className="inno-smart-set-format-count">
-						{allFormats
-							? t("settings.smartInput.allFormatsShort", "全部")
-							: t("settings.smartInput.formatCount", "{{count}} 项", { count: rule.extensions.length })}
-					</span>
-				</div>
-				<div className="inno-smart-set-format-values">
-					{canUseAllFormats ? <button
-						type="button"
-						className={`inno-smart-set-all ${allFormats ? "is-on" : ""}`}
-						aria-pressed={allFormats}
-						disabled={state.isSaving}
-						onClick={onToggleAll}
-					>
-						<span className="inno-smart-set-all-check" aria-hidden="true">{allFormats ? <Check size={12} /> : null}</span>
-						{t("settings.smartInput.allFormats", "全部格式均可")}
-					</button> : null}
-					{allFormats ? (
-						<span className="inno-smart-set-all-hint">
-							{rule.extensions.length > 0
-								? t("settings.smartInput.allFormatsSavedHint", "已保留 {{count}} 项具体格式，关闭后可继续编辑", { count: rule.extensions.length })
-								: t("settings.smartInput.allFormatsHint", "接受所有文件格式")}
+			<div className="inno-smart-set-format-grid">
+				<div className="inno-smart-set-format-block">
+					<div className="inno-smart-set-format-label">
+						<span>{t("settings.smartInput.allowFormats", "允许格式")}</span>
+						<span className="inno-smart-set-format-head">
+							<span className={`inno-smart-set-format-count ${!allFormats && rule.extensions.length === 0 ? "is-empty" : ""}`}>
+								{allFormats
+									? t("settings.smartInput.allFormatsShort", "全部")
+									: rule.extensions.length > 0
+										? t("settings.smartInput.formatCount", "{{count}} 项", { count: rule.extensions.length })
+										: t("settings.smartInput.noFormats", "尚未添加（暂不匹配文件）")}
+							</span>
+							{canUseAllFormats ? (
+								<span className="inno-smart-set-all-row">
+									<span className="inno-smart-set-all-text">{t("settings.smartInput.allFormats", "全部格式均可")}</span>
+									<Switch checked={allFormats} disabled={state.isSaving} onChange={onToggleAll} aria-label={t("settings.smartInput.allFormats", "全部格式均可")} />
+								</span>
+							) : null}
 						</span>
-					) : (
-						renderExtensionList(
-							id,
-							"include",
-							rule.extensions,
-							t("settings.smartInput.noFormats", "尚未添加（暂不匹配文件）"),
-							(ext) => onRemove("include", ext),
-							() => onCommit("include"),
-						)
-					)}
+					</div>
+					<div className="inno-smart-set-format-values">
+						{allFormats ? (
+							rule.extensions.length > 0 ? (
+								<span className="inno-smart-set-all-hint">
+									{t("settings.smartInput.allFormatsSavedHint", "已保留 {{count}} 项具体格式，关闭后可继续编辑", { count: rule.extensions.length })}
+								</span>
+							) : null
+						) : (
+							renderExtensionList(
+								id,
+								"include",
+								rule.extensions,
+								"",
+								(ext) => onRemove("include", ext),
+								() => onCommit("include"),
+							)
+						)}
+					</div>
 				</div>
-			</div>
 			<div className="inno-smart-set-format-block is-exclude">
 				<div className="inno-smart-set-format-label">
 					<span>{t("settings.smartInput.excludeFormats", "排除格式")}</span>
@@ -348,7 +350,7 @@ export function SmartInputSettings() {
 				<div className="inno-smart-set-identity">
 					{renderKeywordPill(rule)}
 					<span className="inno-smart-set-mode">
-						{rule.isPreset !== true && rule.allExtensions
+						{rule.allExtensions
 							? t("settings.smartInput.allFormatsShort", "全部格式")
 							: rule.extensions.length > 0
 								? t("settings.smartInput.formatCount", "{{count}} 项", { count: rule.extensions.length })

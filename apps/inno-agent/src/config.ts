@@ -78,7 +78,7 @@ export interface InnoSimpleModeConfig {
  */
 export interface InnoSmartInputRule {
 	id: string;
-	/** Built-in rules do not expose the all-formats mode in the UI. */
+	/** Built-in rule ids are recognized during config migration. */
 	isPreset: boolean;
 	keyword: string;
 	/** Allowed extensions when `allExtensions` is false. */
@@ -111,6 +111,17 @@ export const DEFAULT_SMART_INPUT_RULES: InnoSmartInputRule[] = [
 		allExtensions: false,
 		excludeExtensions: [],
 		enabled: true,
+	},
+	{
+		// Generic "文件" rule: accepts every format by default but ships
+		// disabled — users opt in from the settings panel.
+		id: "smart-rule-file",
+		isPreset: true,
+		keyword: "文件",
+		extensions: [],
+		allExtensions: true,
+		excludeExtensions: [],
+		enabled: false,
 	},
 ];
 
@@ -392,7 +403,7 @@ export function normalizeSmartInputConfig(
 		let id = typeof rule.id === "string" && rule.id.trim() ? rule.id.trim() : "";
 		if (!id || seenIds.has(id)) id = `smart-rule-${keyword}`;
 		if (seenIds.has(id)) id = `smart-rule-${keyword}-${rules.length}`;
-		// Older configs do not carry isPreset. Recognize the five stable built-in
+		// Older configs do not carry isPreset. Recognize the stable built-in
 		// ids during migration, while treating other rules as user-created.
 		const isPreset = rule.isPreset === true || DEFAULT_SMART_INPUT_RULE_IDS.has(id);
 		seenKeywords.add(keyword);
@@ -402,10 +413,10 @@ export function normalizeSmartInputConfig(
 			isPreset,
 			keyword,
 			extensions,
-			allExtensions: !isPreset && rule.allExtensions === true,
-		excludeExtensions,
-		enabled: rule.enabled !== false,
-	});
+			allExtensions: rule.allExtensions === true,
+			excludeExtensions,
+			enabled: rule.enabled !== false,
+		});
 	}
 	return {
 		enabled: smartInput?.enabled === true,

@@ -20,7 +20,7 @@ import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { ContextMenu, type ContextMenuItem } from "./ui/ContextMenu.js";
 import { FileName } from "./FileName.js";
-import { hiddenDragImage } from "./chat/smart-input/drag-utils.js";
+import { buildDragFilePanel, hiddenDragImage } from "./chat/smart-input/drag-utils.js";
 import "@earendil-works/pi-web-ui";
 
 // Heavy office renderers are lazy-loaded so docx-preview / xlsx stay off the
@@ -619,6 +619,7 @@ interface WorkspaceMultiSelectState {
 	selectedFiles: ReadonlyArray<WorkspaceDragItem>;
 	toggleFile: (path: string) => void;
 	addFile: (path: string) => void;
+	exit: () => void;
 }
 
 const WorkspaceMultiSelectContext = createContext<WorkspaceMultiSelectState>({
@@ -627,6 +628,7 @@ const WorkspaceMultiSelectContext = createContext<WorkspaceMultiSelectState>({
 	selectedFiles: [],
 	toggleFile: () => undefined,
 	addFile: () => undefined,
+	exit: () => undefined,
 });
 
 function collectSelectedWorkspaceFiles(nodes: ArboristNode[], selectedIds: ReadonlySet<string>, out: WorkspaceDragItem[] = []): WorkspaceDragItem[] {
@@ -639,43 +641,10 @@ function collectSelectedWorkspaceFiles(nodes: ArboristNode[], selectedIds: Reado
 	return out;
 }
 
-function createWorkspaceDragImage(items: ReadonlyArray<WorkspaceDragItem>, t: TFunction): HTMLElement {
-	const ghost = document.createElement("div");
-	const isMulti = items.length > 1;
-	ghost.className = `inno-smart-ws-drag-ghost ${isMulti ? "is-multi" : "is-single"}`;
-	ghost.setAttribute("aria-hidden", "true");
-
-	const stack = document.createElement("span");
-	stack.className = "inno-smart-ws-drag-stack";
-	const visibleItems = items.slice(0, 3);
-	for (const [index] of visibleItems.entries()) {
-		const card = document.createElement("span");
-		card.className = `inno-smart-ws-drag-card ${index === visibleItems.length - 1 ? "is-front" : ""}`;
-		// Avoid CSS transforms here: Chromium snapshots transformed layers as a
-		// bitmap for setDragImage, which makes the multi-file preview look soft.
-		card.style.left = `${1 + index * 3}px`;
-		card.style.top = `${1 - index}px`;
-		card.style.zIndex = String(index + 1);
-		stack.appendChild(card);
-	}
-	ghost.appendChild(stack);
-
-	if (isMulti) {
-		const count = document.createElement("span");
-		count.className = "inno-smart-ws-drag-count";
-		count.textContent = String(items.length);
-		stack.appendChild(count);
-	}
-
-	const label = document.createElement("span");
-	label.className = "inno-smart-ws-drag-label";
-	label.textContent = isMulti
-		? t("chat.smartInput.dragMultiLabel", "{{count}} 个文件", { count: items.length })
-		: (items[0]?.name ?? t("chat.smartInput.dragSingleFallback", "文件"));
-	ghost.appendChild(label);
-
-	document.body.appendChild(ghost);
-	return ghost;
+function createWorkspaceDragImage(items: ReadonlyArray<WorkspaceDragItem>): HTMLElement {
+	// Same shared panel the smart-input follower uses, so drags look identical
+	// whether or not smart input is enabled.
+	return buildDragFilePanel(items, true);
 }
 
 function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<ArboristNode> & { onPreviewFile?: PreviewFileHandler }) {
@@ -708,10 +677,11 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 					? [...multiSelect.selectedFiles]
 					: [item];
 				const payload = items.length === 1 ? items[0] : { source: "workspace" as const, items };
+				if (items.length > 1) event.currentTarget.dataset.multiDrag = "1";
 				event.dataTransfer.setData("application/x-inno-file", JSON.stringify(payload));
 				event.dataTransfer.setData("text/plain", `ws:${node.data.path}`);
 				event.dataTransfer.effectAllowed = "copy";
-				const dragImage = createWorkspaceDragImage(items, t);
+				const dragImage = createWorkspaceDragImage(items);
 				window.dispatchEvent(new CustomEvent("inno-smart-dragstart", { detail: { items } }));
 				if (document.body.classList.contains("inno-smart-dragging")) {
 					// Smart input renders its own live follower; hide the native snapshot.
@@ -727,6 +697,12 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 			onDragEnd={(event) => {
 				if (!isFileDragSource) return;
 				event.stopPropagation();
+				// A finished multi-file drag has served its purpose; leave
+				// multi-select so the browser returns to its normal state.
+				if (event.currentTarget.dataset.multiDrag === "1") {
+					delete event.currentTarget.dataset.multiDrag;
+					multiSelect.exit?.();
+				}
 				window.dispatchEvent(new CustomEvent("inno-smart-dragend"));
 			}}
 			onClick={(e) => {
@@ -1079,8 +1055,13 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		setMultiSelectMode((enabled) => !enabled);
 	}, [multiSelectMode]);
 
-	const toggleSelectedFile = useCallback((path: string) => {
-		setSelectedFileIds((current) => current.includes(path)
+	/** Leave multi-select after a completed multi-file drag. */
+	const exitMultiSelect = useCallback(() => {
+		setSelectedFileIds([]);
+		setMultiSelectMode(false);
+	}, []);
+
+	const toggleSelectedFile = useCallback((path: string) => {		setSelectedFileIds((current) => current.includes(path)
 			? current.filter((id) => id !== path)
 			: [...current, path]);
 	}, []);
@@ -1095,7 +1076,8 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		selectedFiles,
 		toggleFile: toggleSelectedFile,
 		addFile: addSelectedFile,
-	}), [multiSelectMode, selectedFileIdSet, selectedFiles, toggleSelectedFile, addSelectedFile]);
+		exit: exitMultiSelect,
+	}), [multiSelectMode, selectedFileIdSet, selectedFiles, toggleSelectedFile, addSelectedFile, exitMultiSelect]);
 
 	/* --- Upload handlers --- */
 

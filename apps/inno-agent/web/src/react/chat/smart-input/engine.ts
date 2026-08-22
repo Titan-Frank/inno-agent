@@ -22,6 +22,7 @@ import {
 	dropMatchState as dropMatchStatePure,
 	offsetAtPointInAtoms,
 	parseAttachmentTransfer,
+	buildDragFilePanel,
 	type DropMatchState,
 	type FlowAtom,
 } from "./drag-utils.js";
@@ -803,10 +804,13 @@ export class SmartInputEngine {
 		// Drag-dwell: hover 1s while dragging a compatible file → auto-convert
 		// and bind the in-hand file.
 		let dwellTimer: number | null = null;
+		// Negative pseudo-id so keyword status never collides with slot ids.
+		const keywordStatusId = -(kw.start + 1);
 		const clearDwell = () => {
 			if (dwellTimer !== null) window.clearTimeout(dwellTimer);
 			dwellTimer = null;
 			this.stopDwellFollower();
+			this.stopDropStatusFollower(keywordStatusId);
 			setHot(false);
 		};
 		const matchesDrag = (): boolean => {
@@ -841,7 +845,16 @@ export class SmartInputEngine {
 		};
 		button.addEventListener("dragover", (event) => {
 			if (!this.opts.data.getSettings().allowDrag || !this.dragMeta) return;
-			if (!matchesDrag()) return;
+			if (!matchesDrag()) {
+				// Plain keyword (not yet a bubble): still surface match feedback.
+				// A ppt over "pdf" shows 不匹配, a mixed batch shows 部分匹配.
+				const meta = this.dragMeta;
+				if (meta && !meta.consumed && this.ta.value.slice(kw.start, kw.end) === kw.word) {
+					const state = dropMatchStatePure(meta.files, (name) => this.ruleAccepts(kw.rule, name));
+					if (state !== "match") this.showDropStatus({ id: keywordStatusId, word: kw.word }, state);
+				}
+				return;
+			}
 			event.preventDefault();
 			event.dataTransfer!.dropEffect = "copy";
 			if (dwellTimer !== null) return;
@@ -866,14 +879,18 @@ export class SmartInputEngine {
 
 	private startDwellFollower(color: string): void {
 		this.stopDwellFollower();
-		// The dwell ring lives inside the drag follower, right after the file
-		// title row, instead of floating at the cursor.
+		// The dwell ring replaces the file-type badge in the first file row,
+		// so it never crowds the file name text.
 		const panel = this.ensureDragFollower();
 		const ring = document.createElement("div");
 		ring.className = "inno-smart-dwell-follower is-inline";
 		ring.style.setProperty("--smart-ct", color);
 		const firstFileRow = panel.querySelector<HTMLElement>(".inno-drag-follower-file");
-		if (firstFileRow) firstFileRow.appendChild(ring);
+		const ext = firstFileRow?.querySelector<HTMLElement>(".inno-drag-follower-ext") ?? null;
+		if (ext) {
+			ext.classList.add("is-hidden-by-dwell");
+			ext.before(ring);
+		} else if (firstFileRow) firstFileRow.prepend(ring);
 		else panel.appendChild(ring);
 		this.dwellFollower = ring;
 		this.dwellStart = performance.now();
@@ -924,53 +941,15 @@ export class SmartInputEngine {
 	 */
 	private ensureDragFollower(): HTMLElement {
 		if (this.dragFollower) return this.dragFollower;
-		const follower = document.createElement("div");
-		follower.className = "inno-drag-follower";
-		follower.setAttribute("aria-hidden", "true");
-
 		const items = this.dragMeta && !this.dragMeta.consumed ? this.dragMeta.files : [];
-		if (items.length > 0) {
-			if (items.length > 1) follower.classList.add("is-multi");
-			const files = document.createElement("div");
-			files.className = "inno-drag-follower-files";
-			// Multi-file drags collapse to one row (first file + count pill);
-			// a stacked list reads as clutter next to the cursor.
-			const shown = items.length > 1 ? items.slice(0, 1) : items.slice(0, 3);
-			for (const item of shown) {
-				const row = document.createElement("div");
-				row.className = "inno-drag-follower-file";
-				const ext = document.createElement("span");
-				ext.className = "inno-drag-follower-ext";
-				const dot = item.name.lastIndexOf(".");
-				ext.textContent = dot > 0 ? item.name.slice(dot + 1).toUpperCase().slice(0, 4) : "FILE";
-				row.appendChild(ext);
-				const name = document.createElement("span");
-				name.className = "inno-drag-follower-name";
-				name.textContent = item.name;
-				row.appendChild(name);
-				files.appendChild(row);
-			}
-			if (items.length > 1) {
-				const count = document.createElement("span");
-				count.className = "inno-drag-follower-count";
-				count.textContent = `×${items.length}`;
-				files.querySelector(".inno-drag-follower-file")!.appendChild(count);
-			} else if (items.length > 3) {
-				const more = document.createElement("div");
-				more.className = "inno-drag-follower-more";
-				more.textContent = `+${items.length - 3}`;
-				files.appendChild(more);
-			}
-			follower.appendChild(files);
-		}
-
+		const follower = buildDragFilePanel(items);
 		document.body.appendChild(follower);
 		this.dragFollower = follower;
 		this.updateDropStatusPosition();
 		return follower;
 	}
 
-	private buildDropStatusIcon(state: DropMatchState, slot: Slot): HTMLElement {
+	private buildDropStatusIcon(state: DropMatchState, target: { id: number }): HTMLElement {
 		const icon = document.createElement("span");
 		icon.className = `inno-drag-follower-icon is-${state}`;
 		if (state === "partial") {
@@ -981,7 +960,7 @@ export class SmartInputEngine {
 
 			const defs = document.createElementNS(svgNamespace, "defs");
 			const leftClip = document.createElementNS(svgNamespace, "clipPath");
-			const leftClipId = `inno-smart-drop-left-${slot.id}`;
+			const leftClipId = `inno-smart-drop-left-${target.id}`;
 			leftClip.setAttribute("id", leftClipId);
 			const leftRect = document.createElementNS(svgNamespace, "rect");
 			leftRect.setAttribute("width", "8");
@@ -990,7 +969,7 @@ export class SmartInputEngine {
 			defs.appendChild(leftClip);
 
 			const rightClip = document.createElementNS(svgNamespace, "clipPath");
-			const rightClipId = `inno-smart-drop-right-${slot.id}`;
+			const rightClipId = `inno-smart-drop-right-${target.id}`;
 			rightClip.setAttribute("id", rightClipId);
 			const rightRect = document.createElementNS(svgNamespace, "rect");
 			rightRect.setAttribute("x", "8");
@@ -1032,10 +1011,10 @@ export class SmartInputEngine {
 		return icon;
 	}
 
-	private showDropStatus(slot: Slot, state: DropMatchState, statusLabelOverride?: string): void {
+	private showDropStatus(target: { id: number; word: string }, state: DropMatchState, statusLabelOverride?: string): void {
 		const follower = this.ensureDragFollower();
 		const current = this.dragFollowerStatus;
-		if (current?.dataset.slotId === String(slot.id) && current.dataset.state === state) {
+		if (current?.dataset.slotId === String(target.id) && current.dataset.state === state) {
 			const label = current.querySelector<HTMLElement>(".inno-drag-follower-label");
 			if (label) label.textContent = statusLabelOverride ?? label.textContent;
 			this.updateDropStatusPosition();
@@ -1050,13 +1029,13 @@ export class SmartInputEngine {
 
 		const status = document.createElement("div");
 		status.className = `inno-drag-follower-status is-${state}`;
-		status.dataset.slotId = String(slot.id);
+		status.dataset.slotId = String(target.id);
 		status.dataset.state = state;
-		status.appendChild(this.buildDropStatusIcon(state, slot));
+		status.appendChild(this.buildDropStatusIcon(state, { id: target.id }));
 
 		const name = document.createElement("span");
 		name.className = "inno-drag-follower-word";
-		name.textContent = slot.word;
+		name.textContent = target.word;
 		status.appendChild(name);
 
 		const label = document.createElement("span");
@@ -1067,14 +1046,14 @@ export class SmartInputEngine {
 		follower.appendChild(status);
 		follower.classList.add("has-status");
 		this.dragFollowerStatus = status;
-		this.dropStatusSlotId = slot.id;
+		this.dropStatusSlotId = target.id;
 		this.updateDropStatusPosition();
 		if (statusLabelOverride) {
 			// Auto-conversion removes the source attachment chip while the native
 			// drag is still live, so its dragend event can be lost. Keep a bounded
 			// cleanup path even when the browser never reports the terminal event.
 			this.dropStatusTimer = window.setTimeout(() => {
-				if (this.dropStatusSlotId === slot.id) this.cancelBubbleDrag();
+				if (this.dropStatusSlotId === target.id) this.cancelBubbleDrag();
 			}, DROP_STATUS_FALLBACK_MS);
 		}
 	}
@@ -1085,6 +1064,8 @@ export class SmartInputEngine {
 			this.dwellFollower.remove();
 			this.dwellFollower = null;
 		}
+		// Bring the file-type badge back once the ring is gone.
+		this.dragFollower?.querySelector(".inno-drag-follower-ext.is-hidden-by-dwell")?.classList.remove("is-hidden-by-dwell");
 	}
 
 	trackDragPosition(x: number, y: number): void {

@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { PendingUpload } from "./composer-utils.js";
 import { kindFromName } from "./smart-input/kinds.js";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu.js";
-import { hiddenDragImage } from "./smart-input/drag-utils.js";
+import { buildDragFilePanel, hiddenDragImage } from "./smart-input/drag-utils.js";
 import { workspaceFileUrl } from "../../api/workspace.js";
 import { FileName } from "../FileName.js";
 import { FileTypeIcon } from "../FileTypeIcon.js";
@@ -50,30 +50,10 @@ function AttachmentImagePreview({ item, workspaceId }: { item: PendingUpload; wo
 	);
 }
 
-function createUploadDragImage(source: HTMLElement, item: PendingUpload): HTMLElement {
-	const kind = kindFromName(item.fileName);
-	const ghost = document.createElement("span");
-	ghost.className = "inno-upload-drag-ghost";
-
-	if (kind === "image") {
-		const sourceImage = source.querySelector<HTMLImageElement>(".inno-upload-image-thumb img");
-		if (sourceImage) {
-			const thumb = document.createElement("span");
-			thumb.className = "inno-upload-drag-ghost-thumb";
-			thumb.appendChild(sourceImage.cloneNode(true));
-			ghost.appendChild(thumb);
-		}
-	} else {
-		const sourceIcon = source.querySelector<SVGElement>(".inno-file-type-icon");
-		if (sourceIcon) ghost.appendChild(sourceIcon.cloneNode(true));
-	}
-
-	const label = document.createElement("span");
-	label.className = "inno-upload-drag-ghost-label";
-	label.textContent = item.fileName;
-	ghost.appendChild(label);
-	document.body.appendChild(ghost);
-	return ghost;
+function createUploadDragImage(item: PendingUpload): HTMLElement {
+	// Same shared panel the smart-input follower uses, so drags look identical
+	// whether or not smart input is enabled.
+	return buildDragFilePanel([{ name: item.fileName }], true);
 }
 
 /**
@@ -160,7 +140,7 @@ export function ChatUploadChips({ uploads, onRemove, onRetry, onInsertAsBubble, 
 						key={file.id}
 						draggable
 						onDragStart={(event) => {
-							const dragImage = createUploadDragImage(event.currentTarget, file);
+							const dragImage = createUploadDragImage(file);
 							setDraggingId(file.id);
 							event.dataTransfer.setData("application/x-inno-file", JSON.stringify({ name: file.fileName, path: file.path, source: file.source }));
 							event.dataTransfer.setData("text/plain", `ws:${file.path}`);

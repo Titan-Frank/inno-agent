@@ -118,6 +118,61 @@ export function dropMatchState(files: EngineAttachmentItem[], accepts: (name: st
 let hiddenImageEl: HTMLCanvasElement | null = null;
 
 /**
+ * Build the shared drag file panel (extension badge + name, multi-file count
+ * pill, stacked-sheet shadow). Used by the smart-input live follower and by
+ * the native drag-image snapshots so every drag mode looks identical.
+ * Pass `snapshot: true` for setDragImage use (parked offscreen).
+ */
+export function buildDragFilePanel(
+	items: ReadonlyArray<{ name: string }>,
+	snapshot = false,
+): HTMLElement {
+	const panel = document.createElement("div");
+	panel.className = `inno-drag-follower${items.length > 1 ? " is-multi" : ""}${snapshot ? " is-snapshot" : ""}`;
+	panel.setAttribute("aria-hidden", "true");
+	if (items.length === 0) return panel;
+
+	const files = document.createElement("div");
+	files.className = "inno-drag-follower-files";
+	// Multi-file drags collapse to one row (first file + count pill); a
+	// stacked list reads as clutter next to the cursor.
+	const shown = items.length > 1 ? items.slice(0, 1) : items.slice(0, 3);
+	for (const item of shown) {
+		const row = document.createElement("div");
+		row.className = "inno-drag-follower-file";
+		const ext = document.createElement("span");
+		ext.className = "inno-drag-follower-ext";
+		const dot = item.name.lastIndexOf(".");
+		ext.textContent = dot > 0 ? item.name.slice(dot + 1).toUpperCase().slice(0, 4) : "FILE";
+		row.appendChild(ext);
+		const name = document.createElement("span");
+		name.className = "inno-drag-follower-name";
+		name.textContent = item.name;
+		row.appendChild(name);
+		files.appendChild(row);
+	}
+	if (items.length > 1) {
+		const count = document.createElement("span");
+		count.className = "inno-drag-follower-count";
+		count.textContent = `×${items.length}`;
+		files.querySelector(".inno-drag-follower-file")!.appendChild(count);
+	} else if (items.length > 3) {
+		const more = document.createElement("div");
+		more.className = "inno-drag-follower-more";
+		more.textContent = `+${items.length - 3}`;
+		files.appendChild(more);
+	}
+	panel.appendChild(files);
+	if (snapshot) {
+		panel.style.position = "fixed";
+		panel.style.top = "-10000px";
+		panel.style.left = "-10000px";
+		document.body.appendChild(panel);
+	}
+	return panel;
+}
+
+/**
  * 1x1 transparent canvas used as the native drag image when the smart-input
  * engine owns the live drag follower, so only one drag panel is visible.
  */
