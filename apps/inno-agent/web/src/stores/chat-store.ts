@@ -5,6 +5,7 @@ import type { ChatAttachments, ChatMessage, ChatStreamEvent, ChatToolRecord, Pen
 import { notebookStore } from "./notebook-store.js";
 import { appStore } from "./app-store.js";
 import { workspaceStore, type StreamingWorkspacePreview } from "./workspace-store.js";
+import { ensureWindowForPanel } from "./window-expansion.js";
 
 function hasAttachmentFiles(attachments?: ChatAttachments): boolean {
 	return Boolean(attachments && (attachments.bindings.some((binding) => binding.files.length > 0) || attachments.loose.length > 0));
@@ -608,7 +609,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 			});
 		} else {
 			this.flushPreviewChange();
-			revealWorkspacePreview();
+			void revealWorkspacePreview();
 			workspaceStore.startStreamingPreview({
 				id,
 				title,
@@ -823,7 +824,19 @@ const FILE_EXTENSIONS = [
 ].join("|");
 const FILE_PATH_RE = new RegExp(`(?:^|[\\s"'\\\`“”‘’（(])((?:[\\w.-]+\\/)*[\\w.-]+\\.(${FILE_EXTENSIONS}))(?:$|[\\s"'\\\`“”‘’）),，。:：])`, "i");
 
-function revealWorkspacePreview(): void {
+async function revealWorkspacePreview(): Promise<void> {
+	const currentMode = appStore.workspaceMode;
+	const opensSplitPanel = currentMode !== "full";
+	const targetMode = currentMode === "collapsed" || currentMode === "quarter" ? "half" : currentMode;
+	const targetWidth = appStore.workspaceWidth < 560 ? 640 : appStore.workspaceWidth;
+
+	if (opensSplitPanel) {
+		// Desktop: grow the native window first. Browser users have no desktop
+		// bridge, so ensureWindowForPanel returns "unavailable" and the local
+		// fitPanelLayout fallback below still opens the panel safely.
+		await ensureWindowForPanel("right", targetWidth, targetMode);
+	}
+
 	appStore.setRightPanelTab("preview");
 	if (appStore.workspaceWidth < 560) appStore.setWorkspaceWidth(640);
 	if (appStore.workspaceMode === "collapsed" || appStore.workspaceMode === "quarter") {
@@ -1023,7 +1036,7 @@ function pickOpenableWorkspaceChange(changes: WorkspaceFileChange[]): WorkspaceF
 async function openChangedWorkspacePath(filePath?: string, previewId?: string, isCurrent: () => boolean = () => true): Promise<void> {
 	try {
 		if (!isCurrent()) return;
-		revealWorkspacePreview();
+		await revealWorkspacePreview();
 		if (previewId) workspaceStore.clearStreamingPreview(previewId);
 		await workspaceStore.loadTree(isCurrent);
 		if (!isCurrent()) return;
