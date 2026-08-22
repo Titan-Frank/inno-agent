@@ -8,9 +8,11 @@ import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
 import { answeredQuestionnaireFromTool, buildAnsweredQuestionnaireTimeline } from "../../utils/questionnaire.js";
 import type { AnsweredQuestionnaireView } from "../../utils/questionnaire.js";
-import { KIND_COLORS, KIND_LABEL_KEYS } from "./smart-input/kinds.js";
+import { KIND_LABEL_KEYS } from "./smart-input/kinds.js";
 import { MarkdownArtifact } from "../MarkdownArtifact.js";
 import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
+import { FileName } from "../FileName.js";
+import { FileTypeIcon } from "../FileTypeIcon.js";
 
 // Pure, props-driven chat rendering components. This module must NOT import
 // stores or the api/ layer — apps/showcase reuses it to replay recorded
@@ -81,19 +83,24 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
  * something failed instead of seeing a silent dead end.
  */
 export type AttachmentUrlResolver = (file: AttachmentRef) => string | undefined;
+export type AttachmentOpenHandler = (file: AttachmentRef) => void;
 
-function AttachmentFileChip({ file, resolveUrl }: {
+function AttachmentFileChip({ file, resolveUrl, onOpenFile }: {
 	file: AttachmentRef;
 	resolveUrl?: AttachmentUrlResolver;
+	onOpenFile?: AttachmentOpenHandler;
 }) {
 	const url = resolveUrl?.(file);
 	const inner = (
 		<>
-			<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[file.kind] }} />
-			<span className="min-w-0 truncate">{file.path.split("/").pop() ?? file.path}</span>
+			<FileTypeIcon kind={file.kind} size={14} />
+			<FileName name={file.path} className="min-w-0 flex-1" />
 		</>
 	);
 	const className = "inno-smart-ref-chip";
+	if (onOpenFile) {
+		return <button type="button" className={className} onClick={() => onOpenFile(file)} title={file.path}>{inner}</button>;
+	}
 	return url
 		? <a className={className} href={url} target="_blank" rel="noreferrer" title={file.path}>{inner}</a>
 		: <span className={className} title={file.path}>{inner}</span>;
@@ -101,39 +108,76 @@ function AttachmentFileChip({ file, resolveUrl }: {
 
 /** Read-only hover panel for a sent bubble: bound files with source + path.
  *  Mirrors the composer status panel's look, but every action is removed. */
-function SentBindingPanel({ binding, anchor }: { binding: AttachmentBinding; anchor: HTMLElement | null }) {
+function SentBindingPanel({ binding, anchor, onOpenFile }: { binding: AttachmentBinding; anchor: HTMLElement | null; onOpenFile?: AttachmentOpenHandler }) {
 	const { t } = useTranslation();
-	const [rect, setRect] = useState<DOMRect | null>(null);
+	const panelRef = useRef<HTMLDivElement | null>(null);
 
+	// Streaming reflow, window expansion and sidebar/workspace layout shifts
+	// move the anchor pill without resizing it, so neither window resize nor
+	// ResizeObserver would fire. Track anchor geometry directly: reposition on
+	// resize/scroll events (which still fire when the page is not painting) and
+	// follow every animation frame while the hover panel is alive.
+	const trackPosition = (anchorEl: HTMLElement) => () => {
+		const el = panelRef.current;
+		if (!el) return;
+		if (!anchorEl.isConnected) {
+			el.style.display = "none";
+			return;
+		}
+		const rect = anchorEl.getBoundingClientRect();
+		const width = 260;
+		el.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+		el.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - el.offsetHeight - 8))}px`;
+	};
 	useEffect(() => {
-		setRect(anchor?.getBoundingClientRect() ?? null);
+		if (!anchor) return;
+		const position = trackPosition(anchor);
+		let frame = 0;
+		const tick = () => { position(); frame = requestAnimationFrame(tick); };
+		const onReflow = () => position();
+		window.addEventListener("resize", onReflow);
+		document.addEventListener("scroll", onReflow, true);
+		frame = requestAnimationFrame(tick);
+		return () => {
+			cancelAnimationFrame(frame);
+			window.removeEventListener("resize", onReflow);
+			document.removeEventListener("scroll", onReflow, true);
+		};
 	}, [anchor]);
 
-	if (!rect) return null;
+	if (!anchor) return null;
+	const initialRect = anchor.getBoundingClientRect();
 	const width = 260;
-	const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-	const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 190));
 
 	return createPortal(
 		<div
+			ref={panelRef}
 			className="inno-smart-panel inno-smart-panel--readonly"
-			style={{ left, top, width }}
+			style={{
+				left: Math.max(8, Math.min(initialRect.left, window.innerWidth - width - 8)),
+				top: Math.max(8, Math.min(initialRect.bottom + 6, window.innerHeight - 190)),
+				width,
+			}}
 			role="tooltip"
 		>
 			<div className="inno-smart-panel-title">
 				{t("chat.smartInput.boundFilesTitle", "「{{word}}」绑定的文件（{{count}}）", { word: binding.word, count: binding.files.length })}
 			</div>
 			<div className="inno-smart-panel-list">
-				{binding.files.map((file) => (
-					<div key={file.path} className="inno-smart-panel-row">
-						<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[file.kind] }} />
-						<span className="inno-smart-panel-name" title={file.path}>{file.path.split("/").pop() ?? file.path}</span>
-						<span className="inno-smart-src-tag">
-							{file.source === "workspace" ? t("chat.smartInput.sourceWorkspace", "工作区") : t("chat.smartInput.sourceUpload", "本地上传")}
-						</span>
-						<span className="inno-smart-status-done" title={file.path}>✓</span>
-					</div>
-				))}
+				{binding.files.map((file) => {
+					const row = (
+						<>
+							<FileTypeIcon kind={file.kind} size={14} />
+							<FileName name={file.path} className="inno-smart-panel-name" title={file.path} />
+							<span className="inno-smart-src-tag">
+								{file.source === "workspace" ? t("chat.smartInput.sourceWorkspace", "工作区") : t("chat.smartInput.sourceUpload", "本地")}
+							</span>
+						</>
+					);
+					return onOpenFile
+						? <button key={file.path} type="button" className="inno-smart-panel-row w-full text-left" onClick={() => onOpenFile(file)} title={file.path}>{row}</button>
+						: <div key={file.path} className="inno-smart-panel-row">{row}</div>;
+				})}
 			</div>
 			<div className="inno-smart-panel-caption">
 				{t("chat.smartInput.kindLabel", "类型")}: {t(KIND_LABEL_KEYS[binding.files[0]?.kind ?? "file"])}
@@ -147,14 +191,14 @@ function SentBindingPanel({ binding, anchor }: { binding: AttachmentBinding; anc
 
 /**
  * Renders a sent user message with inline binding bubbles: the recorded word
- * occurrence is replaced by a word pill + one ref-chip per bound file, loose
- * attachments render as a chip row, and a collapsible details block exposes
- * the exact structured payload the agent received.
+ * occurrence is replaced by a word pill, loose attachments render as a chip
+ * row, and bound files remain available from the read-only hover panel.
  */
-function UserAttachmentContent({ content, attachments, resolveUrl }: {
+function UserAttachmentContent({ content, attachments, resolveUrl, onOpenFile }: {
 	content: string;
 	attachments: NonNullable<ChatMessage["attachments"]>;
 	resolveUrl?: AttachmentUrlResolver;
+	onOpenFile?: AttachmentOpenHandler;
 }) {
 	const { t } = useTranslation();
 	const { segments, unplaced } = useMemo(
@@ -191,46 +235,22 @@ function UserAttachmentContent({ content, attachments, resolveUrl }: {
 			onMouseLeave={scheduleHide}
 		>
 			<span className="inno-smart-ref-word" title={t("chat.smartInput.sentBubbleHint", "已绑定 {{count}} 个文件", { count: binding.files.length })}>
-				<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[binding.files[0]?.kind ?? "file"] }} />
+					<FileTypeIcon kind={binding.files[0]?.kind ?? "file"} size={13} />
 				{binding.word}
 			</span>
-			{binding.files.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
 		</span>
 	);
 
 	const looseRow = attachments.loose.length > 0 ? (
 		<div className="mt-1.5 flex flex-wrap gap-1.5">
-			{attachments.loose.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
+			{attachments.loose.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} onOpenFile={onOpenFile} />)}
 		</div>
 	) : null;
 
 	const trailingBindings = unplaced.length > 0 ? (
 		<div className="mt-1.5 flex flex-wrap gap-1.5">
-			{unplaced.map((binding) => (
-				<span key={`unplaced-${binding.word}-${binding.wordIndex}`} className="inno-smart-ref-inline">
-					<span className="inno-smart-ref-word">
-						<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[binding.files[0]?.kind ?? "file"] }} />
-						{binding.word}
-					</span>
-					{binding.files.map((file) => <AttachmentFileChip key={file.path} file={file} resolveUrl={resolveUrl} />)}
-				</span>
-			))}
+			{unplaced.map(renderBinding)}
 		</div>
-	) : null;
-
-	const aiView = {
-		text_for_model: content,
-		bindings: attachments.bindings.map((binding) => ({
-			word: binding.word,
-			files: binding.files.map((file) => file.path),
-		})),
-		loose_attachments: attachments.loose.map((file) => file.path),
-	};
-	const details = (attachments.bindings.length > 0 || attachments.loose.length > 0) ? (
-		<details className="inno-smart-details mt-1.5">
-			<summary>{t("chat.smartInput.receivedPayload", "AI 收到的结构化附件")}</summary>
-			<pre>{JSON.stringify(aiView, null, 2)}</pre>
-		</details>
 	) : null;
 
 	return (
@@ -242,10 +262,9 @@ function UserAttachmentContent({ content, attachments, resolveUrl }: {
 			)}
 			{looseRow}
 			{trailingBindings}
-			{details}
 			{hovered ? (
 				<span onMouseEnter={() => { if (closeTimer.current) window.clearTimeout(closeTimer.current); }} onMouseLeave={scheduleHide}>
-					<SentBindingPanel binding={hovered.binding} anchor={hovered.anchor} />
+					<SentBindingPanel binding={hovered.binding} anchor={hovered.anchor} onOpenFile={onOpenFile} />
 				</span>
 			) : null}
 		</>
@@ -353,12 +372,14 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl }: {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment }: {
 	message: ChatMessage;
 	showChannel?: boolean;
 	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
 	 *  a prop so this module stays store/api-free for showcase replay. */
 	resolveAttachmentUrl?: AttachmentUrlResolver;
+	/** Prefer the host app's workspace preview when available. */
+	onOpenAttachment?: AttachmentOpenHandler;
 }) {
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
@@ -398,8 +419,9 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 					{message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0) ? (
 						<UserAttachmentContent
 							content={message.content.trim()}
-							attachments={message.attachments}
-							resolveUrl={resolveAttachmentUrl}
+								attachments={message.attachments}
+								resolveUrl={resolveAttachmentUrl}
+								onOpenFile={onOpenAttachment}
 						/>
 					) : (
 						message.content.trim()

@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { logger } from "../logger.js";
 import { resolveContainedPath } from "../utils/path-safety.js";
+import { normalizeWorkspaceRelativePath } from "./file-helpers.js";
 
 /**
  * Structured chat attachments (便捷输入 / plain file attachments).
@@ -43,11 +44,13 @@ const MAX_LOOSE = 64;
 function parseRef(raw: unknown): AttachmentRef | null {
 	if (!raw || typeof raw !== "object") return null;
 	const record = raw as Record<string, unknown>;
-	if (typeof record.path !== "string" || !record.path.trim()) return null;
+	if (typeof record.path !== "string") return null;
+	const path = normalizeWorkspaceRelativePath(record.path);
+	if (!path) return null;
 	const kind = typeof record.kind === "string" ? record.kind : "file";
 	const source = record.source === "upload" ? "upload" : "workspace";
 	return {
-		path: record.path.trim(),
+		path,
 		kind: (["pdf", "doc", "xls", "ppt", "image", "file"] as const).includes(kind as AttachmentFileKind)
 			? (kind as AttachmentFileKind)
 			: "file",
@@ -113,20 +116,26 @@ export function validateChatAttachments(
 
 	const bindings = attachments.bindings
 		.map((binding) => {
-			const files = binding.files.filter((file) => {
-				if (isUsable(file.path)) return true;
-				logger.warn({ path: file.path, word: binding.word }, "chat attachment binding dropped: file missing or outside workspace");
-				return false;
-			});
+			const files = binding.files
+				.map((file) => {
+					const path = normalizeWorkspaceRelativePath(file.path);
+					if (isUsable(path)) return { ...file, path };
+					logger.warn({ path: file.path, word: binding.word }, "chat attachment binding dropped: file missing or outside workspace");
+					return null;
+				})
+				.filter((file): file is AttachmentRef => file !== null);
 			return files.length > 0 ? { ...binding, files } : null;
 		})
 		.filter((binding): binding is AttachmentBinding => binding !== null);
 
-	const loose = attachments.loose.filter((file) => {
-		if (isUsable(file.path)) return true;
-		logger.warn({ path: file.path }, "chat loose attachment dropped: file missing or outside workspace");
-		return false;
-	});
+	const loose = attachments.loose
+		.map((file) => {
+			const path = normalizeWorkspaceRelativePath(file.path);
+			if (isUsable(path)) return { ...file, path };
+			logger.warn({ path: file.path }, "chat loose attachment dropped: file missing or outside workspace");
+			return null;
+		})
+		.filter((file): file is AttachmentRef => file !== null);
 
 	return { bindings, loose };
 }
@@ -139,10 +148,10 @@ export function validateChatAttachments(
  */
 export function buildAttachmentContext(attachments: ChatAttachments): string {
 	const bindingLines = attachments.bindings.map((binding) => {
-		const files = binding.files.map((file) => `./${file.path}`).join("、");
+		const files = binding.files.map((file) => file.path).join("、");
 		return `- 「${binding.word}」→ ${files}`;
 	});
-	const looseLines = attachments.loose.map((file) => `- ./${file.path}`);
+	const looseLines = attachments.loose.map((file) => `- ${file.path}`);
 	if (bindingLines.length === 0 && looseLines.length === 0) return "";
 
 	const sections: string[] = [];
@@ -152,12 +161,12 @@ export function buildAttachmentContext(attachments: ChatAttachments): string {
 	if (looseLines.length > 0) {
 		sections.push(`普通附件：\n${looseLines.join("\n")}`);
 	}
-	return `[用户本轮附带文件（当前工作区相对路径，可直接用文件工具按路径读取）：\n${sections.join("\n")}]`;
+	return `[用户本轮附带文件（路径均为当前工作区根目录下的相对路径；调用文件工具时请原样使用，不要添加工作区绝对路径、/ 或 ./ 前缀）：\n${sections.join("\n")}]`;
 }
 
 /** Path existence helper kept for callers that only need a boolean probe. */
 export function attachmentPathExists(workspaceRoot: string, path: string): boolean {
-	const resolved = resolveContainedPath(workspaceRoot, path);
+	const resolved = resolveContainedPath(workspaceRoot, normalizeWorkspaceRelativePath(path));
 	if (!resolved) return false;
 	return existsSync(resolved);
 }

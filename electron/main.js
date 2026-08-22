@@ -91,6 +91,17 @@ function isCloseDialogCopy(value) {
     && typeof buttons.cancel === "string";
 }
 
+ipcMain.handle("inno-open-path", (event, path) => {
+  if (typeof path !== "string"
+    || path.length === 0
+    || !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents) {
+    return "";
+  }
+  return shell.openPath(path);
+});
+
 ipcMain.on("inno-close-dialog-copy", (_event, copy) => {
   if (!isCloseDialogCopy(copy)) return;
   closeDialogCopy = {

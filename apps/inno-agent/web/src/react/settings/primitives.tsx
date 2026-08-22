@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
  */
 
 export function SettingsSection({ title, description, children }: {
-	title: string;
+	title: ReactNode;
 	description?: string;
 	children: ReactNode;
 }) {
@@ -30,7 +30,7 @@ export function SettingsCard({ children, className = "" }: {
 }
 
 export function SettingsRow({ label, description, control, disabled }: {
-	label: string;
+	label: ReactNode;
 	description?: string;
 	control: ReactNode;
 	disabled?: boolean;

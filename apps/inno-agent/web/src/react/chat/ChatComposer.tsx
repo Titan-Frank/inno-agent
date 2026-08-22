@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { Paperclip, X, ArrowUp, Square, RotateCcw, Image, FileText, Check, ChevronDown, Settings2, HardDriveUpload } from "lucide-react";
+import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Paperclip, X, ArrowUp, Square, RotateCcw, Image, ScrollText, Check, ChevronDown, ChevronUp, Settings2, HardDriveUpload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Spinner } from "../ui/Spinner.js";
+import { FileName } from "../FileName.js";
+import { FileTypeIcon } from "../FileTypeIcon.js";
 import type { InnoModelInfo } from "../../types/settings.js";
 import type { PreparedInlineImage, PendingPasteBlock } from "./composer-utils.js";
-import { KIND_COLORS, kindFromName } from "./smart-input/kinds.js";
+import { kindFromName } from "./smart-input/kinds.js";
 import { ModelProviderIcon } from "./ModelProviderIcon.js";
 
 export interface ChatComposerModelState {
@@ -23,6 +25,7 @@ export interface ChatComposerProps {
 	defaultValue: string;
 	inlineImages: PreparedInlineImage[];
 	pasteBlocks: PendingPasteBlock[];
+	uploadChips: ReactNode;
 	modelState: ChatComposerModelState;
 	modelOptions: InnoModelInfo[];
 	currentModel?: InnoModelInfo;
@@ -54,7 +57,7 @@ export interface ChatComposerProps {
 	onOpenModelSettings: () => void;
 	onToggleAttachMenu: () => void;
 	onCloseAttachMenu: () => void;
-	onPickWorkspaceFile: (path: string) => void;
+	onPickWorkspaceFiles: (paths: string[]) => void;
 	onDropFiles: (files: File[]) => void;
 	onSend: () => void;
 	onStop: () => void;
@@ -70,6 +73,7 @@ export function ChatComposer({
 	defaultValue,
 	inlineImages,
 	pasteBlocks,
+	uploadChips,
 	modelState,
 	modelOptions,
 	currentModel,
@@ -101,7 +105,7 @@ export function ChatComposer({
 	onOpenModelSettings,
 	onToggleAttachMenu,
 	onCloseAttachMenu,
-	onPickWorkspaceFile,
+	onPickWorkspaceFiles,
 	onDropFiles,
 	onSend,
 	onStop,
@@ -148,16 +152,71 @@ export function ChatComposer({
 
 	const isOsFileDrag = (event: ReactDragEvent<HTMLElement>): boolean =>
 		Array.from(event.dataTransfer?.types ?? []).includes("Files");
+	const isWorkspaceFileDrag = (event: ReactDragEvent<HTMLElement>): boolean =>
+		Array.from(event.dataTransfer?.types ?? []).includes("application/x-inno-file");
+	const isSmartBubbleDropTarget = (event: ReactDragEvent<HTMLElement>): boolean =>
+		event.target instanceof Element && Boolean(event.target.closest(".inno-smart-chip"));
+	const readWorkspaceFilePaths = (event: ReactDragEvent<HTMLElement>): string[] => {
+		const raw = event.dataTransfer?.getData("application/x-inno-file");
+		if (!raw) return [];
+		try {
+			const parsed = JSON.parse(raw) as {
+				path?: unknown;
+				source?: unknown;
+				items?: unknown;
+			};
+			const candidates = Array.isArray(parsed.items) ? parsed.items : [parsed];
+			return candidates.flatMap((candidate) => {
+				if (!candidate || typeof candidate !== "object") return [];
+				const item = candidate as { path?: unknown; source?: unknown };
+				return item.source === "workspace" && typeof item.path === "string" ? [item.path] : [];
+			});
+		} catch {
+			return [];
+		}
+	};
 
 	const handleComposerDragOver = (event: ReactDragEvent<HTMLElement>) => {
-		if (!isOsFileDrag(event)) return;
+		if (!isOsFileDrag(event) && !isWorkspaceFileDrag(event)) return;
 		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		setOsFileDragOver(true);
 	};
 
 	const handleComposerDrop = (event: ReactDragEvent<HTMLElement>) => {
+		if (isWorkspaceFileDrag(event)) {
+			// A file that already became a bubble is still physically held until
+			// mouse-up. Do not add that consumed drag to the loose attachment row.
+			if (document.body.classList.contains("inno-smart-drag-consumed")) {
+				event.preventDefault();
+				event.stopPropagation();
+				document.body.classList.remove("inno-smart-drag-consumed");
+				setOsFileDragOver(false);
+				return;
+			}
+			// Existing bubbles own their drop behavior; blank composer space adds
+			// the workspace file to the attachment row above the input.
+			if (isSmartBubbleDropTarget(event)) {
+				setOsFileDragOver(false);
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			setOsFileDragOver(false);
+			const paths = readWorkspaceFilePaths(event);
+			if (paths.length > 0) onPickWorkspaceFiles(paths);
+			return;
+		}
 		if (!isOsFileDrag(event)) return;
+		// The composer listens in both capture and bubble phases. Handle a
+		// normal drop here once, otherwise the same local file is appended twice.
+		// A smart bubble owns drops on itself so it can bind the file instead.
+		if (isSmartBubbleDropTarget(event)) {
+			setOsFileDragOver(false);
+			return;
+		}
 		event.preventDefault();
+		event.stopPropagation();
 		setOsFileDragOver(false);
 		const files = Array.from(event.dataTransfer?.files ?? []);
 		if (files.length > 0) onDropFiles(files);
@@ -167,7 +226,10 @@ export function ChatComposer({
 		inlineImages.length > 0 ? (
 			<div className="flex flex-wrap gap-1.5">
 				{inlineImages.map((img, index) => (
-					<span key={`${img.name}-${index}`} className="relative inline-flex items-center gap-1 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] p-1 shadow-sm">
+					<span key={`${img.name}-${index}`} className="inno-inline-image-card">
+						<span className="inno-inline-image-preview" aria-hidden="true">
+							<img src={img.previewUrl} alt="" />
+						</span>
 						<img src={img.previewUrl} alt={img.name} className="h-12 w-12 rounded object-cover" />
 						<button
 							type="button"
@@ -184,37 +246,52 @@ export function ChatComposer({
 	);
 
 	const renderPasteBlock = (block: PendingPasteBlock) => {
-		const preview = block.text.split(/\r\n|\r|\n/)[0].trim() || t("common.pasteCardTitle");
+		const compactText = block.text.replace(/\s+/g, " ").trim();
+		const preview = Array.from(compactText).slice(0, 16).join("") || "…";
+		const hasMoreText = Array.from(compactText).length > 16;
+		const activate = () => onShowPasteInTextField(block.id);
 		return (
-			<div key={block.id} className="inno-paste-card" role="group" aria-label={t("common.pasteCardTitle")}>
-				<span className="inno-paste-card-icon" aria-hidden="true">
-					<FileText size={16} />
+			<div
+				key={block.id}
+				className="inno-paste-card"
+				role="button"
+				tabIndex={0}
+				aria-label={`${preview}${hasMoreText ? "…" : ""} · ${t("common.pasteCardCharCount", "{{count}} 字", { count: block.text.length })}`}
+				onClick={activate}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						activate();
+					}
+				}}
+				>
+					<span className="inno-paste-card-icon" aria-hidden="true">
+						<ScrollText size={14} />
 				</span>
-				<div className="min-w-0 flex-1">
-					<div className="truncate text-xs text-[var(--inno-text)]" title={preview}>{preview}</div>
-					<div className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--inno-text-muted)]">
-						<button type="button" className="inno-paste-card-action" onClick={() => onShowPasteInTextField(block.id)}>
-							{t("common.pasteCardShowInTextField")}
-						</button>
-						<span aria-hidden="true">›</span>
-					</div>
+				<div className="inno-paste-card-copy" title={compactText}>
+					<span className="inno-paste-card-preview">{preview}{hasMoreText ? "…" : ""}</span>
+					<span className="inno-paste-card-count">· {t("common.pasteCardCharCount", "{{count}} 字", { count: block.text.length })}</span>
 				</div>
 				<button
 					type="button"
 					className="inno-paste-card-remove"
 					title={t("common.pasteCardRemove")}
 					aria-label={t("common.pasteCardRemove")}
-					onClick={() => onRemovePasteBlock(block.id)}
+					onClick={(event) => {
+						event.stopPropagation();
+						onRemovePasteBlock(block.id);
+					}}
 				>
-					<X size={14} />
+					<X size={12} />
 				</button>
 			</div>
 		);
 	};
 
 	const renderComposerAttachments = () => (
-		inlineImages.length > 0 || pasteBlocks.length > 0 ? (
-			<div className="inno-composer-attachments mb-1 flex min-w-0 flex-wrap items-start gap-2">
+		uploadChips || inlineImages.length > 0 || pasteBlocks.length > 0 ? (
+			<div className="inno-composer-attachments mb-0 flex min-w-0 flex-wrap items-start gap-2">
+				{uploadChips}
 				{renderInlineImagePreviews()}
 				{pasteBlocks.map(renderPasteBlock)}
 			</div>
@@ -264,12 +341,12 @@ export function ChatComposer({
 							title={file.path}
 							onClick={() => {
 								onCloseAttachMenu();
-								onPickWorkspaceFile(file.path);
+								onPickWorkspaceFiles([file.path]);
 							}}
 						>
 							<span className="flex min-w-0 items-center gap-2">
-								<span aria-hidden="true" className="inno-smart-type-dot shrink-0" style={{ backgroundColor: KIND_COLORS[kindFromName(file.name)] }} />
-								<span className="min-w-0 truncate">{file.name}</span>
+								<FileTypeIcon kind={kindFromName(file.name)} size={14} />
+								<FileName name={file.name} className="min-w-0 flex-1" />
 							</span>
 						</button>
 					))}
@@ -292,7 +369,7 @@ export function ChatComposer({
 			>
 				{modelState.defaultProvider ? <ModelProviderIcon provider={currentModel?.provider ?? modelState.defaultProvider} /> : null}
 				<span className="whitespace-nowrap">{currentModelLabel}</span>
-				<ChevronDown size={13} className="shrink-0" />
+				{modelPickerOpen ? <ChevronUp size={13} className="shrink-0" /> : <ChevronDown size={13} className="shrink-0" />}
 			</button>
 			{modelPickerOpen && modelOptions.length > 0 ? (
 				<div className="inno-composer-model-menu" role="menu" aria-label={t("chat.selectModel")}>
@@ -332,10 +409,12 @@ export function ChatComposer({
 	return (
 		<div
 			className={`inno-composer rounded-2xl p-2 ${osFileDragOver ? "is-osfile-over" : ""}`}
+			onDragOverCapture={handleComposerDragOver}
 			onDragOver={handleComposerDragOver}
 			onDragLeave={(event) => {
 				if (!event.currentTarget.contains(event.relatedTarget as Node)) setOsFileDragOver(false);
 			}}
+			onDropCapture={handleComposerDrop}
 			onDrop={handleComposerDrop}
 		>
 			<input ref={fileInputRef} id="file-input" type="file" className="hidden" multiple onChange={onFiles} />

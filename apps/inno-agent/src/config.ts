@@ -71,15 +71,22 @@ export interface InnoSimpleModeConfig {
  * sent to the agent as structured attachments instead of relying on the model
  * to guess which file a demonstrative ("这份") refers to.
  *
- * A rule matches by literal keyword only (no regex/segments). Each rule maps
- * one keyword to a set of real file extensions; a bubble accepts exactly the
- * files whose extension is in that set. Users manage rules in Settings →
- * General (add / rename / edit extensions / toggle / delete).
+ * A rule matches by literal keyword only (no regex/segments). Each rule can
+ * either map one keyword to a set of allowed file extensions, or accept all
+ * file formats with an optional exclusion list. Users manage rules in
+ * Settings → General (add / rename / edit extensions / toggle / delete).
  */
 export interface InnoSmartInputRule {
 	id: string;
+	/** Built-in rules do not expose the all-formats mode in the UI. */
+	isPreset: boolean;
 	keyword: string;
+	/** Allowed extensions when `allExtensions` is false. */
 	extensions: string[];
+	/** Accept every file format before applying `excludeExtensions`. */
+	allExtensions: boolean;
+	/** Extensions rejected after the allow-list/all-formats check. */
+	excludeExtensions: string[];
 	enabled: boolean;
 }
 
@@ -92,17 +99,22 @@ export interface InnoSmartInputConfig {
 
 /** Default keyword rules — common document nouns mapped to real extensions. */
 export const DEFAULT_SMART_INPUT_RULES: InnoSmartInputRule[] = [
-	{ id: "smart-rule-pdf", keyword: "pdf", extensions: [".pdf"], enabled: true },
-	{ id: "smart-rule-word", keyword: "word", extensions: [".doc", ".docx"], enabled: true },
-	{ id: "smart-rule-excel", keyword: "excel", extensions: [".xls", ".xlsx"], enabled: true },
-	{ id: "smart-rule-ppt", keyword: "ppt", extensions: [".ppt", ".pptx"], enabled: true },
+	{ id: "smart-rule-pdf", isPreset: true, keyword: "pdf", extensions: [".pdf"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-word", isPreset: true, keyword: "word", extensions: [".doc", ".docx"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-excel", isPreset: true, keyword: "excel", extensions: [".xls", ".xlsx"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-ppt", isPreset: true, keyword: "ppt", extensions: [".ppt", ".pptx"], allExtensions: false, excludeExtensions: [], enabled: true },
 	{
 		id: "smart-rule-image",
+		isPreset: true,
 		keyword: "图片",
 		extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"],
+		allExtensions: false,
+		excludeExtensions: [],
 		enabled: true,
 	},
 ];
+
+const DEFAULT_SMART_INPUT_RULE_IDS = new Set(DEFAULT_SMART_INPUT_RULES.map((rule) => rule.id));
 
 /**
  * MCP (Model Context Protocol) support via the pi-mcp-adapter extension.
@@ -356,30 +368,44 @@ export function normalizeSmartInputExtension(raw: string): string | null {
 
 /**
  * Normalize smart-input rules: trim keywords, drop empty/duplicate keywords
- * (first occurrence wins), normalize/dedupe extensions (a rule whose extension
- * list ends up empty keeps its normalized keyword but matches nothing), and
- * backfill stable ids for rules saved without one.
+ * (first occurrence wins), normalize/dedupe allowed and excluded extensions,
+ * and backfill stable ids for rules saved without one. A rule with no allowed
+ * extensions is valid but matches nothing until the user either adds one or
+ * enables all-formats mode.
  */
 export function normalizeSmartInputConfig(
 	smartInput: Partial<InnoSmartInputConfig> | undefined,
 ): InnoSmartInputConfig {
 	const seenKeywords = new Set<string>();
 	const seenIds = new Set<string>();
+	const normalizeExtensions = (values: unknown): string[] => Array.from(new Set(
+		(Array.isArray(values) ? values : [])
+			.map((ext) => normalizeSmartInputExtension(String(ext)))
+			.filter((ext): ext is string => ext !== null),
+	));
 	const rules: InnoSmartInputRule[] = [];
 	for (const rule of smartInput?.rules ?? []) {
 		const keyword = (rule.keyword ?? "").trim();
 		if (!keyword || seenKeywords.has(keyword)) continue;
-		const extensions: string[] = [];
-		for (const ext of rule.extensions ?? []) {
-			const normalized = normalizeSmartInputExtension(String(ext));
-			if (normalized && !extensions.includes(normalized)) extensions.push(normalized);
-		}
+		const extensions = normalizeExtensions(rule.extensions);
+		const excludeExtensions = normalizeExtensions(rule.excludeExtensions);
 		let id = typeof rule.id === "string" && rule.id.trim() ? rule.id.trim() : "";
 		if (!id || seenIds.has(id)) id = `smart-rule-${keyword}`;
 		if (seenIds.has(id)) id = `smart-rule-${keyword}-${rules.length}`;
+		// Older configs do not carry isPreset. Recognize the five stable built-in
+		// ids during migration, while treating other rules as user-created.
+		const isPreset = rule.isPreset === true || DEFAULT_SMART_INPUT_RULE_IDS.has(id);
 		seenKeywords.add(keyword);
 		seenIds.add(id);
-		rules.push({ id, keyword, extensions, enabled: rule.enabled !== false });
+		rules.push({
+			id,
+			isPreset,
+			keyword,
+			extensions,
+			allExtensions: !isPreset && rule.allExtensions === true,
+		excludeExtensions,
+		enabled: rule.enabled !== false,
+	});
 	}
 	return {
 		enabled: smartInput?.enabled === true,

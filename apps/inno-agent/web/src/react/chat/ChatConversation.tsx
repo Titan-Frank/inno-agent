@@ -31,11 +31,10 @@ interface ChatConversationProps {
 	onTouchStart: () => void;
 	onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 	onPauseAutoScroll: () => void;
-	uploadChips: ReactNode;
 	questionHint: ReactNode;
 	busyBlocker: ReactNode;
 	composer: ReactNode;
-	workspaceContext: ReactNode;
+	onOpenAttachment: (file: AttachmentRef) => void;
 	wsError: string;
 }
 
@@ -47,11 +46,10 @@ export function ChatConversation({
 	onTouchStart,
 	onPointerDown,
 	onPauseAutoScroll,
-	uploadChips,
 	questionHint,
 	busyBlocker,
 	composer,
-	workspaceContext,
+	onOpenAttachment,
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
@@ -104,7 +102,12 @@ export function ChatConversation({
 								const turnIndex = turnIndexByStartMessage.get(index);
 								return (
 									<div key={`${message.timestamp}-${index}`} data-conversation-turn={turnIndex}>
-										<MessageBubble message={message} showChannel={multiChannel} resolveAttachmentUrl={resolveAttachmentUrl} />
+										<MessageBubble
+											message={message}
+											showChannel={multiChannel}
+											resolveAttachmentUrl={resolveAttachmentUrl}
+											onOpenAttachment={onOpenAttachment}
+										/>
 									</div>
 								);
 							});
@@ -153,13 +156,11 @@ export function ChatConversation({
 
 			<div className="shrink-0 border-t border-[var(--inno-border)] bg-[var(--inno-surface)] p-3">
 				<div className="mx-auto max-w-3xl">
-					{uploadChips}
 					{questionHint}
 					{busyBlocker}
 					{todoTasks ? <TodoWidget tasks={todoTasks} /> : null}
 					{wsError ? <p className="mb-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
 					{composer}
-					{workspaceContext ? <div className="mt-2">{workspaceContext}</div> : null}
 				</div>
 			</div>
 		</section>

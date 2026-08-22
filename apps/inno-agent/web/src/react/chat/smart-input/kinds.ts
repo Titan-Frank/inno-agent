@@ -1,4 +1,5 @@
 import type { AttachmentFileKind } from "../../../types/chat.js";
+import type { SmartInputRule } from "../../../types/settings.js";
 
 /**
  * Shared file-kind vocabulary for smart input (便捷输入) attachments: the
@@ -66,6 +67,38 @@ export function kindFromName(name: string): AttachmentFileKind {
 	return kindFromExtension(extensionOf(base));
 }
 
+/** Kind used for a rule preview. All-format rules use the neutral file color. */
+export function kindFromRule(rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions">): AttachmentFileKind {
+	return rule.isPreset !== true && rule.allExtensions ? "file" : kindFromExtension(rule.extensions[0] ?? "");
+}
+
+/**
+ * Stable identity for a rule's accepted file formats. Extension order is not
+ * meaningful, and built-in rules ignore the user-only all-formats flag.
+ * Exclusions are part of the identity because they change which files a
+ * bubble can receive.
+ */
+export function ruleFormatKey(
+	rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+): string {
+	const normalize = (values: string[] | undefined): string => Array.from(new Set(
+		(values ?? [])
+			.map((value) => value.trim().toLowerCase())
+			.filter(Boolean)
+			.map((value) => value.startsWith(".") ? value : `.${value}`),
+	)).sort().join(",");
+	const allExtensions = rule.isPreset !== true && rule.allExtensions === true;
+	return `${allExtensions ? "*" : normalize(rule.extensions)}|!${normalize(rule.excludeExtensions)}`;
+}
+
+/** Two bubbles can fuse only when their file-format contracts are identical. */
+export function sameRuleFormat(
+	a: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+	b: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+): boolean {
+	return ruleFormatKey(a) === ruleFormatKey(b);
+}
+
 /** true when `name`'s extension is in `extensions` (literal, dot-prefixed). */
 export function nameMatchesExtensions(name: string, extensions: string[]): boolean {
 	const ext = extensionOf(name);
@@ -73,4 +106,14 @@ export function nameMatchesExtensions(name: string, extensions: string[]): boole
 		const normalized = candidate.startsWith(".") ? candidate.toLowerCase() : `.${candidate.toLowerCase()}`;
 		return normalized === ext;
 	});
+}
+
+/** Apply a rule's allow-all/allow-list mode, then reject excluded extensions. */
+export function nameMatchesRule(
+	name: string,
+	rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+): boolean {
+	if (nameMatchesExtensions(name, rule.excludeExtensions ?? [])) return false;
+	if (rule.isPreset !== true && rule.allExtensions === true) return true;
+	return nameMatchesExtensions(name, rule.extensions ?? []);
 }

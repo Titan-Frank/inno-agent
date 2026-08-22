@@ -20,6 +20,16 @@ export function safeJoinReal(baseDir: string, userPath: string): string | null {
 	return resolveContainedPath(baseDir, userPath);
 }
 
+/**
+ * Normalize a path supplied by the workspace/file UI without turning an
+ * absolute path into a workspace-relative one. Workspace APIs use relative
+ * paths; a leading `./` is presentation noise, while a leading `/` must stay
+ * absolute so containment checks can reject it.
+ */
+export function normalizeWorkspaceRelativePath(filePath: string): string {
+	return filePath.trim().replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
+}
+
 export function slugifySkillName(value: string): string {
 	const slug = value
 		.toLowerCase()

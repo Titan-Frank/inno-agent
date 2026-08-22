@@ -401,6 +401,9 @@ describe("server smoke", () => {
 			writeFileSync(join(root, "hello.txt"), "hello");
 			const ok = await api("/api/workspace/file?path=hello.txt");
 			expect(ok.status).toBe(200);
+			const prefixed = await api("/api/workspace/file?path=.%2Fhello.txt");
+			expect(prefixed.status).toBe(200);
+			expect((await prefixed.json() as { path: string }).path).toBe("hello.txt");
 		} finally {
 			for (const name of planted) {
 				rmSync(join(root, name), { recursive: true, force: true });

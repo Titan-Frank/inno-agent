@@ -137,11 +137,18 @@ export interface WebAccessSettingsPayload {
 	values?: Record<string, string>;
 }
 
-/** One literal keyword → set of real file extensions (smart input bubbles). */
+/** One literal keyword → allowed file formats with optional exclusions. */
 export interface SmartInputRule {
 	id: string;
+	/** Built-in rules do not expose the all-formats mode in the UI. */
+	isPreset: boolean;
 	keyword: string;
+	/** Allowed extensions when `allExtensions` is false. */
 	extensions: string[];
+	/** Accept every file format before applying `excludeExtensions`. */
+	allExtensions: boolean;
+	/** Extensions rejected after the allow-list/all-formats check. */
+	excludeExtensions: string[];
 	enabled: boolean;
 }
 

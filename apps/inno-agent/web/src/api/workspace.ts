@@ -14,7 +14,7 @@ export async function getWorkspaceTree(workspaceId?: string): Promise<WorkspaceT
 }
 
 export async function getWorkspaceFile(path: string, workspaceId?: string, forceText = false): Promise<WorkspaceFileDetail> {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	if (forceText) params.set("forceText", "1");
 	return apiFetch<WorkspaceFileDetail>(`/api/workspace/file?${params.toString()}`);
@@ -105,7 +105,7 @@ export async function uploadWorkspaceSkill(fileName: string, dataBase64: string,
 
 /** Build the raw URL for a workspace file, optionally forcing a download. */
 export function workspaceFileUrl(path: string, workspaceId?: string, download = false): string {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	if (download) params.set("download", "1");
 	return `/api/workspace/raw?${params.toString()}`;
@@ -122,9 +122,18 @@ export function workspaceFolderZipUrl(path: string, workspaceId?: string): strin
 
 /** Fetch a pptx rendered to per-slide SVG. */
 export async function getPptxPreview(path: string, workspaceId?: string): Promise<PptxPreviewResult> {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	return apiFetch<PptxPreviewResult>(`/api/workspace/pptx-preview?${params.toString()}`);
+}
+
+/**
+ * Keep workspace paths canonical at the browser/API boundary. `./` and
+ * Windows separators are harmless input noise; a leading `/` is preserved so
+ * the server can reject an absolute path instead of silently rebasing it.
+ */
+export function normalizeWorkspaceRelativePath(path: string): string {
+	return path.trim().replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
 }
 
 // ---- HTML resource inlining for srcdoc previews ----

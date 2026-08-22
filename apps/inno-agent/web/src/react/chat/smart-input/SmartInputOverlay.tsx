@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Check, Plus, RotateCcw, X } from "lucide-react";
+import { Check, ListChecks, Plus, RotateCcw, X } from "lucide-react";
 import type { EngineAttachmentItem, SmartInputEngine } from "./engine.js";
-import { KIND_COLORS, KIND_LABEL_KEYS, kindFromName, nameMatchesExtensions } from "./kinds.js";
+import { KIND_LABEL_KEYS, kindFromName, kindFromRule, nameMatchesRule } from "./kinds.js";
 import type { PendingUpload } from "../composer-utils.js";
+import { FileName } from "../../FileName.js";
+import { FileTypeIcon } from "../../FileTypeIcon.js";
+import { ContextMenu, type ContextMenuItem } from "../../ui/ContextMenu.js";
+import { PopoverSurface } from "../../ui/PopoverSurface.js";
 
 /**
  * Floating panels for the smart-input composer: status panel (bound files,
@@ -29,9 +33,13 @@ interface SmartInputOverlayProps {
 	onClose: () => void;
 	onOpenPanel: (panel: SmartPanelState) => void;
 	workspaceFiles: Array<{ name: string; path: string }>;
+	workspaceFilesLoading: boolean;
 	attachments: PendingUpload[];
 	takeAttachment: (path: string) => EngineAttachmentItem | undefined;
 	onWorkspaceHighlight: (paths: string[] | null) => void;
+	/** Increments when bound files change without changing the slot count. */
+	refreshKey: number;
+	onOpenFilePreview: (path: string) => void;
 }
 
 const AUTO_CLOSE_MS = 260;
@@ -42,22 +50,26 @@ function rectOf(el: HTMLElement): SmartPanelState["anchor"] {
 	return { left: rect.left, bottom: rect.bottom };
 }
 
-function chipFor(engine: SmartInputEngine | null, slotId: number): HTMLElement | null {
-	void engine;
-	return document.querySelector<HTMLElement>(`.inno-smart-chip[data-slot-id="${slotId}"]`);
+function chipFor(slotId: number): HTMLElement | null {
+	const chips = Array.from(document.querySelectorAll<HTMLElement>(`.inno-smart-chip[data-slot-id="${slotId}"]`));
+	return chips.find((chip) => {
+		const rect = chip.getBoundingClientRect();
+		return rect.width > 0 && rect.height > 0;
+	}) ?? null;
 }
 
-export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspaceFiles, attachments, takeAttachment, onWorkspaceHighlight }: SmartInputOverlayProps) {
+export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspaceFiles, workspaceFilesLoading, attachments, takeAttachment, onWorkspaceHighlight, refreshKey, onOpenFilePreview }: SmartInputOverlayProps) {
 	const { t } = useTranslation();
 	const panelRef = useRef<HTMLDivElement | null>(null);
 	const closeTimer = useRef<number | null>(null);
 	const pinned = useRef(false);
 	const pinPos = useRef({ x: 0, y: 0 });
-	const justOpened = useRef(false);
+	const menuNextPanel = useRef<SmartPanelState | null>(null);
 	const [multiSelect, setMultiSelect] = useState(false);
 	const [picked, setPicked] = useState<Map<string, string>>(new Map());
 
 	const slot = panel ? engine?.slots.find((entry) => entry.id === panel.slotId) ?? null : null;
+	const boundFileCount = slot?.files.length ?? 0;
 
 	const cancelClose = useCallback(() => {
 		if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
@@ -85,20 +97,51 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		pinPos.current = { x: event.clientX, y: event.clientY };
 	}, []);
 
-	// Clamp after mount so measurements are real; runs for every panel kind.
-	useEffect(() => {
-		if (!panel || !panelRef.current) return;
-		justOpened.current = true;
+	// Clamp after layout so measurements are real. Re-read the currently visible
+	// chip instead of trusting a stale zero-sized anchor from a remounted input.
+	const repositionPanel = useCallback(() => {
+		if (!panel || panel.kind === "menu" || !panelRef.current) return;
 		cancelClose();
 		const el = panelRef.current;
-		const desiredLeft = panel.kind === "menu" ? panel.x ?? panel.anchor.left : panel.anchor.left;
-		const desiredTop = panel.kind === "menu" ? panel.y ?? panel.anchor.bottom + 6 : panel.anchor.bottom + 6;
+		const chip = chipFor(panel.slotId);
+		const chipRect = chip?.getBoundingClientRect();
+		// No visible chip (engine is mid-sync rebuilding the hit layer): keep the
+		// panel where it is instead of snapping to the stale open-time anchor.
+		if (!chipRect) return;
+		const desiredLeft = chipRect.left;
+		const desiredTop = chipRect.bottom + 4;
 		const width = el.offsetWidth;
 		const height = el.offsetHeight;
 		el.style.left = `${Math.max(8, Math.min(desiredLeft, window.innerWidth - width - 8))}px`;
 		el.style.top = `${Math.max(8, Math.min(desiredTop, window.innerHeight - height - 8))}px`;
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [panel?.kind, panel?.slotId]);
+	}, [cancelClose, panel?.kind, panel?.slotId]);
+
+	// The attachment row can wrap to another line without changing the panel
+	// state. Observe the actual composer and chip geometry so the portal follows
+	// the bubble after that layout shift, not only after a file-count change.
+	// ResizeObserver already batches callbacks before paint, so measurements
+	// here are real — no extra rAF deferral is needed.
+	useLayoutEffect(() => {
+		if (!panel || panel.kind === "menu" || !panelRef.current) return;
+		repositionPanel();
+
+		const chip = chipFor(panel.slotId);
+		const composer = chip?.closest<HTMLElement>(".inno-composer")
+			?? document.querySelector<HTMLElement>(".inno-composer");
+		const attachments = composer?.querySelector<HTMLElement>(".inno-composer-attachments");
+		const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(repositionPanel);
+		const observed = new Set<Element>();
+		for (const target of [panelRef.current, chip, composer, attachments]) {
+			if (!target || observed.has(target)) continue;
+			observed.add(target);
+			resizeObserver?.observe(target);
+		}
+		window.addEventListener("resize", repositionPanel);
+		return () => {
+			resizeObserver?.disconnect();
+			window.removeEventListener("resize", repositionPanel);
+		};
+	}, [boundFileCount, engine, panel, refreshKey, repositionPanel]);
 
 	// Reset transient state when the panel closes.
 	useEffect(() => {
@@ -110,21 +153,22 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [panel]);
 
-	// Outside click / capture scroll / ESC close, with the opening click swallowed.
+	// Outside click / capture scroll / ESC close.
 	useEffect(() => {
-		if (!panel) return;
+		if (!panel || panel.kind === "menu") return;
 		const onPointerDown = (event: PointerEvent) => {
-			if (justOpened.current) {
-				justOpened.current = false;
-				return;
-			}
 			const target = event.target as Node;
 			if (target.isConnected === false) return;
 			if (panelRef.current?.contains(target)) return;
 			if ((target as HTMLElement).closest?.(".inno-smart-chip")) return;
 			onClose();
 		};
-		const onScroll = () => onClose();
+		const onScroll = (event: Event) => {
+			// Scrolling the file list is an in-panel interaction. Only scrolling
+			// the surrounding page should dismiss the floating panel.
+			if (panelRef.current?.contains(event.target as Node)) return;
+			onClose();
+		};
 		const onKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape") onClose();
 		};
@@ -154,32 +198,65 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 
 	if (!panel || !engine || !slot) return null;
 
-	const primaryKind = kindFromName(`x${slot.rule.extensions[0] ?? ""}`);
+	const primaryKind = kindFromRule(slot.rule);
 	const kindLabel = t(KIND_LABEL_KEYS[primaryKind]);
-	const ruleAccepts = (name: string) => nameMatchesExtensions(name, slot.rule.extensions);
+	const pickFileTitle = primaryKind === "file"
+		? t("chat.smartInput.pickGenericFileTitle", "选择「{{kind}}」文件（工作区）", { kind: kindLabel })
+		: t("chat.smartInput.pickFileTitle", "选择{{kind}}文件（工作区）", { kind: kindLabel });
+	const ruleAccepts = (name: string) => nameMatchesRule(name, slot.rule);
+	const acceptedTypeLabel = (() => {
+		const normalizeExtension = (value: string): string => {
+			const normalized = value.trim().toLowerCase();
+			if (!normalized) return "";
+			return normalized.startsWith(".") ? normalized : `.${normalized}`;
+		};
+		const excluded = new Set((slot.rule.excludeExtensions ?? []).map(normalizeExtension).filter(Boolean));
+		if (slot.rule.isPreset !== true && slot.rule.allExtensions) {
+			const excludedLabel = Array.from(excluded).join("、");
+			return excludedLabel
+				? `${t("chat.smartInput.allFileTypes", "所有文件类型")}（${t("chat.smartInput.excludedFileTypes", "排除 {{types}}", { types: excludedLabel })}）`
+				: t("chat.smartInput.allFileTypes", "所有文件类型");
+		}
+		const extensions = Array.from(new Set((slot.rule.extensions ?? []).map(normalizeExtension).filter(Boolean)))
+			.filter((extension) => !excluded.has(extension));
+		return extensions.length > 0
+			? extensions.join("、")
+			: t("chat.smartInput.noAcceptedFileTypes", "无");
+	})();
+	const statusColumnCount = Math.min(2, Math.max(1, slot.files.length));
 
+	const panelFor = (kind: "status" | "fill"): SmartPanelState | null => {
+		const chip = chipFor(slot.id);
+		return chip ? { kind, slotId: slot.id, anchor: rectOf(chip) } : null;
+	};
 	const openStatus = () => {
-		const chip = chipFor(engine, slot.id);
-		if (chip) onOpenPanel({ kind: "status", slotId: slot.id, anchor: rectOf(chip) });
+		const next = panelFor("status");
+		if (next) onOpenPanel(next);
 	};
 	const openFill = () => {
-		const chip = chipFor(engine, slot.id);
-		if (chip) onOpenPanel({ kind: "fill", slotId: slot.id, anchor: rectOf(chip) });
+		const next = panelFor("fill");
+		if (next) onOpenPanel(next);
+	};
+	const switchPanel = (kind: "status" | "fill") => {
+		menuNextPanel.current = panelFor(kind);
 	};
 
 	const sourceLabel = (file: SmartInputEngine["slots"][number]["files"][number]) => {
 		if (file.source === "workspace") return t("chat.smartInput.sourceWorkspace", "工作区");
 		if (file.state === "failed") return t("chat.smartInput.uploadFailed", "失败");
-		if (file.state === "uploading") return `${Math.floor(file.pct)}%`;
-		if (file.state === "local") return t("chat.smartInput.sourceUploadPending", "待上传");
-		return t("chat.smartInput.sourceUpload", "本地上传");
+		return t("chat.smartInput.sourceUpload", "本地");
 	};
 
+	const boundPaths = new Set(slot.files.map((file) => file.path));
+	const attachedCandidates = attachments
+		.filter((item) => ruleAccepts(item.fileName) && !boundPaths.has(item.path))
+		.map((item) => ({ name: item.fileName, path: item.path, source: "attach" as const }));
+	const attachedPaths = new Set(attachedCandidates.map((file) => file.path));
 	const fillCandidates = [
-		...workspaceFiles.filter((file) => ruleAccepts(file.name)).map((file) => ({ name: file.name, path: file.path, source: "workspace" as const })),
-		...attachments
-			.filter((item) => item.source === "workspace" && ruleAccepts(item.fileName))
-			.map((item) => ({ name: item.fileName, path: item.path, source: "attach" as const })),
+		...workspaceFiles
+			.filter((file) => ruleAccepts(file.name) && !boundPaths.has(file.path) && !attachedPaths.has(file.path))
+			.map((file) => ({ name: file.name, path: file.path, source: "workspace" as const })),
+		...attachedCandidates,
 	];
 
 	const bindCandidate = (candidate: { name: string; path: string; source: string }) => {
@@ -192,47 +269,60 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 	};
 
 	const renderProgress = (file: SlotFile) => {
-		if (file.state === "uploading") {
-			return <span className="inno-smart-progress-ring" style={{ ["--p" as string]: `${file.pct}` }} title={`${Math.floor(file.pct)}%`} />;
-		}
-		if (file.state === "failed") {
-			return (
-				<button type="button" className="inno-smart-retry-btn" title={t("chat.smartInput.retryUpload", "重试上传")} onClick={(event) => { pin(event); engine.retryUpload(file.uid); }}>
-					<RotateCcw size={12} />
-				</button>
-			);
-		}
-		if (file.state === "local") {
-			return <span className="inno-smart-status-pending" title={t("chat.smartInput.sourceUploadPending", "待上传")}>…</span>;
-		}
-		return <span className="inno-smart-status-done">✓</span>;
+		if (file.state !== "failed") return null;
+		return (
+			<button type="button" className="inno-smart-retry-btn" title={t("chat.smartInput.retryUpload", "重试上传")} onClick={(event) => { pin(event); engine.retryUpload(file.uid); }}>
+				<RotateCcw size={12} />
+			</button>
+		);
 	};
 
 	const renderStatusPanel = () => (
-		<div
+		<PopoverSurface
 			ref={panelRef}
-			className="inno-smart-panel"
+			className={`inno-smart-panel inno-smart-panel--status ${statusColumnCount === 1 ? "is-single-column" : ""}`}
 			onMouseEnter={cancelClose}
 			onMouseLeave={scheduleClose}
-			style={{ left: panel.anchor.left, top: panel.anchor.bottom + 6 }}
+			style={{ left: panel.anchor.left, top: panel.anchor.bottom + 4 }}
 		>
-			<div className="inno-smart-panel-title">
-				{t("chat.smartInput.boundFilesTitle", "「{{word}}」绑定的文件（{{count}}）", { word: slot.word, count: slot.files.length })}
+			<div className="inno-smart-fill-head">
+				<div className="inno-smart-panel-title">
+					{t("chat.smartInput.boundFilesTitle", "「{{word}}」绑定的文件（{{count}}）", { word: slot.word, count: slot.files.length })}
+				</div>
+				{fillCandidates.length > 0 && !workspaceFilesLoading ? (
+					<button
+						type="button"
+						className="inno-smart-fill-plus"
+						title={t("chat.smartInput.addBinding", "继续添加文件")}
+						aria-label={t("chat.smartInput.addBinding", "继续添加文件")}
+						onClick={(event) => {
+							pin(event);
+							openFill();
+						}}
+					>
+						<Plus size={12} />
+					</button>
+				) : null}
 			</div>
 			<div
 				className="inno-smart-panel-list"
 				onMouseEnter={() => onWorkspaceHighlight(slot.files.map((file) => file.path))}
 				onMouseLeave={() => onWorkspaceHighlight(null)}
-				style={{ gridTemplateColumns: `repeat(${Math.min(3, Math.max(1, Math.ceil(slot.files.length / 3)))}, minmax(0, 1fr))` }}
+				style={{ gridTemplateColumns: `repeat(${statusColumnCount}, minmax(0, 1fr))` }}
 			>
 				{slot.files.map((file) => (
-					<div
-						key={file.uid}
-						className="inno-smart-panel-row"
-						onMouseEnter={() => onWorkspaceHighlight([file.path])}
-					>
-						<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[kindFromName(file.name)] }} />
-						<span className="inno-smart-panel-name" title={file.path}>{file.name}</span>
+						<div
+							key={file.uid}
+							className={`inno-smart-panel-row ${file.state === "workspace" ? "cursor-pointer" : ""}`}
+							onMouseEnter={() => onWorkspaceHighlight([file.path])}
+							onClick={(event) => {
+								if (file.state !== "workspace" || (event.target as HTMLElement).closest("button")) return;
+								event.preventDefault();
+								onOpenFilePreview(file.path);
+							}}
+						>
+							<FileTypeIcon kind={kindFromName(file.name)} size={14} />
+						<FileName name={file.name} className="inno-smart-panel-name" title={file.path} />
 						<span className="inno-smart-src-tag">{sourceLabel(file)}</span>
 						{renderProgress(file)}
 						<button
@@ -254,44 +344,76 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 					</div>
 				))}
 			</div>
-			<div className="inno-smart-panel-caption">{t("chat.smartInput.kindLabel", "类型")}: {kindLabel}</div>
-		</div>
+			<div className="inno-smart-panel-caption">{t("chat.smartInput.kindLabel", "类型")}: {acceptedTypeLabel}</div>
+		</PopoverSurface>
 	);
 
 	const renderFillMenu = () => (
-		<div
+		<PopoverSurface
 			ref={panelRef}
-			className="inno-smart-panel inno-smart-panel--fill"
+			className={`inno-smart-panel inno-smart-panel--fill ${fillCandidates.length === 0 ? "is-empty" : ""}`}
 			onMouseEnter={cancelClose}
 			onMouseLeave={scheduleClose}
-			style={{ left: panel.anchor.left, top: panel.anchor.bottom + 6 }}
+			style={{ left: panel.anchor.left, top: panel.anchor.bottom + 4 }}
 		>
 			<div className="inno-smart-fill-head">
 				<div className="inno-smart-panel-title">
-					{t("chat.smartInput.pickFileTitle", "选择{{kind}}文件（工作区）", { kind: kindLabel })}
+					{pickFileTitle}
 				</div>
 				{fillCandidates.length > 0 ? (
-					<button
-						type="button"
-						className={`inno-smart-fill-plus ${multiSelect ? "is-on" : ""}`}
-						title={t("chat.smartInput.batchAdd", "批量添加")}
-						onClick={() => {
-							setMultiSelect((value) => !value);
-							setPicked(new Map());
-						}}
-					>
-						<Plus size={12} />
-					</button>
+					multiSelect ? (
+						<div className="inno-smart-fill-actions">
+							<button
+								type="button"
+								className="inno-smart-fill-btn"
+								onClick={() => {
+									setMultiSelect(false);
+									setPicked(new Map());
+								}}
+							>
+								{t("common.cancel", "取消")}
+							</button>
+							<button
+								type="button"
+								className="inno-smart-fill-btn is-primary"
+								disabled={picked.size === 0}
+								onClick={() => {
+									for (const [path, source] of picked) {
+										bindCandidate({ name: path.split("/").pop() ?? path, path, source });
+									}
+									if (picked.size > 0) openStatus();
+									onClose();
+								}}
+							>
+								<Check size={12} aria-hidden="true" />
+								{picked.size}
+							</button>
+						</div>
+					) : (
+						<button
+							type="button"
+							className="inno-smart-fill-plus"
+							title={t("chat.smartInput.batchAdd", "批量添加")}
+							aria-label={t("chat.smartInput.batchAdd", "批量添加")}
+							onClick={() => {
+								setMultiSelect(true);
+								setPicked(new Map());
+							}}
+						>
+							<ListChecks size={14} aria-hidden="true" />
+						</button>
+					)
 				) : null}
 			</div>
-			{fillCandidates.length === 0 ? (
+			{workspaceFilesLoading ? (
+				<div className="inno-smart-panel-empty is-loading">{t("chat.smartInput.workspaceLoading", "正在加载工作区文件…")}</div>
+			) : fillCandidates.length === 0 ? (
 				<div className="inno-smart-panel-empty">{t("chat.smartInput.workspaceNoMatch", "工作区暂无匹配该规则的文件")}</div>
 			) : (
 				<div
 					className={`inno-smart-panel-list inno-smart-panel-grid ${multiSelect ? "is-multi" : ""}`}
 					onMouseEnter={() => onWorkspaceHighlight(fillCandidates.filter((c) => c.source === "workspace").map((c) => c.path))}
 					onMouseLeave={() => onWorkspaceHighlight(null)}
-					style={{ gridTemplateColumns: `repeat(${Math.min(3, Math.max(1, Math.ceil(fillCandidates.length / 3)))}, minmax(0, 1fr))` }}
 				>
 					{fillCandidates.map((candidate) => {
 						const active = picked.has(candidate.path);
@@ -317,8 +439,8 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 									onClose();
 								}}
 							>
-								<span aria-hidden="true" className="inno-smart-type-dot" style={{ backgroundColor: KIND_COLORS[kindFromName(candidate.name)] }} />
-								<span className="inno-smart-panel-name">{candidate.name}</span>
+									<FileTypeIcon kind={kindFromName(candidate.name)} size={14} />
+								<FileName name={candidate.name} className="inno-smart-panel-name" title={candidate.path} />
 								{candidate.source === "attach" ? <span className="inno-smart-src-tag">{t("chat.smartInput.sourceAttach", "附件")}</span> : null}
 								{multiSelect && active ? <Check size={12} className="shrink-0 text-[var(--inno-accent)]" /> : null}
 							</button>
@@ -326,56 +448,31 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 					})}
 				</div>
 			)}
-			{multiSelect ? (
-				<div className="inno-smart-fill-foot">
-					<button type="button" className="inno-smart-fill-btn" onClick={onClose}>{t("common.cancel", "取消")}</button>
-					<button
-						type="button"
-						className="inno-smart-fill-btn is-primary"
-						disabled={picked.size === 0}
-						onClick={() => {
-							for (const [path, source] of picked) {
-								bindCandidate({ name: path.split("/").pop() ?? path, path, source });
-							}
-							if (picked.size > 0) openStatus();
-							onClose();
-						}}
-					>
-						✓ {picked.size}
-					</button>
-				</div>
-			) : null}
-		</div>
+		</PopoverSurface>
 	);
 
 	const renderMenu = () => {
-		const items: Array<{ label: string; onClick?: () => void; danger?: boolean } | "sep"> = [];
+		const items: ContextMenuItem[] = [];
 		if (slot.files.length > 0) {
-			items.push({ label: t("chat.smartInput.viewStatus", "查看上传状态"), onClick: openStatus });
-			items.push({ label: t("chat.smartInput.unbindAll", "移除全部绑定（{{count}} 个文件回到附件）", { count: slot.files.length }), onClick: () => engine.unbindAll(slot) });
-			items.push("sep");
+			items.push({ label: t("chat.smartInput.viewStatus", "查看上传状态"), onSelect: () => switchPanel("status") });
+			items.push({ label: t("chat.smartInput.unbindAll", "移除全部绑定（{{count}} 个文件回到附件）", { count: slot.files.length }), onSelect: () => engine.unbindAll(slot) });
 		} else {
-			items.push({ label: t("chat.smartInput.chooseFile", "选择文件…"), onClick: openFill });
-			items.push("sep");
+			items.push({ label: t("chat.smartInput.chooseFile", "选择文件…"), onSelect: () => switchPanel("fill") });
 		}
-		items.push({ label: t("chat.smartInput.ignoreBubble", "忽略气泡（还原为文字）"), onClick: () => engine.removeSlot(slot), danger: true });
+		items.push({ label: t("chat.smartInput.ignoreBubble", "忽略气泡（还原为文字）"), onSelect: () => engine.removeSlot(slot), danger: true });
 
 		return (
-			<div ref={panelRef} className="inno-smart-menu" style={{ left: panel.x ?? 0, top: panel.y ?? 0 }}>
-				{items.map((item, index) => item === "sep"
-					? <div key={index} className="inno-smart-menu-sep" />
-					: (
-						<button
-							key={index}
-							type="button"
-							className={`inno-smart-menu-item ${item.danger ? "is-danger" : ""}`}
-							onClick={() => { onClose(); item.onClick?.(); }}
-						>
-							{item.label}
-						</button>
-					),
-				)}
-			</div>
+			<ContextMenu
+				x={panel.x ?? 0}
+				y={panel.y ?? 0}
+				items={items}
+				onClose={() => {
+					const next = menuNextPanel.current;
+					menuNextPanel.current = null;
+					if (next) onOpenPanel(next);
+					else onClose();
+				}}
+			/>
 		);
 	};
 

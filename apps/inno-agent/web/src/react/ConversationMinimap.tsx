@@ -10,6 +10,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Clock3, FileText, Image as ImageIcon, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ChatMessage, ChatToolRecord } from "../types/chat.js";
+import { FileName } from "./FileName.js";
 
 export interface ConversationTurn {
 	id: string;
@@ -384,7 +385,7 @@ export function ConversationMinimap({
 									{fileNames.slice(0, 2).map((fileName) => (
 										<span key={fileName} className="inline-flex max-w-[150px] items-center gap-1 rounded-md bg-[var(--inno-surface-muted)] px-1.5 py-1">
 											<FileText size={12} className="shrink-0" />
-											<span className="truncate">{fileName}</span>
+										<FileName name={fileName} className="min-w-0 flex-1" />
 										</span>
 									))}
 									{fileNames.length > 2 ? <span>+{fileNames.length - 2}</span> : null}

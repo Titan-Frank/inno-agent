@@ -241,7 +241,7 @@ export function App() {
 				style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
 			>
 				<SessionSidebar collapsed={app.sidebarCollapsed} onOpen={openSidebar} />
-				<ChatCenter onOpenPresetPanels={openPresetPanels} />
+				<ChatCenter onOpenPresetPanels={openPresetPanels} onPreviewFile={openFilePreview} />
 				<WorkspacePanel
 					activeTab={app.rightPanelTab}
 					mode={app.workspaceMode}

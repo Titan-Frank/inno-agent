@@ -14,6 +14,7 @@ import { checkboxCls } from "./ui/checkbox.js";
 import { Spinner } from "./ui/Spinner.js";
 import { LazyCodeEditor } from "./LazyCodeEditor.js";
 import { LazyMarkdownEditor } from "./LazyMarkdownEditor.js";
+import { FileName } from "./FileName.js";
 import "@earendil-works/pi-web-ui";
 
 /* ---------- helpers (same as WorkspaceBrowser) ---------- */
@@ -126,7 +127,7 @@ function SkillFileNode({ node, style, dragHandle }: NodeRendererProps<ArboristNo
 			<span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--inno-text-subtle)]">
 				{nodeIcon(node.data.name, isDir, node.isOpen)}
 			</span>
-			<span className="min-w-0 flex-1 truncate">{node.data.name}</span>
+			<FileName name={node.data.name} className="min-w-0 flex-1" />
 			{node.isLeaf && <span className="text-[10px] opacity-50">{formatSize(node.data.size)}</span>}
 		</div>
 	);
@@ -157,7 +158,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 							{sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
 						</button>
 						<div className="min-w-0">
-							<div className="truncate text-sm font-medium">{state.file.name}</div>
+							<FileName name={state.file.name} className="text-sm font-medium" />
 							<div className="truncate text-[10px] text-[var(--inno-text-muted)]">{t("files.editing", "Editing")} · {state.file.path}</div>
 						</div>
 					</div>
@@ -189,7 +190,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 						{sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
 					</button>
 					<div className="min-w-0">
-						<div className="truncate text-sm font-medium">{state.file?.name ?? t("preview.noFile", "No file selected")}</div>
+						{state.file ? <FileName name={state.file.name} className="text-sm font-medium" /> : <div className="text-sm font-medium">{t("preview.noFile", "No file selected")}</div>}
 						<div className="truncate text-[10px] text-[var(--inno-text-muted)]">
 							{state.file ? `${state.file.path} · ${formatSize(state.file.size)}` : t("preview.selectFile", "Select a file to preview")}
 						</div>

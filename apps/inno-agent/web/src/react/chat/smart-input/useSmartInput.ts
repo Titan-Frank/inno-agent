@@ -11,10 +11,8 @@ export interface UseSmartInputOptions {
 	mirrorRef: RefObject<HTMLDivElement | null>;
 	hitRef: RefObject<HTMLDivElement | null>;
 	getSettings: () => SmartInputSettings | undefined;
-	getWorkspaceFiles: () => Array<{ name: string; path: string }>;
 	takeAttachment: (path: string) => EngineAttachmentItem | undefined;
 	returnAttachment: (item: EngineAttachmentItem) => void;
-	onToast: (message: string, error?: boolean) => void;
 	onChange: () => void;
 	onSnapshot?: (snapshot: EngineSnapshot) => void;
 	onOpenStatusPanel: EngineCallbacks["onOpenStatusPanel"];
@@ -26,8 +24,9 @@ export interface UseSmartInputOptions {
 
 /**
  * Owns the SmartInputEngine lifecycle around the composer textarea. When
- * `enabled` flips off the engine detaches and restores in-draft bubbles back
- * to plain words (settings only affect future input).
+ * `enabled` flips off the engine detaches, restores in-draft bubbles back to
+ * plain words, and returns their bound files to the attachment row (settings
+ * only affect future input).
  */
 export function useSmartInput(options: UseSmartInputOptions) {
 	const { t } = useTranslation();
@@ -49,18 +48,15 @@ export function useSmartInput(options: UseSmartInputOptions) {
 		const hit = optionsRef.current.hitRef.current;
 		if (!textarea || !mirror || !hit) return;
 
-		const current = optionsRef.current;
 		const labels = () => ({
 			kwHitTitle: t("chat.smartInput.kwHitTitle", "点击转为文件气泡，或拖文件悬停 1 秒自动转换"),
 			emptyBubbleTitle: t("chat.smartInput.emptyBubbleTitle", "拖入文件，或点击选择"),
 			removeBubble: t("chat.smartInput.removeBubble", "删除气泡"),
-			bubbleCreated: t("chat.smartInput.bubbleCreated", "已转为气泡，拖入文件或点击选择"),
-			bound: t("chat.smartInput.boundToast", "已绑定 {{name}}"),
-			alreadyBound: t("chat.smartInput.alreadyBound", "该文件已绑定在此气泡"),
-			typeMismatch: t("chat.smartInput.typeMismatch", "类型不符：文件后缀与该关键词规则不匹配"),
-			dragDisabled: t("chat.smartInput.dragDisabled", "设置已关闭拖入填充"),
-			noRuleForFile: t("chat.smartInput.noRuleForFile", "没有规则匹配该文件后缀，无法转为气泡"),
-			insertedAsBubble: t("chat.smartInput.insertedAsBubble", "已插入为气泡并绑定该文件"),
+			mergeBubbleHint: t("chat.smartInput.mergeBubbleHint", "融合"),
+			dropMatch: t("chat.smartInput.dropMatch", "匹配"),
+			dropMismatch: t("chat.smartInput.dropMismatch", "不匹配"),
+			dropPartial: t("chat.smartInput.dropPartial", "部分匹配"),
+			dropReleaseToFinish: t("chat.smartInput.dropReleaseToFinish", "松手即可完成"),
 		});
 
 		const engine = new SmartInputEngine({
@@ -70,27 +66,25 @@ export function useSmartInput(options: UseSmartInputOptions) {
 			labels,
 			data: {
 				getSettings: () => {
-					const settings = current.getSettings();
+					const settings = optionsRef.current.getSettings();
 					return {
 						enabled: settings?.enabled ?? false,
 						allowDrag: settings?.allowDrag !== false,
 						allowRightClick: settings?.allowRightClick !== false,
 					};
 				},
-				getRules: (): SmartInputRule[] => current.getSettings()?.rules ?? [],
-				getWorkspaceFiles: () => current.getWorkspaceFiles(),
-				takeAttachment: (path) => current.takeAttachment(path),
-				returnAttachment: (item) => current.returnAttachment(item),
+				getRules: (): SmartInputRule[] => optionsRef.current.getSettings()?.rules ?? [],
+				takeAttachment: (path) => optionsRef.current.takeAttachment(path),
+				returnAttachment: (item) => optionsRef.current.returnAttachment(item),
 			},
 			callbacks: {
-				onToast: (message, error) => current.onToast(message, error),
-				onChange: () => current.onChange(),
-				onSlotsSnapshot: (snapshot) => current.onSnapshot?.(snapshot),
-				onOpenStatusPanel: current.onOpenStatusPanel,
-				onOpenFillMenu: current.onOpenFillMenu,
-				onBubbleContextMenu: current.onBubbleContextMenu,
-				onChipHover: current.onChipHover,
-				onWorkspaceHighlight: current.onWorkspaceHighlight,
+				onChange: () => optionsRef.current.onChange(),
+				onSlotsSnapshot: (snapshot) => optionsRef.current.onSnapshot?.(snapshot),
+				onOpenStatusPanel: (...args) => optionsRef.current.onOpenStatusPanel(...args),
+				onOpenFillMenu: (...args) => optionsRef.current.onOpenFillMenu(...args),
+				onBubbleContextMenu: (...args) => optionsRef.current.onBubbleContextMenu(...args),
+				onChipHover: (...args) => optionsRef.current.onChipHover?.(...args),
+				onWorkspaceHighlight: (paths) => optionsRef.current.onWorkspaceHighlight(paths),
 			},
 		});
 		engineRef.current = engine;
@@ -99,19 +93,53 @@ export function useSmartInput(options: UseSmartInputOptions) {
 
 		const onGlobalDragOver = (event: DragEvent) => engine.trackDragPosition(event.clientX, event.clientY);
 		const onGlobalDragEnd = () => engine.cancelBubbleDrag();
+		const onGlobalDrop = () => {
+			// Run after the drop target has finished binding files. This also
+			// handles drops whose source chip was unmounted during auto-convert.
+			window.setTimeout(() => engine.cancelBubbleDrag(), 0);
+		};
+		const onGlobalDragLeave = (event: DragEvent) => {
+			if (event.relatedTarget !== null) return;
+			const outsideViewport = event.clientX <= 0
+				|| event.clientY <= 0
+				|| event.clientX >= window.innerWidth
+				|| event.clientY >= window.innerHeight;
+			if (outsideViewport) engine.cancelBubbleDrag();
+		};
 		const onPageDragStart = (event: Event) => {
-			const detail = (event as CustomEvent<{ name: string; path: string; source: "workspace" | "local"; file?: File }>).detail;
-			if (detail) engine.markDragStart(detail, `page:${detail.path}`);
+			const detail = (event as CustomEvent<unknown>).detail;
+			if (!detail || typeof detail !== "object") return;
+			const raw = detail as {
+				name?: unknown;
+				path?: unknown;
+				source?: unknown;
+				file?: File;
+				items?: unknown;
+			};
+			const candidates = Array.isArray(raw.items) ? raw.items : [raw];
+			const items = candidates.flatMap((candidate) => {
+				if (!candidate || typeof candidate !== "object") return [];
+				const item = candidate as { name?: unknown; path?: unknown; source?: unknown; file?: File };
+				if (typeof item.name !== "string" || typeof item.path !== "string") return [];
+				if (item.source !== "workspace" && item.source !== "local") return [];
+				const source: EngineAttachmentItem["source"] = item.source === "workspace" ? "workspace" : "local";
+				return [{ name: item.name, path: item.path, source, file: item.file }];
+			});
+			if (items.length > 0) engine.markDragStart(items, `page:${items.map((item) => item.path).join("|")}`);
 		};
 		const onPageDragEnd = () => engine.cancelBubbleDrag();
 		window.addEventListener("dragover", onGlobalDragOver, true);
-		window.addEventListener("dragend", onGlobalDragEnd);
+		window.addEventListener("dragend", onGlobalDragEnd, true);
+		window.addEventListener("drop", onGlobalDrop, true);
+		document.addEventListener("dragleave", onGlobalDragLeave, true);
 		window.addEventListener("inno-smart-dragstart", onPageDragStart);
 		window.addEventListener("inno-smart-dragend", onPageDragEnd);
 
 		return () => {
 			window.removeEventListener("dragover", onGlobalDragOver, true);
-			window.removeEventListener("dragend", onGlobalDragEnd);
+			window.removeEventListener("dragend", onGlobalDragEnd, true);
+			window.removeEventListener("drop", onGlobalDrop, true);
+			document.removeEventListener("dragleave", onGlobalDragLeave, true);
 			window.removeEventListener("inno-smart-dragstart", onPageDragStart);
 			window.removeEventListener("inno-smart-dragend", onPageDragEnd);
 			if (!optionsRef.current.enabled) {

@@ -47,17 +47,33 @@ describe("normalizeSmartInputConfig", () => {
 		const config = normalizeSmartInputConfig({
 			enabled: true,
 			rules: [
-				{ id: "a", keyword: " 报告 ", extensions: ["PDF", ".docx", "docx"], enabled: true },
-				{ id: "b", keyword: "报告", extensions: [".pdf"], enabled: true },
-				{ id: "", keyword: "  ", extensions: [".png"], enabled: true },
+				{ id: "a", isPreset: false, keyword: " 报告 ", extensions: ["PDF", ".docx", "docx"], allExtensions: false, excludeExtensions: ["TMP", ".tmp"], enabled: true },
+				{ id: "b", isPreset: false, keyword: "报告", extensions: [".pdf"], allExtensions: false, excludeExtensions: [], enabled: true },
+				{ id: "", isPreset: false, keyword: "  ", extensions: [".png"], allExtensions: false, excludeExtensions: [], enabled: true },
 			],
 		});
 		expect(config.rules).toHaveLength(1);
 		expect(config.rules[0].keyword).toBe("报告");
 		expect(config.rules[0].extensions).toEqual([".pdf", ".docx"]);
+		expect(config.rules[0].allExtensions).toBe(false);
+		expect(config.rules[0].excludeExtensions).toEqual([".tmp"]);
 
 		const emptied = normalizeSmartInputConfig({ rules: [] });
 		expect(emptied.rules).toEqual([]);
+	});
+
+	it("keeps an all-formats rule usable without an allow-list", () => {
+		const config = normalizeSmartInputConfig({
+			rules: [{ id: "a", isPreset: false, keyword: "附件", extensions: [], allExtensions: true, excludeExtensions: ["PDF"], enabled: true }],
+		});
+		expect(config.rules[0]).toMatchObject({ allExtensions: true, extensions: [], excludeExtensions: [".pdf"] });
+	});
+
+	it("migrates built-in rules as presets and disables stale all-formats values", () => {
+		const config = normalizeSmartInputConfig({
+			rules: [{ id: "smart-rule-pdf", isPreset: true, keyword: "pdf", extensions: [".pdf"], allExtensions: true, excludeExtensions: [], enabled: true }],
+		});
+		expect(config.rules[0]).toMatchObject({ isPreset: true, allExtensions: false, extensions: [".pdf"] });
 	});
 });
 
@@ -84,6 +100,13 @@ describe("parseChatAttachments", () => {
 		expect(parsed!.bindings[0].wordIndex).toBe(2);
 		expect(parsed!.bindings[1].files[0]).toEqual({ path: "b.docx", kind: "file", source: "workspace" });
 		expect(parsed!.loose).toEqual([{ path: "c.xlsx", kind: "xls", source: "upload" }]);
+	});
+
+	it("normalizes presentation prefixes and Windows separators", () => {
+		const parsed = parseChatAttachments({
+			loose: [{ path: " .\\docs\\paper.pdf ", kind: "pdf", source: "workspace" }],
+		});
+		expect(parsed!.loose).toEqual([{ path: "docs/paper.pdf", kind: "pdf", source: "workspace" }]);
 	});
 });
 
@@ -123,9 +146,9 @@ describe("validateChatAttachments + buildAttachmentContext", () => {
 		expect(validated.loose).toEqual([{ path: "c.xlsx", kind: "xls", source: "workspace" }]);
 
 		const context = buildAttachmentContext(validated);
-		expect(context).toContain("「pdf」→ ./a.pdf");
+		expect(context).toContain("「pdf」→ a.pdf");
 		expect(context).toContain("普通附件");
-		expect(context).toContain("./c.xlsx");
+		expect(context).toContain("- c.xlsx");
 		expect(context).not.toContain("escape");
 	});
 
@@ -143,7 +166,7 @@ describe("validateChatAttachments + buildAttachmentContext", () => {
 			bindings: [{ word: "pdf", wordIndex: 0, files: [{ path: "a.pdf", kind: "pdf", source: "workspace" }, { path: "b.pdf", kind: "pdf", source: "workspace" }] }],
 			loose: [],
 		});
-		expect(context).toContain("「pdf」→ ./a.pdf、./b.pdf");
+		expect(context).toContain("「pdf」→ a.pdf、b.pdf");
 		expect(context).not.toContain("普通附件");
 	});
 });

@@ -31,8 +31,17 @@ export function slotChar(id: number): string {
 	return String.fromCharCode(PUA_BASE + id);
 }
 
+// tokenRegexFor runs on every sync for every slot; RegExp compilation is
+// wasted work compared to reusing one instance per slot id.
+const tokenRegexCache = new Map<number, RegExp>();
+
 export function tokenRegexFor(id: number): RegExp {
-	return new RegExp(`\\{${slotChar(id)}\\}\\u00A0*`);
+	let re = tokenRegexCache.get(id);
+	if (!re) {
+		re = new RegExp(`\\{${slotChar(id)}\\}\\u00A0*`);
+		tokenRegexCache.set(id, re);
+	}
+	return re;
 }
 
 export function tokenIdFromMatch(char: string): number {

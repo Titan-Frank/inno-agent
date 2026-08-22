@@ -9,9 +9,10 @@ import {
 	type OutgoingFile,
 	type OutgoingSlot,
 } from "./rules.js";
+import { nameMatchesRule, sameRuleFormat } from "./kinds.js";
 
 function rule(keyword: string, extensions = [".pdf"]): SmartInputRule {
-	return { id: `r-${keyword}`, keyword, extensions, enabled: true };
+	return { id: `r-${keyword}`, isPreset: false, keyword, extensions, allExtensions: false, excludeExtensions: [], enabled: true };
 }
 
 describe("analyzeKeywords", () => {
@@ -105,5 +106,42 @@ describe("token helpers", () => {
 		const again = `prefix ${token} suffix`;
 		expect(tokenRegexFor(42).test(again)).toBe(true);
 		expect(tokenRegexFor(43).test(again)).toBe(false);
+	});
+});
+
+describe("file format rule matching", () => {
+	it("treats normalized equivalent format lists as merge-compatible", () => {
+		expect(sameRuleFormat(
+			rule("pdf-a", [".PDF", ".pdf"]),
+			rule("pdf-b", ["pdf"]),
+		)).toBe(true);
+		expect(sameRuleFormat(rule("doc", [".doc"]), rule("docx", [".docx"]))).toBe(false);
+		expect(sameRuleFormat(
+			{ ...rule("any-a", []), allExtensions: true, excludeExtensions: ["tmp"] },
+			{ ...rule("any-b", []), allExtensions: true, excludeExtensions: [".tmp"] },
+		)).toBe(true);
+	});
+
+	it("accepts every format when all-formats mode is enabled", () => {
+		const all = { ...rule("any", []), allExtensions: true };
+		expect(nameMatchesRule("notes.txt", all)).toBe(true);
+		expect(nameMatchesRule("archive.custom", all)).toBe(true);
+		expect(nameMatchesRule("README", all)).toBe(true);
+	});
+
+	it("applies exclusions after the allow-list or all-formats check", () => {
+		const all = { ...rule("any", []), allExtensions: true, excludeExtensions: [".tmp", "bin"] };
+		expect(nameMatchesRule("notes.txt", all)).toBe(true);
+		expect(nameMatchesRule("cache.tmp", all)).toBe(false);
+		expect(nameMatchesRule("tool.bin", all)).toBe(false);
+
+		const limited = { ...rule("docs", [".pdf", ".docx"]), excludeExtensions: [".pdf"] };
+		expect(nameMatchesRule("brief.docx", limited)).toBe(true);
+		expect(nameMatchesRule("brief.pdf", limited)).toBe(false);
+	});
+
+	it("does not treat a preset rule as all-formats even if a stale config says so", () => {
+		const preset = { ...rule("pdf", []), isPreset: true, allExtensions: true };
+		expect(nameMatchesRule("notes.txt", preset)).toBe(false);
 	});
 });

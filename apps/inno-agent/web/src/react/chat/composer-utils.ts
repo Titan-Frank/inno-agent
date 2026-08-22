@@ -11,15 +11,16 @@ export interface PendingPasteBlock {
 }
 
 /**
- * A staged composer attachment. `local` items carry the OS File and upload at
- * send time (with per-file progress); `workspace` items reference an existing
- * workspace file and bind/attach instantly.
+ * A staged composer attachment. `local` items carry the OS File until send
+ * time; `workspace` items reference an existing workspace file and bind/attach instantly.
  */
 export interface PendingUpload {
+	/** Stable identity for React keys — survives removal of earlier chips. */
+	id: number;
 	fileName: string;
 	/** Workspace-relative path: upload target for local files, existing path for workspace files. */
 	path: string;
-	/** Present only for local files awaiting upload. */
+	/** Present for files selected from the OS; retained for local previews. */
 	file?: File;
 	source: "local" | "workspace";
 	/** Upload lifecycle for local files; workspace items stay "ready". */
@@ -28,8 +29,11 @@ export interface PendingUpload {
 	pct: number;
 }
 
+let pendingUploadSeq = 0;
+
 export function localPendingUpload(file: File): PendingUpload {
 	return {
+		id: ++pendingUploadSeq,
 		fileName: file.name,
 		path: file.name.replace(/[\\/?%*:|"<>]/g, "_").trim() || `upload-${Date.now()}`,
 		file,
@@ -41,7 +45,11 @@ export function localPendingUpload(file: File): PendingUpload {
 
 export function workspacePendingUpload(path: string): PendingUpload {
 	const name = path.split("/").pop() ?? path;
-	return { fileName: name, path, source: "workspace", status: "ready", pct: 100 };
+	return { id: ++pendingUploadSeq, fileName: name, path, source: "workspace", status: "ready", pct: 100 };
+}
+
+export function pendingUploadId(): number {
+	return ++pendingUploadSeq;
 }
 
 /** Flatten a workspace tree into file rows (depth-first, stable order). */
@@ -78,19 +86,24 @@ export function resizeComposerTextarea(el: HTMLTextAreaElement): number {
 	const maxHeight = Math.ceil(lineHeight * COMPOSER_MAX_LINES + verticalPadding + verticalBorder);
 	const selectionStart = el.selectionStart;
 	const selectionEnd = el.selectionEnd;
+	const previousHeight = el.style.height;
+	const previousOverflowY = el.style.overflowY;
 
 	// Reset before measuring so shrinking after delete/cut/undo is symmetrical
 	// with growth. scrollHeight is the browser's actual wrapped-text height.
 	el.style.height = "auto";
 	const contentHeight = el.scrollHeight + verticalBorder;
 	const nextHeight = Math.max(minHeight, Math.min(contentHeight, maxHeight));
-	el.style.height = `${nextHeight}px`;
-	el.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+	const nextHeightStyle = `${nextHeight}px`;
+	const nextOverflowY = contentHeight > maxHeight ? "auto" : "hidden";
+	const layoutChanged = previousHeight !== nextHeightStyle || previousOverflowY !== nextOverflowY;
+	el.style.height = nextHeightStyle;
+	el.style.overflowY = nextOverflowY;
 	el.style.overflowX = "hidden";
 
 	// Re-applying the existing selection lets the browser keep the caret in
 	// view after the textarea changes between intrinsic and scrollable height.
-	if (document.activeElement === el && selectionStart >= 0 && selectionEnd >= 0) {
+	if (layoutChanged && document.activeElement === el && selectionStart >= 0 && selectionEnd >= 0) {
 		const restoreSelection = () => {
 			if (document.activeElement === el) el.setSelectionRange(selectionStart, selectionEnd);
 		};

@@ -5,7 +5,6 @@ import { setLocale } from "../../i18n/index.js";
 import { useStoreSnapshot } from "../hooks.js";
 import type { WindowCloseBehavior } from "../../types/settings.js";
 import { SettingsSection, SettingsCard, SettingsRow } from "./primitives.js";
-import { SmartInputSettings } from "./SmartInputSettings.js";
 
 function ThemePicker() {
 	const { t } = useTranslation();
@@ -102,7 +101,6 @@ export function GeneralSettings() {
 				/>
 			</SettingsCard>
 			</SettingsSection>
-			<SmartInputSettings />
 		</>
 	);
 }
