@@ -139,6 +139,116 @@ function channelFilterClass(channel: SessionChannel | null, active: boolean): st
 	return map[channel] ?? "inno-primary-button ring-1 ring-[var(--inno-accent)]";
 }
 
+function menuLabel(icon: ReactNode, label: string) {
+	return (
+		<span className="flex items-center gap-2">
+			{icon}
+			<span>{label}</span>
+		</span>
+	);
+}
+
+function useTitleMarquee(name: string, hovered: boolean) {
+	const titleViewportRef = useRef<HTMLDivElement>(null);
+	const titleMeasureRef = useRef<HTMLSpanElement>(null);
+	const [titleOverflowing, setTitleOverflowing] = useState(false);
+	const [titleShift, setTitleShift] = useState(0);
+
+	useEffect(() => {
+		const viewport = titleViewportRef.current;
+		const measure = titleMeasureRef.current;
+		if (!viewport || !measure) return;
+		const updateTitleOverflow = () => {
+			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
+			setTitleOverflowing(shift > 2);
+			setTitleShift(Math.ceil(shift));
+		};
+		updateTitleOverflow();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(updateTitleOverflow);
+		observer.observe(viewport);
+		observer.observe(measure);
+		return () => observer.disconnect();
+	}, [name]);
+
+	const marqueeActive = titleOverflowing && hovered;
+	const marqueeShift = titleShift + TITLE_MARQUEE_END_PADDING_PX;
+	return {
+		titleViewportRef,
+		titleMeasureRef,
+		titleOverflowing,
+		marqueeActive,
+		marqueeShift,
+		titleMarqueeDuration: Math.max(0.05, marqueeShift / TITLE_MARQUEE_SPEED_PX_PER_SECOND),
+	};
+}
+
+type TitleMarqueeState = ReturnType<typeof useTitleMarquee>;
+
+function SessionTitleRow({
+	session,
+	titleState,
+	editing,
+	editingName,
+	onEditChange,
+	onEditSave,
+	onEditCancel,
+}: {
+	session: SessionMeta;
+	titleState: TitleMarqueeState;
+	editing: boolean;
+	editingName: string;
+	onEditChange: (value: string) => void;
+	onEditSave: () => void;
+	onEditCancel: () => void;
+}) {
+	const {
+		titleViewportRef,
+		titleMeasureRef,
+		titleOverflowing,
+		marqueeActive,
+		marqueeShift,
+		titleMarqueeDuration,
+	} = titleState;
+
+	return (
+		<div className="flex min-w-0 items-start gap-1.5">
+			{editing ? (
+				<input
+					className="inno-sidebar-title min-w-0 flex-1 rounded border border-[var(--inno-accent)] bg-[var(--inno-surface)] px-1.5 py-0.5 outline-none focus-visible:shadow-[var(--inno-ring)]"
+					value={editingName}
+					autoFocus
+					onClick={(event) => event.stopPropagation()}
+					onChange={(event) => onEditChange(event.target.value)}
+					onBlur={onEditSave}
+					onKeyDown={(event) => {
+						event.stopPropagation();
+						if (event.key === "Enter") onEditSave();
+						if (event.key === "Escape") onEditCancel();
+					}}
+				/>
+			) : (
+				<div ref={titleViewportRef} className="relative min-w-0 flex-1 overflow-hidden" title={session.name}>
+					<span
+						className={`inno-sidebar-title ${marqueeActive ? "inno-sidebar-title-marquee" : "block overflow-hidden whitespace-nowrap"}${titleOverflowing ? " inno-sidebar-title-fade" : ""} font-medium text-[var(--inno-text)]`}
+						style={marqueeActive ? ({
+							"--inno-title-shift": `-${marqueeShift}px`,
+							"--inno-title-duration": `${titleMarqueeDuration}s`,
+						} as CSSProperties) : undefined}
+					>
+						{session.name}
+						{titleOverflowing ? <span aria-hidden="true" className="inno-sidebar-title-marquee-tail" /> : null}
+					</span>
+					<span ref={titleMeasureRef} aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 -z-10 w-max whitespace-nowrap">
+						{session.name}
+					</span>
+				</div>
+			)}
+			<span className="inno-sidebar-meta shrink-0 pt-0.5 tabular-nums text-[var(--inno-text-subtle)]">{formatTime(session.updatedAt)}</span>
+		</div>
+	);
+}
+
 /* ── Workspace group definition ── */
 
 interface WsGroup {
@@ -361,36 +471,9 @@ function SessionCard({
 }) {
 	const { t } = useTranslation();
 	const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-	const titleViewportRef = useRef<HTMLDivElement>(null);
-	const titleMeasureRef = useRef<HTMLSpanElement>(null);
-	const [titleOverflowing, setTitleOverflowing] = useState(false);
-	const [titleShift, setTitleShift] = useState(0);
 	const [hovered, setHovered] = useState(false);
 	const titleChannel = session.origin ?? session.channels[0] ?? "unknown";
-
-	useEffect(() => {
-		const viewport = titleViewportRef.current;
-		const measure = titleMeasureRef.current;
-		if (!viewport || !measure) return;
-		const updateTitleOverflow = () => {
-			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
-			setTitleOverflowing(shift > 2);
-			setTitleShift(Math.ceil(shift));
-		};
-		updateTitleOverflow();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateTitleOverflow);
-		observer.observe(viewport);
-		observer.observe(measure);
-		return () => observer.disconnect();
-	}, [session.name, active]);
-
-	const menuLabel = (icon: ReactNode, label: string) => (
-		<span className="flex items-center gap-2">
-			{icon}
-			<span>{label}</span>
-		</span>
-	);
+	const titleState = useTitleMarquee(session.name, hovered);
 	const menuItems: ContextMenuItem[] = [
 		{
 			label: menuLabel(
@@ -431,17 +514,13 @@ function SessionCard({
 			onSelect: onDelete,
 		},
 	];
-	const marqueeActive = titleOverflowing && hovered;
-	const marqueeShift = titleShift + TITLE_MARQUEE_END_PADDING_PX;
-	const titleMarqueeDuration = Math.max(0.05, marqueeShift / TITLE_MARQUEE_SPEED_PX_PER_SECOND);
 	return (
 		<div
-			className={`inno-sidebar-card group/card relative mb-1 w-full cursor-pointer rounded-lg border px-2.5 py-2 text-left transition-all duration-150 ${
+			className={`group/card relative mb-1 w-full cursor-pointer rounded-lg border px-2.5 py-2 text-left transition-all duration-150 ${
 				active
 					? "border-[var(--inno-border)] bg-[var(--inno-surface-muted)] shadow-sm"
 					: "border-transparent hover:border-[var(--inno-border)] hover:bg-[var(--inno-surface)]"
 			}`}
-			data-active={active ? "true" : "false"}
 			role="button"
 			tabIndex={0}
 			onMouseEnter={() => setHovered(true)}
@@ -458,45 +537,15 @@ function SessionCard({
 				setMenu({ x: e.clientX, y: e.clientY });
 			}}
 		>
-			{/* Top row: title + time */}
-			<div className="flex min-w-0 items-start gap-1.5">
-				{editing ? (
-					<input
-						className="inno-sidebar-title min-w-0 flex-1 rounded border border-[var(--inno-accent)] bg-[var(--inno-surface)] px-1.5 py-0.5 outline-none focus-visible:shadow-[var(--inno-ring)]"
-						value={editingName}
-						autoFocus
-						onClick={(e) => e.stopPropagation()}
-						onChange={(e) => onEditChange(e.target.value)}
-						onBlur={onEditSave}
-						onKeyDown={(e) => {
-							e.stopPropagation();
-							if (e.key === "Enter") onEditSave();
-							if (e.key === "Escape") onEditCancel();
-						}}
-					/>
-				) : (
-					<div
-						ref={titleViewportRef}
-						className="relative min-w-0 flex-1 overflow-hidden"
-						title={session.name}
-					>
-						<span
-							className={`inno-sidebar-title ${marqueeActive ? "inno-sidebar-title-marquee" : "block overflow-hidden whitespace-nowrap"}${titleOverflowing ? " inno-sidebar-title-fade" : ""} font-medium text-[var(--inno-text)]`}
-							style={marqueeActive ? ({
-								"--inno-title-shift": `-${marqueeShift}px`,
-								"--inno-title-duration": `${titleMarqueeDuration}s`,
-							} as CSSProperties) : undefined}
-						>
-							{session.name}
-							{titleOverflowing ? <span aria-hidden="true" className="inno-sidebar-title-marquee-tail" /> : null}
-						</span>
-						<span ref={titleMeasureRef} aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 -z-10 w-max whitespace-nowrap">
-							{session.name}
-						</span>
-					</div>
-				)}
-				<span className="inno-sidebar-meta shrink-0 pt-0.5 tabular-nums text-[var(--inno-text-subtle)]">{formatTime(session.updatedAt)}</span>
-			</div>
+			<SessionTitleRow
+				session={session}
+				titleState={titleState}
+				editing={editing}
+				editingName={editingName}
+				onEditChange={onEditChange}
+				onEditSave={onEditSave}
+				onEditCancel={onEditCancel}
+			/>
 
 			{/* Subtitle row: preview + channel/actions */}
 			<div className="mt-1 flex min-w-0 items-center justify-between gap-1">
@@ -576,35 +625,8 @@ function SimpleSessionRow({
 }: SimpleSessionRowProps) {
 	const { t } = useTranslation();
 	const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-	const titleViewportRef = useRef<HTMLDivElement>(null);
-	const titleMeasureRef = useRef<HTMLSpanElement>(null);
-	const [titleOverflowing, setTitleOverflowing] = useState(false);
-	const [titleShift, setTitleShift] = useState(0);
 	const [hovered, setHovered] = useState(false);
-
-	useEffect(() => {
-		const viewport = titleViewportRef.current;
-		const measure = titleMeasureRef.current;
-		if (!viewport || !measure) return;
-		const updateTitleOverflow = () => {
-			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
-			setTitleOverflowing(shift > 2);
-			setTitleShift(Math.ceil(shift));
-		};
-		updateTitleOverflow();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateTitleOverflow);
-		observer.observe(viewport);
-		observer.observe(measure);
-		return () => observer.disconnect();
-	}, [session.name, active]);
-
-	const menuLabel = (icon: ReactNode, label: string) => (
-		<span className="flex items-center gap-2">
-			{icon}
-			<span>{label}</span>
-		</span>
-	);
+	const titleState = useTitleMarquee(session.name, hovered);
 	const menuItems: ContextMenuItem[] = [
 		{
 			label: menuLabel(
@@ -631,18 +653,13 @@ function SimpleSessionRow({
 			onSelect: onDelete,
 		},
 	];
-	const marqueeActive = titleOverflowing && hovered;
-	const marqueeShift = titleShift + TITLE_MARQUEE_END_PADDING_PX;
-	const titleMarqueeDuration = Math.max(0.05, marqueeShift / TITLE_MARQUEE_SPEED_PX_PER_SECOND);
-
 	return (
 		<div
-			className={`inno-sidebar-card group/srow relative mb-1 block w-full cursor-pointer rounded-lg border px-2.5 py-2 text-left transition-all duration-150 ${
+			className={`group/srow relative mb-1 block w-full cursor-pointer rounded-lg border px-2.5 py-2 text-left transition-all duration-150 ${
 				active
 					? "border-[var(--inno-border)] bg-[var(--inno-surface-muted)] shadow-sm"
 					: "border-transparent hover:border-[var(--inno-border)] hover:bg-[var(--inno-surface)]"
 			}`}
-			data-active={active ? "true" : "false"}
 			role="button"
 			tabIndex={0}
 			onMouseEnter={() => setHovered(true)}
@@ -659,41 +676,15 @@ function SimpleSessionRow({
 				setMenu({ x: event.clientX, y: event.clientY });
 			}}
 		>
-			{/* Title row: title left, time pinned to the far right. */}
-			<div className="flex min-w-0 items-start gap-1.5">
-				{editing ? (
-					<input
-						className="inno-sidebar-title min-w-0 flex-1 rounded border border-[var(--inno-accent)] bg-[var(--inno-surface)] px-1.5 py-0.5 outline-none focus-visible:shadow-[var(--inno-ring)]"
-						value={editingName}
-						autoFocus
-						onClick={(event) => event.stopPropagation()}
-						onChange={(event) => onEditChange(event.target.value)}
-						onBlur={onEditSave}
-						onKeyDown={(event) => {
-							event.stopPropagation();
-							if (event.key === "Enter") onEditSave();
-							if (event.key === "Escape") onEditCancel();
-						}}
-					/>
-				) : (
-					<div ref={titleViewportRef} className="relative min-w-0 flex-1 overflow-hidden" title={session.name}>
-						<span
-							className={`inno-sidebar-title ${marqueeActive ? "inno-sidebar-title-marquee" : "block overflow-hidden whitespace-nowrap"}${titleOverflowing ? " inno-sidebar-title-fade" : ""} font-medium text-[var(--inno-text)]`}
-							style={marqueeActive ? ({
-								"--inno-title-shift": `-${marqueeShift}px`,
-								"--inno-title-duration": `${titleMarqueeDuration}s`,
-							} as CSSProperties) : undefined}
-						>
-							{session.name}
-							{titleOverflowing ? <span aria-hidden="true" className="inno-sidebar-title-marquee-tail" /> : null}
-						</span>
-						<span ref={titleMeasureRef} aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 -z-10 w-max whitespace-nowrap">
-							{session.name}
-						</span>
-					</div>
-				)}
-				<span className="inno-sidebar-meta shrink-0 pt-0.5 tabular-nums text-[var(--inno-text-subtle)]">{formatTime(session.updatedAt)}</span>
-			</div>
+			<SessionTitleRow
+				session={session}
+				titleState={titleState}
+				editing={editing}
+				editingName={editingName}
+				onEditChange={onEditChange}
+				onEditSave={onEditSave}
+				onEditCancel={onEditCancel}
+			/>
 
 			{/* Subtitle row: preview left, workspace right; hover replaces workspace with delete. */}
 			<div className="mt-1 flex min-w-0 items-center justify-between gap-1">
