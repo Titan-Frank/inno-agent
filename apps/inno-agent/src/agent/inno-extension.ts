@@ -20,8 +20,9 @@ import { createPracticeTools } from "./practice-tools.js";
 import { createDocumentTools } from "./document-tools.js";
 import { createOcrTools } from "./ocr-tools.js";
 import { createTavilyTools } from "./tavily-tools.js";
+import { ensureWebAccessConfig, resolvePiAiJitiAliases } from "./web-access-config.js";
 import { checkWorkspaceMutationPath } from "./workspace-path-guard.js";
-import { INNO_SYSTEM_PROMPT, ONBOARDING_GUIDE } from "./system-prompt.js";
+import { INNO_SYSTEM_PROMPT, ONBOARDING_GUIDE, WEB_ACCESS_PROMPT_HINT } from "./system-prompt.js";
 import { syncProvidersForSubagents } from "./provider-sync.js";
 import { questionBridge } from "./question-bridge.js";
 import { logger } from "../logger.js";
@@ -381,6 +382,12 @@ export function createInnoExtension(
 				sections.push(formatWorkspaceFileInstructions(workspaceDir));
 				sections.push(...buildWorkspaceContextSections(workspaceDir));
 
+				// Mention the pi-web-access fetch tools only when the plugin is
+				// actually loaded (mirrors the registration gate in section 10).
+				if (configHolder.current.plugins?.webAccess?.enabled !== false) {
+					sections.push(WEB_ACCESS_PROMPT_HINT);
+				}
+
 				// Inject threshold-gated cross-conversation recall (L3). Only
 				// injects when past snippets clear the relevance threshold, so
 				// unrelated turns stay clean. Skipped entirely when the user has
@@ -573,6 +580,49 @@ export function createInnoExtension(
 			} as Parameters<typeof pi.registerTool>[0]);
 		} catch (err) {
 			logger.warn({ err }, "Failed to register ask_user_question tool");
+		}
+
+		// 10. Register bundled third-party PI extensions. Both ship TS-only
+		// sources, so they load through jiti like pi-subagents above. All UI
+		// surface (TUI overlays, shortcuts, slash commands, browser curator) is
+		// inert in server mode — the plugins guard on ctx.hasUI.
+		// Default ON; only an explicit `plugins.<name>.enabled: false` opts out.
+		if (configHolder.current.plugins?.todo?.enabled !== false) {
+			try {
+				const { createJiti: createJitiTodo } = await import("jiti/static");
+				const jitiTodo = createJitiTodo(import.meta.url, { moduleCache: false });
+				// Package has no exports map; import index.ts by subpath.
+				const mod = (await jitiTodo.import("@juicesharp/rpiv-todo/index.ts", { default: true })) as unknown;
+				if (typeof mod === "function") {
+					(mod as (pi: ExtensionAPI) => void)(pi);
+				}
+			} catch (err) {
+				logger.warn({ err }, "Failed to load rpiv-todo extension");
+			}
+		}
+
+		if (configHolder.current.plugins?.webAccess?.enabled !== false) {
+			try {
+				// Must run before the import: pi-web-access reads web-search.json
+				// (from $PI_CODING_AGENT_DIR = paths.configDir) at extension init to
+				// decide which tools to register. The managed default disables its
+				// web_search/source_check so they can't shadow inno's Tavily tool.
+				ensureWebAccessConfig(paths.configDir);
+				const { createJiti: createJitiWeb } = await import("jiti/static");
+				const jitiWeb = createJitiWeb(import.meta.url, {
+					moduleCache: false,
+					// Root node_modules hoists pi-ai 0.75.x (pi-web-ui's pin), which
+					// lacks the ./compat export pi-web-access imports. Pin pi-ai to
+					// the backend's own 0.84.x copy.
+					alias: resolvePiAiJitiAliases(import.meta.url),
+				});
+				const mod = (await jitiWeb.import("pi-web-access/index.ts", { default: true })) as unknown;
+				if (typeof mod === "function") {
+					(mod as (pi: ExtensionAPI) => void)(pi);
+				}
+			} catch (err) {
+				logger.warn({ err }, "Failed to load pi-web-access extension");
+			}
 		}
 	};
 }

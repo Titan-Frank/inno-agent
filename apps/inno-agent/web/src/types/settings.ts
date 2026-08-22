@@ -112,3 +112,26 @@ export interface InnoSettings {
 	mcp?: { enabled: boolean };
 	ui?: { theme: string; closeBehavior: WindowCloseBehavior };
 }
+
+/* ---------- Web research (pi-web-access: web_research / source_check / fetch_content) ---------- */
+
+export type WebAccessProviderKind = "key" | "url" | "none";
+
+export interface WebAccessProvider {
+	id: string;
+	kind: WebAccessProviderKind;
+	configured: boolean;
+	maskedValue: string; // "****abcd", empty when unconfigured or kind === "none"
+}
+
+/** Served by GET /api/settings/web-access (backed by <configDir>/web-search.json). */
+export interface WebAccessSettings {
+	defaultProvider: string;
+	providers: WebAccessProvider[];
+}
+
+export interface WebAccessSettingsPayload {
+	provider?: string;
+	/** Per-provider credential/URL updates; "****…" keeps existing, "" clears. */
+	values?: Record<string, string>;
+}

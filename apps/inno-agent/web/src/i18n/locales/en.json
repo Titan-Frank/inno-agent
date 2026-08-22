@@ -654,6 +654,16 @@
 				"not-connected": "not connected",
 				"disabled": "disabled"
 			}
+		},
+		"webResearch": {
+			"title": "Web Research (web_research)",
+			"desc": "Multi-angle, multi-provider web research and fact checking (source_check). Supports 20+ providers incl. Tavily / Brave / Exa / Perplexity; DuckDuckGo needs no key. Coexists with the Tavily quick search above.",
+			"summary": "Default: {{provider}} · {{count}} provider(s) configured",
+			"defaultProvider": "Default provider",
+			"keyless": "no key needed",
+			"clear": "Clear",
+			"saved": "Saved",
+			"hint": "More providers and advanced options can be edited directly in web-search.json under the config directory."
 		}
 	},
 	"chat": {
@@ -697,6 +707,10 @@
 			"jumpToTurn": "Jump to turn {{count}}: {{title}}",
 			"turn": "Turn {{count}}",
 			"emptyTurn": "No text in this turn"
+		},
+		"todo": {
+			"progress": "Step {{current}} of {{total}}",
+			"allDone": "{{completed}} / {{total}} steps done"
 		}
 	},
 	"question": {
