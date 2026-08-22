@@ -1001,8 +1001,9 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 				const toolName = typeof message.toolName === "string" ? message.toolName : "tool";
 				// PI keeps a tool's structured details alongside its text content. Keep
 				// those details in session history so completed questionnaires can be
-				// rendered with the selected options after the session is reopened.
-				const result = toolName === "ask_user_question" && message.details !== undefined
+				// rendered with the selected options, and the todo widget can rebuild
+				// its task list, after the session is reopened.
+				const result = (toolName === "ask_user_question" || toolName === "todo") && message.details !== undefined
 					? message.details
 					: textFromContent(message.content) || message.content;
 				const isError = Boolean(message.isError);

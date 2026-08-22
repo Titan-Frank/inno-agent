@@ -8,6 +8,7 @@ import { Spinner } from "../ui/Spinner.js";
 import { QuestionDialog } from "../QuestionDialog.js";
 import { ErrorBlock, MessageBubble } from "./MessageBubble.js";
 import { CompletedToolRecords, StreamingBubbles } from "./StreamingBubbles.js";
+import { TodoWidget, extractTodoTasks } from "./TodoWidget.js";
 
 interface ChatConversationProps {
 	chat: {
@@ -54,6 +55,11 @@ export function ChatConversation({
 	const turnIndexByStartMessage = useMemo(
 		() => new Map(buildConversationTurns(chat.messages).map((turn) => [turn.startMessageIndex, turn.index])),
 		[chat.messages],
+	);
+	const todoTasks = useMemo(
+		() => extractTodoTasks(chat),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[chat.messages, chat.activeTools, chat.completedTools],
 	);
 
 	return (
@@ -142,6 +148,7 @@ export function ChatConversation({
 					{uploadChips}
 					{questionHint}
 					{busyBlocker}
+					{todoTasks ? <TodoWidget tasks={todoTasks} /> : null}
 					{wsError ? <p className="mb-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
 					{composer}
 					{workspaceContext ? <div className="mt-2">{workspaceContext}</div> : null}

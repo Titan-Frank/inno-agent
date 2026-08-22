@@ -707,6 +707,10 @@
 			"jumpToTurn": "跳转到第 {{count}} 轮：{{title}}",
 			"turn": "第 {{count}} 轮",
 			"emptyTurn": "此轮暂无文字内容"
+		},
+		"todo": {
+			"progress": "第 {{current}} / {{total}} 步",
+			"allDone": "已完成 {{completed}} / {{total}} 步"
 		}
 	},
 	"question": {
