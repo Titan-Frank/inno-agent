@@ -164,7 +164,7 @@ describe("validateChatAttachments + buildAttachmentContext", () => {
 		expect(validated.loose).toEqual([{ path: "c.xlsx", kind: "xls", source: "workspace" }]);
 
 		const context = buildAttachmentContext(validated);
-		expect(context).toContain("「pdf」→ a.pdf");
+		expect(context).toContain("第1个「pdf」→ a.pdf");
 		expect(context).toContain("普通附件");
 		expect(context).toContain("- c.xlsx");
 		expect(context).not.toContain("escape");
@@ -184,8 +184,20 @@ describe("validateChatAttachments + buildAttachmentContext", () => {
 			bindings: [{ word: "pdf", wordIndex: 0, files: [{ path: "a.pdf", kind: "pdf", source: "workspace" }, { path: "b.pdf", kind: "pdf", source: "workspace" }] }],
 			loose: [],
 		});
-		expect(context).toContain("「pdf」→ a.pdf、b.pdf");
+		expect(context).toContain("第1个「pdf」→ a.pdf、b.pdf");
 		expect(context).not.toContain("普通附件");
+	});
+
+	it("labels repeated keyword occurrences so the model can distinguish their files", () => {
+		const context = buildAttachmentContext({
+			bindings: [
+				{ word: "pdf", wordIndex: 0, files: [{ path: "first.pdf", kind: "pdf", source: "workspace" }] },
+				{ word: "pdf", wordIndex: 1, files: [{ path: "second.pdf", kind: "pdf", source: "workspace" }] },
+			],
+			loose: [],
+		});
+		expect(context).toContain("第1个「pdf」→ first.pdf");
+		expect(context).toContain("第2个「pdf」→ second.pdf");
 	});
 });
 

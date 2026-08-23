@@ -149,14 +149,14 @@ export function validateChatAttachments(
 export function buildAttachmentContext(attachments: ChatAttachments): string {
 	const bindingLines = attachments.bindings.map((binding) => {
 		const files = binding.files.map((file) => file.path).join("、");
-		return `- 「${binding.word}」→ ${files}`;
+		return `- 第${binding.wordIndex + 1}个「${binding.word}」→ ${files}`;
 	});
 	const looseLines = attachments.loose.map((file) => `- ${file.path}`);
 	if (bindingLines.length === 0 && looseLines.length === 0) return "";
 
 	const sections: string[] = [];
 	if (bindingLines.length > 0) {
-		sections.push(`绑定关系（关键词后列出的文件是用户明确指向的内容）：\n${bindingLines.join("\n")}`);
+		sections.push(`绑定关系（按关键词在用户原文中的出现位置标记；关键词后列出的文件是用户明确指向的内容）：\n${bindingLines.join("\n")}`);
 	}
 	if (looseLines.length > 0) {
 		sections.push(`普通附件：\n${looseLines.join("\n")}`);
