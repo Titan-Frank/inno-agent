@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { logger } from "../logger.js";
 import { resolveContainedPath } from "../utils/path-safety.js";
 import { normalizeWorkspaceRelativePath } from "./file-helpers.js";
@@ -162,11 +162,4 @@ export function buildAttachmentContext(attachments: ChatAttachments): string {
 		sections.push(`普通附件：\n${looseLines.join("\n")}`);
 	}
 	return `[用户本轮附带文件（路径均为当前工作区根目录下的相对路径；调用文件工具时请原样使用，不要添加工作区绝对路径、/ 或 ./ 前缀）：\n${sections.join("\n")}]`;
-}
-
-/** Path existence helper kept for callers that only need a boolean probe. */
-export function attachmentPathExists(workspaceRoot: string, path: string): boolean {
-	const resolved = resolveContainedPath(workspaceRoot, normalizeWorkspaceRelativePath(path));
-	if (!resolved) return false;
-	return existsSync(resolved);
 }
