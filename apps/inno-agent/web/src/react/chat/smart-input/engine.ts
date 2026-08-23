@@ -85,7 +85,8 @@ export interface EngineCallbacks {
 	onOpenStatusPanel: (slot: Slot, anchor: HTMLElement) => void;
 	onOpenFillMenu: (slot: Slot, anchor: HTMLElement) => void;
 	onBubbleContextMenu: (event: MouseEvent, slot: Slot, anchor: HTMLElement) => void;
-	/** Filled-chip hover — drives the 450ms hover-open of the status panel. */
+	onBubbleClose?: (slot: Slot, anchor: HTMLElement) => void;
+	/** Filled-chip hover — drives the 250ms hover-open of the status panel. */
 	onChipHover?: (slot: Slot, anchor: HTMLElement, entering: boolean) => void;
 	onWorkspaceHighlight: (paths: string[] | null) => void;
 }
@@ -1417,6 +1418,12 @@ export class SmartInputEngine {
 		remove.className = "inno-smart-chip-x";
 		remove.textContent = "×";
 		remove.title = this.opts.labels().removeBubble;
+		const cancelBubbleHover = (event: Event) => {
+			event.stopPropagation();
+			this.opts.callbacks.onBubbleClose?.(slot, chip);
+		};
+		remove.addEventListener("pointerenter", () => this.opts.callbacks.onBubbleClose?.(slot, chip));
+		remove.addEventListener("pointerdown", cancelBubbleHover);
 		remove.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.removeSlot(slot);
@@ -1436,7 +1443,7 @@ export class SmartInputEngine {
 				if (this.consumeSuppressedBubbleClick(slot.id, event)) return;
 				this.opts.callbacks.onOpenStatusPanel(slot, chip);
 			});
-			// Hover 450ms auto-opens the status panel (prototype parity).
+			// Hover 250ms auto-opens the status panel (prototype parity).
 			chip.addEventListener("mouseenter", () => this.opts.callbacks.onChipHover?.(slot, chip, true));
 			chip.addEventListener("mouseleave", () => this.opts.callbacks.onChipHover?.(slot, chip, false));
 		} else {
@@ -1448,6 +1455,7 @@ export class SmartInputEngine {
 		}
 		chip.addEventListener("contextmenu", (event) => {
 			event.preventDefault();
+			event.stopPropagation();
 			this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
 		});
 

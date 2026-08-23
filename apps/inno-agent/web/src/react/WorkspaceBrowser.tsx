@@ -715,11 +715,11 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 						return;
 					}
 					if (node.isSelected) {
+						node.deselect();
 						if (onPreviewFile) {
 							void onPreviewFile(DEFAULT_PREVIEW_PANEL_WIDTH);
 							return;
 						}
-						node.deselect();
 						return;
 					}
 					node.select();

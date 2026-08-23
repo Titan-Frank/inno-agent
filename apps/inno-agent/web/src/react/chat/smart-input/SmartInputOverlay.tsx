@@ -14,7 +14,7 @@ import { PopoverSurface } from "../../ui/PopoverSurface.js";
  * Floating panels for the smart-input composer: status panel (bound files,
  * live upload progress, retry), fill menu (workspace picker + batch
  * multi-select) and the bubble context menu. Portal-rendered and clamped to
- * the viewport; behavior ports the v76 prototype (hover 450ms open, 260ms
+ * the viewport; behavior ports the v76 prototype (hover 250ms open, 260ms
  * auto-close, pin-on-interact, >25px real move to unpin).
  */
 

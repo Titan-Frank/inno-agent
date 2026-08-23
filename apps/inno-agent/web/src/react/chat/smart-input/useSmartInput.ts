@@ -18,6 +18,7 @@ export interface UseSmartInputOptions {
 	onOpenStatusPanel: EngineCallbacks["onOpenStatusPanel"];
 	onOpenFillMenu: EngineCallbacks["onOpenFillMenu"];
 	onBubbleContextMenu: EngineCallbacks["onBubbleContextMenu"];
+	onBubbleClose?: EngineCallbacks["onBubbleClose"];
 	onChipHover?: EngineCallbacks["onChipHover"];
 	onWorkspaceHighlight: EngineCallbacks["onWorkspaceHighlight"];
 }
@@ -83,6 +84,7 @@ export function useSmartInput(options: UseSmartInputOptions) {
 				onOpenStatusPanel: (...args) => optionsRef.current.onOpenStatusPanel(...args),
 				onOpenFillMenu: (...args) => optionsRef.current.onOpenFillMenu(...args),
 				onBubbleContextMenu: (...args) => optionsRef.current.onBubbleContextMenu(...args),
+				onBubbleClose: (...args) => optionsRef.current.onBubbleClose?.(...args),
 				onChipHover: (...args) => optionsRef.current.onChipHover?.(...args),
 				onWorkspaceHighlight: (paths) => optionsRef.current.onWorkspaceHighlight(paths),
 			},

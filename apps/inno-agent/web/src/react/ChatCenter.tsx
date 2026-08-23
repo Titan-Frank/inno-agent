@@ -85,6 +85,7 @@ function rememberWsChoice(mode: WsMode, existingId: string): void {
 }
 
 const SMART_FILE_PREVIEW_WIDTH = 560;
+const SMART_HOVER_OPEN_MS = 250;
 
 export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProps) {
 	const { t } = useTranslation();
@@ -104,6 +105,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	const [smartToast, setSmartToast] = useState<{ message: string; error?: boolean } | null>(null);
 	const [smartHasSlots, setSmartHasSlots] = useState(false);
 	const [smartPanel, setSmartPanel] = useState<SmartPanelState | null>(null);
+	const smartPanelRef = useRef<SmartPanelState | null>(null);
 	const [smartPanelRefresh, setSmartPanelRefresh] = useState(0);
 	const smartBoundFileCountRef = useRef(0);
 	const smartToastTimer = useRef<number | null>(null);
@@ -113,6 +115,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	const hitRef = useRef<HTMLDivElement | null>(null);
 	const uploadsRef = useRef<PendingUpload[]>([]);
 	uploadsRef.current = uploads;
+	smartPanelRef.current = smartPanel;
 	const [inlineImages, setInlineImages] = useState<PreparedInlineImage[]>([]);
 	const [draftHasContent, setDraftHasContent] = useState(() => Boolean(draftRef.current.trim()));
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -557,45 +560,66 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		return { left: rect.left, bottom: rect.bottom };
 	};
 
+	const updateSmartPanel = useCallback((next: SmartPanelState | null) => {
+		smartPanelRef.current = next;
+		setSmartPanel(next);
+	}, []);
+
 	const openSmartPanel = useCallback((kind: SmartPanelState["kind"], slot: { id: number }, chip: HTMLElement) => {
+		// A delayed chip click/hover callback must not replace an already-open
+		// context menu. Menu actions switch panels through updateSmartPanel
+		// explicitly, so this guard only blocks stale source-bubble callbacks.
+		if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
 		// The workspace browser is not mounted on a cold welcome screen, so its
 		// first tree request may not have started yet. Opening the fill menu is a
 		// valid request for the same data; kick it off here instead of treating the
 		// initial null tree as a real empty workspace.
 		if (kind === "fill" && workspaceStore.tree === null && !workspaceStore.isLoadingTree) void workspaceStore.loadTree();
-		setSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
-	}, []);
+		updateSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
+	}, [updateSmartPanel]);
 
-	const handleChipHover = useCallback((slot: { id: number; files: unknown[] }, chip: HTMLElement, entering: boolean) => {
+	const cancelSmartHoverTimers = useCallback(() => {
+		if (smartHoverTimer.current !== null) {
+			window.clearTimeout(smartHoverTimer.current);
+			smartHoverTimer.current = null;
+		}
 		if (smartHoverCloseTimer.current !== null) {
 			window.clearTimeout(smartHoverCloseTimer.current);
 			smartHoverCloseTimer.current = null;
 		}
+	}, []);
+
+	const handleChipHover = useCallback((slot: { id: number; files: unknown[] }, chip: HTMLElement, entering: boolean) => {
+		cancelSmartHoverTimers();
 		if (entering) {
-			if (smartHoverTimer.current !== null) return;
 			smartHoverTimer.current = window.setTimeout(() => {
 				smartHoverTimer.current = null;
+				// A context menu is an explicit interaction. It must win over a
+				// hover callback that was already queued before the right-click.
+				if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
 				// The engine rebuilds hit-layer chips on sync; the captured chip
 				// element may be detached by now. Re-query the live chip so the
 				// anchor rect is not (0, 0).
 				const liveChip = document.querySelector<HTMLElement>(`.inno-smart-chip[data-slot-id="${slot.id}"]`) ?? chip;
 				openSmartPanel("status", slot, liveChip);
-			}, 450);
+			}, SMART_HOVER_OPEN_MS);
 			return;
-		}
-		if (smartHoverTimer.current !== null) {
-			window.clearTimeout(smartHoverTimer.current);
-			smartHoverTimer.current = null;
 		}
 		// Left the chip: if the status panel for this slot is open but the
 		// pointer did not move onto it, close it shortly (panel parity).
 		smartHoverCloseTimer.current = window.setTimeout(() => {
 			smartHoverCloseTimer.current = null;
+			const currentPanel = smartPanelRef.current;
+			// Do not let a chip mouseleave timer dismiss a context menu. Checking
+			// the menu state/DOM is more reliable than `:hover` while the portal is
+			// being mounted or while the pointer is still over the source chip.
+			if (currentPanel?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
+			if (currentPanel?.slotId !== slot.id) return;
 			const overPanel = document.querySelector(".inno-smart-panel:hover");
 			const overChip = document.querySelector(".inno-smart-chip:hover");
-			if (!overPanel && !overChip) setSmartPanel(null);
+			if (!overPanel && !overChip) updateSmartPanel(null);
 		}, 260);
-	}, [openSmartPanel]);
+	}, [cancelSmartHoverTimers, openSmartPanel, updateSmartPanel]);
 
 	const highlightWorkspace = useCallback((paths: string[] | null) => {
 		window.dispatchEvent(new CustomEvent("inno-smart-highlight", { detail: paths }));
@@ -629,9 +653,17 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		},
 		onOpenStatusPanel: (slot, chip) => openSmartPanel("status", slot, chip),
 		onOpenFillMenu: (slot, chip) => openSmartPanel("fill", slot, chip),
-		onBubbleContextMenu: (event, slot, chip) => {
+		 onBubbleContextMenu: (event, slot, chip) => {
+			// Right-clicking a filled bubble can race with the hover open/close
+			// timers. A context menu is an explicit interaction and must not be
+			// replaced by the hover status panel or dismissed by its timer.
+			cancelSmartHoverTimers();
 			const rect = chip.getBoundingClientRect();
-			setSmartPanel({ kind: "menu", slotId: slot.id, anchor: { left: rect.left, bottom: rect.bottom }, x: event.clientX, y: event.clientY });
+			updateSmartPanel({ kind: "menu", slotId: slot.id, anchor: { left: rect.left, bottom: rect.bottom }, x: event.clientX, y: event.clientY });
+		},
+		onBubbleClose: (slot) => {
+			cancelSmartHoverTimers();
+			if (smartPanelRef.current?.slotId === slot.id) updateSmartPanel(null);
 		},
 		onChipHover: handleChipHover,
 		onWorkspaceHighlight: highlightWorkspace,
@@ -1120,8 +1152,8 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		<SmartInputOverlay
 				engine={engineRef.current}
 				panel={smartPanel}
-				onClose={() => setSmartPanel(null)}
-				onOpenPanel={(next) => setSmartPanel(next)}
+				onClose={() => updateSmartPanel(null)}
+				onOpenPanel={updateSmartPanel}
 				workspaceFiles={workspaceFiles}
 				workspaceFilesLoading={workspaceTreeLoading || (workspaceTree === null && !workspaceTreeError)}
 				attachments={uploads}
