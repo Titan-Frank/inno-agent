@@ -722,6 +722,18 @@
 	},
 	"chat": {
 		"welcomePlaceholder": "What would you like to learn or build? Send a message to start…",
+		"slashPalette": {
+			"ariaLabel": "Slash commands",
+			"appGroup": "App actions",
+			"agentGroup": "Agent commands",
+			"newChatDesc": "Start a new chat",
+			"modelDesc": "Switch model",
+			"empty": "No commands matching \"/{{query}}\"",
+			"profileDesc": "Open learner profile",
+			"jobsDesc": "View scheduled jobs",
+			"skillsDesc": "Manage skills",
+			"settingsDesc": "Open settings"
+		},
 		"loadingSession": "Loading session…",
 		"emptySessionTitle": "No messages in this conversation",
 		"emptySessionHint": "Type a message below to start the conversation.",

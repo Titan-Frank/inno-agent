@@ -52,6 +52,7 @@ import { handleWikiRoutes } from "./server/routes/wiki.js";
 import { handlePresetsRoutes } from "./server/routes/presets.js";
 import { handlePracticeRoutes } from "./server/routes/practice.js";
 import { handleChatRoutes } from "./server/routes/chat.js";
+import { handleCommandsRoutes } from "./server/routes/commands.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -1388,6 +1389,9 @@ const server = createServer(async (req, res) => {
 			scheduleSkillsReload,
 			invalidateContentSource,
 		})) return;
+
+		// --- Slash commands API (extracted to server/routes/commands.ts) ---
+		if (await handleCommandsRoutes(req, res, method, url)) return;
 
 		// --- Chat API (extracted to server/routes/chat.ts) ---
 		if (await handleChatRoutes(req, res, method, url, {

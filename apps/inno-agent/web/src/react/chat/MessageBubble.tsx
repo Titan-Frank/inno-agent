@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { X, AlertTriangle, FileCode2 } from "lucide-react";
+import { X, AlertTriangle, FileCode2, Zap } from "lucide-react";
 import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
@@ -13,6 +13,7 @@ import { MarkdownArtifact } from "../MarkdownArtifact.js";
 import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
 import { FileName } from "../FileName.js";
 import { FileTypeIcon } from "../FileTypeIcon.js";
+import { collapseSkillMessage } from "./skill-message-collapse.js";
 
 // Pure, props-driven chat rendering components. This module must NOT import
 // stores or the api/ layer — apps/showcase reuses it to replay recorded
@@ -391,6 +392,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	const regularTools = (message.tools ?? []).filter((tool) => !answeredToolCallIds.has(tool.toolCallId));
 
 	if (message.role === "user") {
+		const skillMessage = collapseSkillMessage(message.content);
 		return (
 			<motion.div
 				className="flex justify-end"
@@ -423,6 +425,14 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 								resolveUrl={resolveAttachmentUrl}
 								onOpenFile={onOpenAttachment}
 						/>
+					) : skillMessage ? (
+						<span className="inline-flex items-center gap-1.5 whitespace-normal">
+							<span className="inline-flex items-center gap-1 rounded-md bg-[var(--inno-accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--inno-accent)]">
+								<Zap size={12} />
+								/skill:{skillMessage.skillName}
+							</span>
+							{skillMessage.args ? <span>{skillMessage.args}</span> : null}
+						</span>
 					) : (
 						message.content.trim()
 					)}

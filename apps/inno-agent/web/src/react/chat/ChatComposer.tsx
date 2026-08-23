@@ -64,6 +64,8 @@ export interface ChatComposerProps {
 	onStop: () => void;
 	onReconnect: () => void;
 	onRetry: () => void;
+	/** Slash-command palette rendered above the composer (ChatCenter owns its state). */
+	slashPalette?: ReactNode;
 }
 
 export function ChatComposer({
@@ -113,6 +115,7 @@ export function ChatComposer({
 	onStop,
 	onReconnect,
 	onRetry,
+	slashPalette,
 }: ChatComposerProps) {
 	const { t } = useTranslation();
 	const modelPickerRef = useRef<HTMLDivElement | null>(null);
@@ -410,7 +413,7 @@ export function ChatComposer({
 	const sendDisabled = !hasSendableContent || isUploading;
 	return (
 		<div
-			className={`inno-composer rounded-2xl p-2 ${osFileDragOver ? "is-osfile-over" : ""}`}
+			className={`inno-composer relative rounded-2xl p-2 ${osFileDragOver ? "is-osfile-over" : ""}`}
 			onDragOverCapture={handleComposerDragOver}
 			onDragOver={handleComposerDragOver}
 			onDragLeave={(event) => {
@@ -419,6 +422,7 @@ export function ChatComposer({
 			onDropCapture={handleComposerDrop}
 			onDrop={handleComposerDrop}
 		>
+			{slashPalette}
 			<input ref={fileInputRef} id="file-input" type="file" className="hidden" multiple onChange={onFiles} />
 			<input ref={imageInputRef} id="image-input" type="file" className="hidden" multiple accept="image/*" onChange={onImageFiles} />
 			{renderComposerAttachments()}

@@ -722,6 +722,18 @@
 	},
 	"chat": {
 		"welcomePlaceholder": "有什么想学习或实践的?发送消息开始…",
+		"slashPalette": {
+			"ariaLabel": "斜杠命令",
+			"appGroup": "应用操作",
+			"agentGroup": "Agent 命令",
+			"newChatDesc": "开始新会话",
+			"modelDesc": "切换模型",
+			"empty": "没有匹配 \"/{{query}}\" 的命令",
+			"profileDesc": "查看学习者画像",
+			"jobsDesc": "查看定时任务",
+			"skillsDesc": "管理技能",
+			"settingsDesc": "打开设置"
+		},
 		"loadingSession": "正在加载会话…",
 		"emptySessionTitle": "此会话暂无消息",
 		"emptySessionHint": "在下方输入消息，开始新的对话。",

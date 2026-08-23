@@ -18,7 +18,7 @@ import { complete } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, ImageContent, Model, UserMessage } from "@earendil-works/pi-ai";
 import { basename, join, resolve } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createInnoExtension, type ConfigHolder, type InnoExtensionDeps } from "./inno-extension.js";
+import { createInnoExtension, expandInnoSlashCommand, INNO_SLASH_COMMAND_NAMES, type ConfigHolder, type InnoExtensionDeps } from "./inno-extension.js";
 import { createMcpStatusExtension, loadMcpAdapterExtension } from "./mcp-extension.js";
 import { createObservabilityExtension, createPromptObserver, obsLogger } from "./observability-extension.js";
 import type { InnoConfig } from "../config.js";
@@ -403,6 +403,62 @@ export function syncConfig(config: InnoConfig): void {
 export function getSession(): AgentSession {
 	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
 	return _runtime.session;
+}
+
+export interface SlashCommandItem {
+	/** Command name without the leading slash. Skills use the `skill:<name>` form. */
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill";
+	/**
+	 * Extension commands safe to offer in the web composer. Inno's own
+	 * commands (registered in inno-extension.ts, matched by
+	 * INNO_SLASH_COMMAND_NAMES) expand into a normal turn via
+	 * ctx.sendUserMessage; bundled plugins' commands are TUI overlays
+	 * gated on ctx.hasUI and would no-op server-side.
+	 */
+	webSafe?: boolean;
+}
+
+/**
+ * List the slash commands the current runtime session would actually dispatch
+ * or expand in `session.prompt()`: extension commands (pi.registerCommand),
+ * prompt templates, and skills (invoked as `/skill:<name>`). PI's builtin
+ * commands (/model, /new, ...) are TUI-only and intentionally excluded — the
+ * web UI re-implements those as app-level actions. Returns [] before the
+ * session is initialized. All reads are in-memory and safe during streaming.
+ */
+export function listSlashCommands(): SlashCommandItem[] {
+	let session: AgentSession;
+	try {
+		session = getSession();
+	} catch {
+		return [];
+	}
+	const items: SlashCommandItem[] = [];
+	try {
+		for (const command of session.extensionRunner.getRegisteredCommands()) {
+			items.push({
+				name: command.invocationName,
+				description: command.description,
+				source: "extension",
+				webSafe: INNO_SLASH_COMMAND_NAMES.has(command.invocationName),
+			});
+		}
+	} catch {
+		// A mid-reload runner may throw; commands are best-effort listing.
+	}
+	for (const template of session.promptTemplates ?? []) {
+		items.push({ name: template.name, description: template.description, source: "prompt" });
+	}
+	try {
+		for (const skill of session.resourceLoader.getSkills().skills) {
+			items.push({ name: `skill:${skill.name}`, description: skill.description, source: "skill" });
+		}
+	} catch {
+		// Skills listing should never break the endpoint.
+	}
+	return items;
 }
 
 function nativeImagesForSession(
@@ -1087,6 +1143,12 @@ export async function runPrompt(
 	imageFallbackPrompt?: string,
 	attachmentContext?: string,
 ): Promise<string> {
+	// See expandInnoSlashCommand for why Inno commands can't ride
+	// session.prompt()'s extension-command dispatch. The fallback twin must
+	// be expanded too: text-only models run fallbackPrompt ?? prompt, and the
+	// routes always build it from the raw (unexpanded) text.
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	const session = getSession();
 
 	let output = "";
@@ -1271,6 +1333,8 @@ export function runPromptStreaming(
 	images?: ImageContent[],
 	imageFallbackPrompt?: string,
 ): Promise<string> {
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	return enqueue(async () => {
 		const session = getSession();
 		let output = "";
@@ -1379,6 +1443,8 @@ export function runPromptStreamingInSession(
 	imageFallbackPrompt?: string,
 	attachmentContext?: string,
 ): Promise<string> {
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	return enqueue(async () => {
 		let output = "";
 		let streamError: string | undefined;
