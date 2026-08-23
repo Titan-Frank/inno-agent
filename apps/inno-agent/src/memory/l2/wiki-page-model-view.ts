@@ -97,7 +97,16 @@ function serializedArray(values: readonly string[]): string {
 function rewriteField(content: string, fieldName: string, line: string): string {
 	return replaceFrontmatterBody(content, (body) => {
 		const ranges = pairRanges(body, new Set([fieldName]));
-		if (ranges.length === 0) return `${body.trimEnd()}${body.trim() ? "\n" : ""}${line}`;
+		if (ranges.length === 0) {
+			// A malformed sibling key can make the YAML AST unavailable even when
+			// this top-level field is intact. Keep the reference ingest boundary's
+			// line-level replacement semantics so normalization does not append a
+			// duplicate date/source field and amplify the original model error.
+			const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+			const topLevel = new RegExp(`(^|\\n)${escaped}[ \\t]*:[^\\r\\n]*`, "i");
+			if (topLevel.test(body)) return body.replace(topLevel, (_match, prefix: string) => `${prefix}${line}`);
+			return `${body.trimEnd()}${body.trim() ? "\n" : ""}${line}`;
+		}
 		const range = ranges[0];
 		const original = body.slice(range.start, range.end);
 		const ending = original.endsWith("\r\n") ? "\r\n" : original.endsWith("\n") ? "\n" : "";

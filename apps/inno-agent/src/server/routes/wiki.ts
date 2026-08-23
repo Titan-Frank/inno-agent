@@ -5,8 +5,9 @@ import { logger } from "../../logger.js";
 import { getL2Memory } from "../../memory/l2/l2-memory.js";
 import { readManifest, removeWikiPathFromManifest } from "../../memory/l2/manifest-store.js";
 import { buildWikiGraph } from "../../memory/l2/wiki-graph.js";
-import { parseFrontmatter } from "../../memory/l2/wiki-maintainer.js";
-import { ensureDir, readText, writeText } from "../../storage/file-store.js";
+import { parseFrontmatter, rebuildIndex } from "../../memory/l2/wiki-maintainer.js";
+import type { WikiIngestReview } from "../../memory/l2/wiki-generator.js";
+import { ensureDir, readJsonl, readText, writeText } from "../../storage/file-store.js";
 import { safeJoinReal } from "../file-helpers.js";
 import { json, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
 import { listWikiPagePaths } from "../../memory/l2/wiki-page-files.js";
@@ -129,6 +130,11 @@ export async function handleWikiRoutes(
 		}
 		writeText(fullPath, content);
 		await getL2Memory(l2DataDir).indexPageByPath(path);
+		try {
+			rebuildIndex(l2DataDir, readManifest(l2DataDir));
+		} catch (err) {
+			logger.warn({ err, path }, "failed to rebuild wiki index after page update");
+		}
 		json(res, 200, { path, saved: true });
 		return true;
 	}
@@ -153,10 +159,27 @@ export async function handleWikiRoutes(
 			rmSync(fullPath);
 			removeWikiPathFromManifest(l2DataDir, path);
 			await getL2Memory(l2DataDir).removePage(path);
+			try {
+				rebuildIndex(l2DataDir, readManifest(l2DataDir));
+			} catch (err) {
+				logger.warn({ err, path }, "failed to rebuild wiki index after page deletion");
+			}
 			json(res, 200, { path, deleted: true });
 		} catch (err) {
 			logger.warn({ err }, "failed to delete wiki page");
 			json(res, 500, { error: "Failed to delete wiki page" });
+		}
+		return true;
+	}
+
+	if (method === "GET" && url === "/api/wiki/reviews") {
+		try {
+			const reviews = readJsonl<WikiIngestReview>(join(l2DataDir, "reviews.jsonl"))
+				.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+			json(res, 200, reviews);
+		} catch (err) {
+			logger.warn({ err }, "failed to list wiki reviews");
+			json(res, 200, []);
 		}
 		return true;
 	}

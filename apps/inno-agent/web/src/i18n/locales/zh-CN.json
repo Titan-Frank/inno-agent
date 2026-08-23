@@ -121,6 +121,10 @@
 			"openInNotebook": "在笔记本中查看",
 			"backToGraph": "返回图谱"
 		},
+		"reviews": {
+			"title": "待审阅",
+			"empty": "暂无待审阅事项。"
+		},
 		"delete": {
 			"button": "删除",
 			"confirm": "确定删除「{{title}}」吗？该页面将被永久移除。"

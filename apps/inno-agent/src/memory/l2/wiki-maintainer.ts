@@ -207,7 +207,7 @@ function defaultPurposeContent(): string {
 }
 
 function initialIndexContent(): string {
-	// llm-wiki creates no index during project setup. It only materializes this
+	// Project setup creates no index. Ingestion materializes this
 	// seed when the first successful ingest adds Recently Updated entries.
 	return "# Wiki Index\n";
 }
@@ -246,7 +246,7 @@ export function ensureNavigationFiles(l2DataDir: string): void {
 	const indexPath = join(wikiDir, "index.md");
 	if (!fileExists(indexPath)) writeText(indexPath, initialIndexContent());
 	const logPath = join(wikiDir, "log.md");
-	// llm-wiki does not seed model-visible log content before the first ingest.
+	// Do not seed model-visible log content before the first ingest.
 	// Keep the storage file present, but let rich generation write the first entry.
 	if (!fileExists(logPath)) writeText(logPath, "");
 }
@@ -257,7 +257,7 @@ export function readMaintenanceContext(l2DataDir: string): { schema: string; pur
 	const purpose = readText(join(l2DataDir, "wiki", "PURPOSE.md"));
 	const storedIndex = readText(join(l2DataDir, "wiki", "index.md"));
 	// Keep an index file for Inno's storage/UI APIs, while giving the first
-	// ingest the same empty index context llm-wiki sees before it writes one.
+	// ingest the same empty index context used before the first index write.
 	const index = storedIndex === initialIndexContent() ? "" : storedIndex;
 	const overviewPath = join(l2DataDir, "wiki", "analysis", "overview.md");
 	const overview = fileExists(overviewPath) ? readText(overviewPath) : "";
@@ -470,6 +470,18 @@ export function appendLog(l2DataDir: string, action: string, title: string, deta
 	let entry = `\n## [${today}] ${action} | ${title}\n`;
 	if (details) entry += `${details.trim()}\n`;
 	appendText(logPath, entry);
+}
+
+/** Append the structural ingest entry used when rich generation omits wiki/log.md. */
+export function appendDeterministicIngestLog(l2DataDir: string, sourceIdentity: string): void {
+	const logPath = join(l2DataDir, "wiki", "log.md");
+	ensureDir(join(l2DataDir, "wiki"));
+	const existing = fileExists(logPath) ? readText(logPath) : "";
+	const entry = `## [${currentWikiDate()}] ingest | ${sourceIdentity}`;
+	const next = existing.trim()
+		? `${existing.trimEnd()}\n\n${entry}\n`
+		: `# Wiki Log\n\n${entry}\n`;
+	writeText(logPath, next);
 }
 
 // ============================================================================

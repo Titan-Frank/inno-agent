@@ -5,6 +5,7 @@ import {
 	updateWikiPage,
 	deleteWikiPage,
 	getWikiGraph,
+	listWikiReviews,
 } from "../api/wiki.js";
 import type {
 	WikiPageSummary,
@@ -12,9 +13,10 @@ import type {
 	WikiGraphNode,
 	WikiGraphEdge,
 	WikiGraphCommunities,
+	WikiReview,
 } from "../types/wiki.js";
 
-export type NotebookView = "graph" | "page";
+export type NotebookView = "graph" | "page" | "reviews";
 
 interface NotebookStoreEvents {
 	change: void;
@@ -25,6 +27,7 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 	nodes: WikiGraphNode[] = [];
 	edges: WikiGraphEdge[] = [];
 	communities: WikiGraphCommunities | null = null;
+	reviews: WikiReview[] = [];
 	currentPage: { path: string; content: string } | null = null;
 	isLoadingPages = false;
 	isLoadingGraph = false;
@@ -74,7 +77,7 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 	}
 
 	async loadAll(): Promise<void> {
-		await Promise.all([this.loadPages(), this.loadGraph()]);
+		await Promise.all([this.loadPages(), this.loadGraph(), this.loadReviews()]);
 	}
 
 	async loadPages(): Promise<void> {
@@ -106,6 +109,15 @@ class NotebookStoreImpl extends EventEmitter<NotebookStoreEvents> {
 			this.isLoadingGraph = false;
 			this.emit("change", undefined);
 		}
+	}
+
+	async loadReviews(): Promise<void> {
+		try {
+			this.reviews = await listWikiReviews();
+		} catch {
+			this.reviews = [];
+		}
+		this.emit("change", undefined);
 	}
 
 	async selectPage(path: string, options: { switchView?: boolean } = {}): Promise<void> {

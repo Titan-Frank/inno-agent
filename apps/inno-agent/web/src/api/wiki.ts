@@ -1,5 +1,5 @@
 import { apiFetch } from "./client.js";
-import type { WikiPageSummary, WikiPageDetail, WikiGraphData, WikiStats } from "../types/wiki.js";
+import type { WikiPageSummary, WikiPageDetail, WikiGraphData, WikiStats, WikiReview } from "../types/wiki.js";
 
 export async function listWikiPages(): Promise<WikiPageSummary[]> {
 	return apiFetch<WikiPageSummary[]>("/api/wiki/pages");
@@ -28,4 +28,8 @@ export async function getWikiGraph(): Promise<WikiGraphData> {
 
 export async function getWikiStats(): Promise<WikiStats> {
 	return apiFetch<WikiStats>("/api/wiki/stats");
+}
+
+export async function listWikiReviews(): Promise<WikiReview[]> {
+	return apiFetch<WikiReview[]>("/api/wiki/reviews");
 }

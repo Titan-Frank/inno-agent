@@ -13,44 +13,29 @@ import { fileExists, readJson, writeJson } from "../../storage/file-store.js";
 import { buildWikiLanguageDirective } from "./wiki-output-language.js";
 import { isWikiLlmResponseAccepted, withWikiLlmPayloadAlignment } from "./wiki-llm-compat.js";
 
-function buildAnalysisSystemPrompt(purpose: string, schema: string, index: string): string {
+export function buildAnalysisSystemPrompt(purpose: string, schema: string, index: string): string {
 	return [
-	"You are an expert research analyst. Read the source document and produce a structured analysis.",
-	"Do not output chain-of-thought, hidden reasoning, or a thinking transcript. Reason internally and write only the concise final analysis.",
-	buildWikiLanguageDirective(),
-	"Your analysis should cover:",
-	"## Key Entities",
-	"List people, organizations, products, datasets, tools mentioned. For each:",
-	"- Name and type",
-	"- Role in the source (central vs. peripheral)",
-	"- Whether it likely already exists in the wiki (check the index)",
-	"## Key Concepts",
-	"List theories, methods, techniques, phenomena. For each:",
-	"- Name and brief definition",
-	"- Why it matters in this source",
-	"- Whether it likely already exists in the wiki",
-	"## Main Arguments & Findings",
-	"- What are the core claims or results?",
-	"- What evidence supports them?",
-	"- How strong is the evidence?",
-	"- Which named subject is each claim about? Do not transfer claims, limits, or evaluations from one entity/model/product/method to another just because they share keywords.",
-	"## Connections to Existing Wiki",
-	"- What existing pages does this source relate to?",
-	"- Does it strengthen, challenge, or extend existing knowledge?",
-	"## Contradictions & Tensions",
-	"- Does anything in this source conflict with existing wiki content?",
-	"- Are there internal tensions or caveats?",
-	"## Recommendations",
-	"- What wiki pages should be created or updated?",
-	"- If the project schema (below) defines page types beyond entity/concept (e.g. goal, habit, reflection, finding, decision, meeting), and the source genuinely contains matching content, recommend pages of those types — name the type explicitly. Only when the source actually supports it; never invent goals/habits/journal entries that aren't in the source.",
-	"- What should be emphasized vs. de-emphasized?",
-	"- Any open questions worth flagging for the user?",
-	"Be thorough but concise. Focus on what's genuinely important.",
-	"If a folder context is provided, use it as a hint for categorization — the folder structure often reflects the user's organizational intent (e.g., 'papers/energy' suggests the file is an energy-related paper).",
-	"",
-	schema ? `## Project Schema (page types available — map source content to schema-defined types when it fits)\n${schema}` : "",
-	purpose ? `## Wiki Purpose (for context)\n${purpose}` : "",
-	index ? `## Current Wiki Index (for checking existing content)\n${index}` : "",
+		"Prepare a structured evidence review for the L2 page-writing stage.",
+		"Think through the source internally, then return only the useful final analysis. Preserve distinctions that affect page routing or links.",
+		buildWikiLanguageDirective(),
+		"Use all of the following headings, in this order:",
+		"## Key Entities",
+		"List named people, organizations, products, datasets, tools, and similar subjects. For every item give its type, whether it is central or peripheral, its role here, and whether the current index appears to contain the same page.",
+		"## Key Concepts",
+		"List important theories, methods, techniques, phenomena, or abstractions. Give a short source-grounded definition, why it matters here, and any likely existing-page match.",
+		"## Main Arguments & Findings",
+		"State the source's main claims, results, limits, evaluations, and recommendations. Attach each item to the exact subject it concerns, cite the supporting evidence, and rate the evidence strength. Never transfer a claim between subjects merely because they share terms.",
+		"## Connections to Existing Wiki",
+		"Name supported relationships to existing pages and say whether the source confirms, extends, qualifies, or disputes them.",
+		"## Contradictions & Tensions",
+		"Record conflicts with the index, internal tensions, caveats, ambiguous identities, and evidence gaps. Keep unresolved uncertainty visible.",
+		"## Recommendations",
+		"Recommend pages to create or update, with the schema type and destination when known. State what deserves emphasis and what should be de-emphasized, plus useful open questions. Use extra schema types only when the source genuinely contains that kind of material; never invent goals, habits, decisions, or reflections.",
+		"Use folder context only as a categorization hint, never as evidence for a factual claim.",
+		"",
+		schema ? `## Available schema\n${schema}` : "",
+		purpose ? `## Wiki purpose\n${purpose}` : "",
+		index ? `## Existing page index\n${index}` : "",
 	].filter(Boolean).join("\n");
 }
 
@@ -84,27 +69,20 @@ export function hashLongSourceText(text: string): string {
 
 export function buildChunkSystemPrompt(purpose: string, schema: string, index: string): string {
 	return [
-		"You are analyzing a long source document for a personal wiki.",
-		"Do not output chain-of-thought, hidden reasoning, or a thinking transcript.",
-		"Analyze only the current MAIN CHUNK. Use overlap and digest for context only.",
-		"Keep stable names consistent with the existing wiki and prior digest.",
-	buildWikiLanguageDirective(),
-	"Output exactly two markdown sections:",
+		"Analyze the current main segment of a long source for the L2 wiki.",
+		"The digest and overlap are context only. New findings must be supported by the main segment; do not promote a fact that appears only in overlap.",
+		"Keep subject names and page identities stable against the index and the previous digest. Return the final result, never hidden reasoning.",
+		buildWikiLanguageDirective(),
+		"Return exactly the following two headings, in this order:",
 		"## Chunk Analysis",
-		"- Concise summary of the main chunk",
-		"- New or updated entities",
-		"- New or updated concepts",
-		"- Any schema-defined page types beyond entity/concept that the main chunk genuinely supports",
-		"- Claims, findings, evidence, contradictions",
-		"- Open questions or research gaps",
+		"Summarize supported entities (including new or updated ones), concepts, schema-typed candidates, claims/findings, evidence, contradictions, and open questions introduced or clarified by this segment.",
 		"## Updated Global Digest",
-		"A compact document-level digest that incorporates this chunk and preserves prior cross-chunk context.",
-		"Keep this digest structured under: Summary, Entities, Concepts, Schema-Typed Candidates, Claims, Evidence, Contradictions, Open Questions, Cross-Chunk Relations.",
-		"Use schema-defined types only when the source actually supports them; never invent goals, habits, journal entries, decisions, or similar user-authored records that are not present in the source.",
-		"Stable project context follows. It changes rarely and should be treated as background:",
-		purpose ? `## Wiki Purpose\n${purpose}` : "",
-		schema ? `## Wiki Schema\n${schema}` : "",
-		index ? `## Current Wiki Index\n${trimLongText(index, 40_000)}` : "",
+		"Update the compact whole-document digest while retaining earlier supported facts. Keep these categories: summary, entities, concepts, schema candidates, claims, evidence strength, contradictions, open questions, and cross-segment relations.",
+		"Schema labels do not authorize invented user-authored state; only record a type when the source supports it.",
+		"The stable project context below is background only:",
+		purpose ? `## Purpose\n${purpose}` : "",
+		schema ? `## Schema\n${schema}` : "",
+		index ? `## Existing page index\n${trimLongText(index, 40_000)}` : "",
 	].filter(Boolean).join("\n");
 }
 
@@ -113,18 +91,18 @@ export function buildChunkUserPrompt(
 	chunk: ReturnType<typeof splitSourceIntoSemanticChunks>[number],
 	globalDigest: string,
 	folderContext?: string,
-): string {
+	): string {
 	return [
-		`Source file: ${sourceIdentity}`,
-		folderContext ? `Folder context: ${folderContext}` : "",
-		`Chunk: ${chunk.index}/${chunk.total}`,
-		chunk.headingPath ? `Heading path: ${chunk.headingPath}` : "",
+		`source = ${sourceIdentity}`,
+		folderContext ? `folder_hint = ${folderContext}` : "",
+		`segment = ${chunk.index}/${chunk.total}`,
+		chunk.headingPath ? `heading_path = ${chunk.headingPath}` : "",
 		"## Current Global Digest",
 		globalDigest || "(No prior digest yet.)",
 		chunk.overlapBefore ? "## Previous Overlap Context\n" + chunk.overlapBefore : "",
 		"## MAIN CHUNK TO ANALYZE",
 		chunk.main,
-		"Return only the two requested sections. Do not repeat overlap-only facts unless the main chunk supports them.",
+		"Return only the two requested sections. Do not repeat overlap-only facts unless the main segment supports them.",
 	].filter(Boolean).join("\n");
 }
 
@@ -206,13 +184,13 @@ export async function summarizeContent(
 	const index = options?.index ?? wikiContext;
 	const overview = options?.overview ?? "";
 	const maxContextSize = (model as { contextWindow?: number }).contextWindow;
-	// llm-wiki budgets the source against the stable wiki context supplied to
+	// Budget the source against the stable wiki context supplied to
 	// autoIngestImpl, including the overview even though Stage 1 does not print it.
 	const stableContextLength = purpose.length + schema.length + index.length + overview.length;
 	const sourceBudget = computeWikiSourceBudget(maxContextSize, stableContextLength);
 	if (content.length <= sourceBudget) {
 		const systemPrompt = buildAnalysisSystemPrompt(purpose, schema, index);
-		const userPrompt = `Analyze this source document:\n\n**File:** ${options?.sourceIdentity ?? title}${options?.folderContext ? `\n**Folder context:** ${options.folderContext}` : ""}\n\n---\n\n${content}`;
+		const userPrompt = `Analyze this source for the L2 page plan.\n\nsource = ${options?.sourceIdentity ?? title}${options?.folderContext ? `\nfolder_hint = ${options.folderContext}` : ""}\n\n## Source material\n${content}`;
 		const analysis = await completeSummary(model, modelRegistry, systemPrompt, userPrompt, 4096, options?.signal);
 		return { analysis, sourceContext: content, chunked: false };
 	}
@@ -222,7 +200,7 @@ export async function summarizeContent(
 	const chunks = splitSourceIntoSemanticChunks(content, targetChars, overlapChars);
 	if (chunks.length <= 1) {
 		const systemPrompt = buildAnalysisSystemPrompt(purpose, schema, index);
-		const userPrompt = `Analyze this source document:\n\n**File:** ${options?.sourceIdentity ?? title}${options?.folderContext ? `\n**Folder context:** ${options.folderContext}` : ""}\n\n---\n\n${content}`;
+		const userPrompt = `Analyze this source for the L2 page plan.\n\nsource = ${options?.sourceIdentity ?? title}${options?.folderContext ? `\nfolder_hint = ${options.folderContext}` : ""}\n\n## Source material\n${content}`;
 		const analysis = await completeSummary(model, modelRegistry, systemPrompt, userPrompt, 4096, options?.signal);
 		return { analysis, sourceContext: content, chunked: false };
 	}
@@ -269,14 +247,14 @@ export async function summarizeContent(
 		"## Per-Chunk Analyses", analyses.join("\n\n"),
 	].join("\n");
 	const sourceContext = [
-		`# Long Source Context: ${identity}`,
+		`# Consolidated source context: ${identity}`,
 		"",
-		`The original source was analyzed in ${chunks.length} semantic chunks with paragraph/section boundaries and overlap. Use this consolidated context instead of assuming the raw document ended early.`,
+		`This source required ${chunks.length} ordered semantic segments. The digest and notes below represent the entire input; do not interpret their compact form as an early end of the source.`,
 		"",
-		"## Final Global Digest",
+		"## Final digest",
 		globalDigest || "(No digest produced.)",
 		"",
-		"## Chunk Analysis Notes",
+		"## Segment analysis notes",
 		trimLongText(analyses.join("\n\n"), Math.max(sourceBudget, LONG_SOURCE_CHUNK_ANALYSIS_MAX)),
 	].join("\n");
 	return { analysis, sourceContext, chunked: true };

@@ -14,6 +14,7 @@ import {
 	getSourcePagePath,
 	updateIndexAfterIngest,
 	appendLog,
+	appendDeterministicIngestLog,
 	ensureL2Directories,
 	readMaintenanceContext,
 } from "./wiki-maintainer.js";
@@ -155,11 +156,15 @@ export function createL2Tools(
 					// second provenance identity for the same source page.
 					const existing = findManifestByHash(l2DataDir, contentHash)
 						?? (params.force ? findManifestBySourceIdentity(l2DataDir, promptSourceIdentity) : undefined);
-				const completedPagesExist = Boolean(
-					existing?.wikiPages.length
+				const completedArtifactsExist = Boolean(
+					existing?.rawPath
+					&& fileExists(join(l2DataDir, existing.rawPath))
+					&& existing.extractedPath
+					&& fileExists(join(l2DataDir, existing.extractedPath))
+					&& existing?.wikiPages.length
 					&& existing.wikiPages.every((pagePath) => fileExists(join(l2DataDir, pagePath))),
 				);
-					if (!params.force && existing?.status === "indexed" && completedPagesExist) {
+					if (!params.force && existing?.status === "indexed" && completedArtifactsExist) {
 						return {
 						content: [
 							{
@@ -203,7 +208,7 @@ export function createL2Tools(
 				sourceType,
 				rawPath,
 				extractedPath,
-					wikiPages: existing?.wikiPages ?? [],
+					wikiPages: (existing?.wikiPages ?? []).filter((pagePath) => fileExists(join(l2DataDir, pagePath))),
 				tags,
 				contentHash,
 				status: "extracted",
@@ -216,15 +221,17 @@ export function createL2Tools(
 				},
 					createdAt: existing?.createdAt ?? new Date().toISOString(),
 					updatedAt: new Date().toISOString(),
-				};
+					};
 				upsertManifest(l2DataDir, entry);
 
 				let wikiPagePath = "";
+				let ingestWarnings: string[] = [];
+				let reviewCount = 0;
 				let linkMaintenance: {
 					created: string[]; updated: string[]; unchanged: string[]; contested: string[];
 					pages: string[]; sourcePageBody: string;
-					};
-					try {
+				};
+				try {
 						throwIfAborted(signal);
 					// Create wiki source page (with LLM summary)
 					const extractedContent = readText(join(l2DataDir, extractedPath));
@@ -258,7 +265,6 @@ export function createL2Tools(
 						generationSourceContext = summary.sourceContext;
 					}
 					wikiPagePath = getSourcePagePath(entry, promptSourceIdentity);
-						entry.wikiPages = uniquePaths([...entry.wikiPages, wikiPagePath]);
 					const rich = ctx.model
 						? await generateRichWikiPages(
 							l2DataDir,
@@ -279,6 +285,10 @@ export function createL2Tools(
 						: null;
 					if (ctx.model && !rich) {
 						throw new Error(`Rich wiki generation failed for ${entry.rawPath}`);
+					}
+					if (rich) {
+						ingestWarnings = rich.warnings;
+						reviewCount = rich.reviews;
 					}
 					if (!rich) {
 						createSourcePage(l2DataDir, entry, summaryBody, extractedPath, promptSourceIdentity);
@@ -309,7 +319,7 @@ export function createL2Tools(
 							...(rich ? rich.pages : [wikiPagePath, ...linkMaintenance.pages]),
 						]);
 
-					// llm-wiki writes index/log metadata before its completeness gate.
+					// Write index/log metadata before the completeness gate.
 					// Their persistence failures are warnings, never a reason to retry
 					// otherwise-complete generated pages.
 					if (!rich) {
@@ -331,12 +341,21 @@ export function createL2Tools(
 						} catch (err) {
 							logger.warn({ err, source: params.title }, "l2_archive: failed to append ingest log");
 						}
-					}
+				}
+				try {
+					updateIndexAfterIngest(l2DataDir, entry.wikiPages);
+				} catch (err) {
+					logger.warn({ err, source: params.title }, "l2_archive: deterministic index update failed");
+				}
+				if (rich && !rich.aggregateWrites?.some((path) => path.replaceAll("\\", "/").toLowerCase() === "wiki/log.md")) {
 					try {
-						updateIndexAfterIngest(l2DataDir, entry.wikiPages);
+						appendDeterministicIngestLog(l2DataDir, promptSourceIdentity);
 					} catch (err) {
-						logger.warn({ err, source: params.title }, "l2_archive: deterministic index update failed");
+						const warning = `Deterministic log update failed: ${err instanceof Error ? err.message : String(err)}`;
+						ingestWarnings.push(warning);
+						logger.warn({ err, source: params.title }, "l2_archive: deterministic log update failed");
 					}
+				}
 
 					if (rich && (rich.hardFailures.length > 0 || rich.unrecoveredTruncatedPaths.length > 0)) {
 						const reasons = [
@@ -353,7 +372,7 @@ export function createL2Tools(
 					upsertManifest(l2DataDir, entry);
 
 					// Retrieval is downstream of the same completeness gate as
-					// llm-wiki embeddings, so partial writes are not indexed. A
+					// The reference flow does not index partial writes. A
 					// single retrieval-index failure is non-critical after the page
 					// set has passed completeness and must not make the source retry.
 						let retrievalIndexFailed = false;
@@ -394,10 +413,21 @@ export function createL2Tools(
 								`- Wiki 页面: ${wikiPagePath}\n` +
 								`- 自动维护: 新建 ${linkMaintenance.created.length} 个概念/实体页，更新 ${linkMaintenance.updated.length} 个\n` +
 								`- 标签: ${tags.join(", ") || "无"}\n\n` +
-								`Wiki 索引已更新。`,
+								`Wiki 索引已更新。` +
+								(reviewCount > 0 ? `\n- 待审阅事项: ${reviewCount} 个` : "") +
+								(ingestWarnings.length > 0
+									? `\n\n归档完成，但有 ${ingestWarnings.length} 条警告：\n${ingestWarnings.map((warning) => `- ${warning}`).join("\n")}`
+									: ""),
 						},
 					],
-					details: { id, rawPath, wikiPagePath, linkedPages: linkMaintenance.pages },
+					details: {
+						id,
+						rawPath,
+						wikiPagePath,
+						linkedPages: linkMaintenance.pages,
+						reviewCount,
+						warnings: ingestWarnings,
+					},
 				};
 			});
 		},

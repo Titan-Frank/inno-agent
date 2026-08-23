@@ -22,6 +22,7 @@ export class L2Memory {
 	private store: L2IndexStore | null = null;
 	private opened = false;
 	private backfilled = false;
+	private backfillPromise: Promise<void> | null = null;
 
 	constructor(private readonly l2DataDir: string) {}
 
@@ -48,16 +49,28 @@ export class L2Memory {
 	 * One-time backfill of all existing wiki pages (cheap: skips unchanged
 	 * files). Index sync always runs — even when L2 is disabled — so the
 	 * layer can be re-enabled without a backfill gap (same philosophy as L3).
-	 * Backfill is index-only: llm-wiki reads an existing overview during ingest
+	 * Backfill is index-only: ingestion reads an existing overview during ingest
 	 * but does not create aggregate model-visible context as a startup side effect.
 	 */
 	async backfill(): Promise<void> {
 		if (this.backfilled) return;
+		if (this.backfillPromise) return this.backfillPromise;
+
+		const run = this.runBackfill();
+		this.backfillPromise = run;
+		try {
+			await run;
+		} finally {
+			if (this.backfillPromise === run) this.backfillPromise = null;
+		}
+	}
+
+	private async runBackfill(): Promise<void> {
 		const store = await this.ensureStore();
 		if (!store) return;
-		this.backfilled = true;
 		try {
 			const { indexed, pruned } = indexAllPages(store, this.l2DataDir);
+			this.backfilled = true;
 			if (indexed > 0 || pruned > 0) logger.info(`[L2] backfill indexed ${indexed} page(s), pruned ${pruned}.`);
 		} catch (err) {
 			logger.warn({ err }, `[L2] backfill failed: ${err instanceof Error ? err.message : String(err)}`);

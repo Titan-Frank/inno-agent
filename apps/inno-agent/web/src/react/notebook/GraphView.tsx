@@ -8,9 +8,9 @@ import type { WikiGraphEdge, WikiGraphNode } from "../../types/wiki.js";
 import { notebookStore } from "../../stores/notebook-store.js";
 import { useStoreSnapshot } from "../hooks.js";
 
-type NodeCategory = "source" | "entity" | "concept" | "query" | "comparison" | "synthesis" | "analysis" | "tag";
+type NodeCategory = "source" | "entity" | "concept" | "comparison" | "synthesis" | "analysis" | "tag";
 type GraphColorMode = "type" | "community";
-const ALL_CATEGORIES: NodeCategory[] = ["source", "entity", "concept", "query", "comparison", "synthesis", "analysis", "tag"];
+const ALL_CATEGORIES: NodeCategory[] = ["source", "entity", "concept", "comparison", "synthesis", "analysis", "tag"];
 const DEFAULT_VISIBLE: NodeCategory[] = ["source", "entity", "concept", "comparison", "synthesis", "analysis"];
 
 const TYPE_COLORS: Record<string, string> = {
@@ -18,7 +18,6 @@ const TYPE_COLORS: Record<string, string> = {
 	"source-summary": "#4b8ef0",
 	entity: "#3dba6f",
 	concept: "#e8993a",
-	query: "#ef6b73",
 	comparison: "#2aa9a1",
 	synthesis: "#9b5de5",
 	analysis: "#9b5de5",

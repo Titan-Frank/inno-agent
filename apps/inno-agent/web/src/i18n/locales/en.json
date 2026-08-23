@@ -121,6 +121,10 @@
 			"openInNotebook": "Open page",
 			"backToGraph": "Back to graph"
 		},
+		"reviews": {
+			"title": "Reviews",
+			"empty": "No pending review items."
+		},
 		"delete": {
 			"button": "Delete",
 			"confirm": "Delete \"{{title}}\"? This page will be permanently removed."

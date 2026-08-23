@@ -41,46 +41,35 @@ function outputText(response: Awaited<ReturnType<typeof complete>>): string {
 
 export function buildWikiPageMergeSystemPrompt(): string {
 	return [
-		"You are merging two versions of the same wiki page into one coherent document.",
-		"Both versions target the same wiki page; one is already on disk,",
-		"the other was just generated from a different source document.",
-		"Either version may mention additional subjects for comparison or context.",
+		"Combine two versions of the same Inno Agent wiki page into one coherent file.",
+		"The first input is the persisted page; the second is a new source-derived version. Both are evidence and neither may be silently discarded.",
+		"The page may mention other subjects for comparison, but every comparison must stay attached to the subject and source that support it.",
 		"",
-		"Output ONE merged version that:",
-		"- Preserves every factual claim from both versions (do not drop content)",
-		"- Eliminates redundancy when both versions state the same fact",
-		"- Preserves subject/source boundaries: if either version mentions other entities/models/products/methods for comparison, keep those comparisons attribution-exact and do not fold them into claims about the main page subject",
-		"- When claims conflict or apply to different subjects, keep them separated and say which source version supports each one instead of synthesizing a single generalized conclusion",
-		"- When in doubt whether two similar-looking claims describe the same fact, prefer keeping them separate",
-		"- Reorganizes sections so the structure is logical for the merged topic,",
-		"  not just a concatenation of the two inputs",
-		"- Uses consistent markdown structure (headings, tables, lists, callouts)",
-		"- Keeps `[[wikilink]]` references intact",
+		"Produce one complete Markdown file that:",
+		"- preserves every factual claim from both candidates and removes only unambiguous repetition;",
+		"- keeps conflicting or subject-specific claims separate instead of guessing a synthesis; when two similar claims may differ, retain both;",
+		"- preserves source attribution, useful headings, tables, lists, callouts, identifiers, and `[[wikilink]]` references;",
+		"- reads as one organized page rather than two appended drafts.",
 		"",
-		"Output requirements:",
-		"- The FIRST character of your response MUST be `-` (the opening of `---`)",
-		"- Output the COMPLETE file: YAML frontmatter + body",
-		"- No preamble (no \"Here is the merged version:\"), no analysis prose",
-		"- The caller will overwrite `sources`/`tags`/`related`/`updated` with",
-		"  deterministic values — your job is the body and any other fields",
+		"Response rules: begin with YAML frontmatter at the first character, include the complete file, and do not add an explanation or Markdown fence. The caller deterministically rewrites `sources`, `tags`, `related`, and `updated`; preserve page identity and focus on merged content.",
 	].join("\n");
 }
 
 export function buildWikiPageMergeUserPrompt(existingContent: string, incomingContent: string, sourceName: string): string {
 	return [
-		"## Existing version on disk",
+		"## Persisted candidate",
 		"",
 		existingContent,
 		"",
 		"---",
 		"",
-		`## Newly generated version (from ${sourceName})`,
+		`## New candidate (evidence from ${sourceName})`,
 		"",
 		incomingContent,
 		"",
 		"---",
 		"",
-		"Now output the merged file. Start with `---` on the first line.",
+		"Return the complete reconciled file now; its first character must be `---`.",
 	].join("\n");
 }
 

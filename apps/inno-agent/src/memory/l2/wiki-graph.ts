@@ -3,7 +3,7 @@
  *
  * Builds the resolved `[[link]]` graph for the `/api/wiki/graph` endpoint, and
  * computes algorithmic graph metrics used for maintenance and the overview:
- *   - llm-wiki-compatible filename-id link resolution
+ *   - filename-id link resolution
  *   - node degree (resolved links only)
  *   - Louvain communities + modularity + per-community cohesion
  *   - maintenance signals: missing (dangling) links, orphan pages, possible
@@ -145,7 +145,7 @@ function readAllPages(l2DataDir: string, includeQueries = false): PageRecord[] {
 }
 
 /**
- * llm-wiki's relevance graph retains query pages even though its visible graph
+ * The relevance graph retains query pages even though the visible graph
  * excludes them. Queries can therefore contribute a common neighbor to the
  * weight of an already-explicit page edge, but never become visible nodes.
  */
@@ -166,7 +166,7 @@ function buildRetrievalAdjacency(pages: PageRecord[]): { outgoing: Map<string, S
 
 /**
  * Build the wiki graph plus algorithmic analysis. Node ids are wiki-relative
- * paths; `[[links]]` resolve with llm-wiki's filename-id aliases. Unresolved
+ * paths; `[[links]]` resolve with filename-id aliases. Unresolved
  * links remain maintenance findings and never become graph nodes.
  */
 export function buildWikiGraph(l2DataDir: string): WikiGraph {
@@ -199,7 +199,7 @@ export function buildWikiGraph(l2DataDir: string): WikiGraph {
 				neighbors.get(p.path)!.add(target);
 				neighbors.get(target)!.add(p.path);
 			} else if (!target) {
-				// llm-wiki skips unresolved links in the graph; retain only lint data.
+				// Skip unresolved links in the graph; retain only lint data.
 				const label = rawLink.split("|")[0].trim();
 				if (!missing.some((item) => item.from === p.path && item.link === label)) {
 					missing.push({ from: p.path, link: label });

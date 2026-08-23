@@ -7,8 +7,8 @@ type AnthropicPayload = {
 };
 
 /**
- * Keep PI's Anthropic wire payload equivalent to llm-wiki's structured calls.
- * PI adds a cache marker to the final user message by default; llm-wiki only
+ * Keep PI's Anthropic wire payload equivalent to the structured reference calls.
+ * PI adds a cache marker to the final user message by default; the target flow only
  * marks the system prompt and sends a single text user message.
  */
 export function normalizeWikiLlmPayload(payload: unknown, model: Model<any>): unknown {
@@ -33,6 +33,10 @@ export function withWikiLlmPayloadAlignment(options: ProviderStreamOptions): Pro
 	const existingOnPayload = options.onPayload;
 	return {
 		...options,
+		// Use the plain Anthropic Messages wire without requesting
+		// PI's interleaved-thinking beta. Keep this explicit because PI's
+		// provider default is true and changes the outbound request header.
+		interleavedThinking: false,
 		onPayload: async (payload, model) => {
 			const callerPayload = existingOnPayload ? await existingOnPayload(payload, model) : payload;
 			return normalizeWikiLlmPayload(callerPayload, model);
@@ -41,7 +45,7 @@ export function withWikiLlmPayloadAlignment(options: ProviderStreamOptions): Pro
 }
 
 /**
- * llm-wiki accepts a clean SSE EOF after emitting content even when an
+ * Accept a clean SSE EOF after emitting content even when an
  * Anthropic-compatible gateway omits the final message_stop event. PI reports
  * that exact transport condition as an error while retaining the streamed
  * content, so treat only that condition as a completed Wiki response.

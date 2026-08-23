@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Network, FileText, PanelLeftClose, PanelLeftOpen, Trash2 } from "lucide-react";
+import { Network, FileText, PanelLeftClose, PanelLeftOpen, Trash2, ClipboardCheck } from "lucide-react";
 import { notebookStore } from "../stores/notebook-store.js";
 import type { WikiPageType } from "../types/wiki.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { GraphView } from "./notebook/GraphView.js";
 import { PageView } from "./notebook/PageView.js";
+import { ReviewView } from "./notebook/ReviewView.js";
 
 const FILTER_TYPES: (WikiPageType | "all")[] = ["all", "source", "entity", "concept", "query", "comparison", "synthesis", "analysis"];
 
@@ -40,6 +41,7 @@ export function Notebook() {
 		view: notebookStore.view,
 		currentPagePath: notebookStore.currentPage?.path ?? null,
 		selectedNodeId: notebookStore.selectedNodeId,
+		reviews: notebookStore.reviews,
 		isLoadingPages: notebookStore.isLoadingPages,
 		isDeletingPage: notebookStore.isDeletingPage,
 	}));
@@ -170,12 +172,25 @@ export function Notebook() {
 								<FileText size={14} />
 								<span className="hidden @[680px]:inline">{t("notebook.view.page")}</span>
 							</button>
+							<button
+								className={`inline-flex items-center gap-1 rounded px-3 py-1 ${state.view === "reviews" ? "bg-[var(--inno-surface)] shadow text-[var(--inno-text)]" : "text-[var(--inno-text-muted)]"}`}
+								onClick={() => notebookStore.setView("reviews")}
+								title={t("notebook.reviews.title")}
+							>
+								<ClipboardCheck size={14} />
+								<span className="hidden @[680px]:inline">{t("notebook.reviews.title")}</span>
+								{state.reviews.length > 0 ? <span className="text-[10px]">{state.reviews.length}</span> : null}
+							</button>
 						</div>
 					</div>
 					<div className="text-xs text-[var(--inno-text-muted)]">{state.currentPagePath ?? ""}</div>
 				</div>
 				<div className={`min-h-0 flex-1 ${state.view === "graph" ? "overflow-hidden" : "overflow-auto"}`}>
-					{state.view === "graph" ? <GraphView /> : <PageView />}
+					{state.view === "graph"
+						? <GraphView />
+						: state.view === "reviews"
+							? <ReviewView reviews={state.reviews} onOpenPage={(path) => void notebookStore.selectPage(path)} />
+							: <PageView />}
 				</div>
 			</section>
 		</div>
