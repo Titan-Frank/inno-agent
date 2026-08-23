@@ -181,6 +181,7 @@ web/                  # 前端 (React + Lit + Tailwind + Vite)
 | GET | `/api/wiki/graph` | 知识图谱数据 |
 | GET | `/api/wiki/stats` | Wiki 统计 |
 | GET | `/api/skills` | Skills 列表（读取 `.inno/skills/`） |
+| GET | `/api/commands` | 斜杠命令列表（extension 命令 / prompt 模板 / skills），供前端对话框命令面板使用 |
 | POST | `/api/skills/upload` | 上传 `<skill-name>.zip` 并解压到 `.inno/skills/<name>/` |
 | PATCH | `/api/skills/:name` | 启用/关闭 Skill |
 | DELETE | `/api/skills/:name` | 删除 Skill |

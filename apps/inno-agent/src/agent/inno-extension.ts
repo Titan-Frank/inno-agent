@@ -145,6 +145,71 @@ function isOpenLaunchCommand(command: string): boolean {
 	return OPEN_LAUNCH_CMD_RE.test(command);
 }
 
+/**
+ * Inno's own slash commands. Each expands into a user message that steers the
+ * agent to the right memory tool — no TUI overlay needed, so they work
+ * identically from the web composer palette and the CLI. The name set is
+ * exported so pi-runner.listSlashCommands() can mark them webSafe (inline
+ * extension factories receive a synthetic "<inline:N>" sourceInfo, making the
+ * command's origin path unusable for this).
+ */
+interface InnoSlashCommand {
+	name: string;
+	description: string;
+	buildMessage: (args: string) => string;
+}
+
+const INNO_SLASH_COMMANDS: InnoSlashCommand[] = [
+	{
+		name: "recall",
+		description: "回忆过去的对话（L3 跨会话记忆）。用法: /recall <问题>",
+		buildMessage: (query) =>
+			query
+				? `请使用 l3_recall 工具检索我们过去的对话，并结合检索结果回答：${query}`
+				: "请使用 l3_recall 工具回顾我们之前的对话，总结一下最近学过的重点。",
+	},
+	{
+		name: "remember",
+		description: "把关于你的事实写入学习者画像（L1）。用法: /remember <事实>",
+		buildMessage: (fact) =>
+			fact
+				? `请将以下关于我的信息记录到学习者画像（L1），并简短确认你记住了什么：${fact}`
+				: "我想让你记住一些关于我学习情况的信息（学习者画像 L1）。请问我需要告诉你什么？",
+	},
+	{
+		name: "wiki",
+		description: "检索 L2 Wiki 知识库并回答问题。用法: /wiki <问题>",
+		buildMessage: (query) =>
+			query
+				? `请使用 l2_query 工具检索 Wiki 知识库，并结合检索结果回答：${query}`
+				: "请使用 l2_query 工具查看 Wiki 知识库的索引概览，告诉我里面都归档了哪些内容。",
+	},
+];
+
+export const INNO_SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set(INNO_SLASH_COMMANDS.map((command) => command.name));
+
+/**
+ * Expand an Inno slash command ("/recall <q>") into its user-message form.
+ * Returns null when the text is not an Inno command. pi-runner applies this
+ * before session.prompt(): the registerCommand handler routes through
+ * pi.sendUserMessage, which the SDK binds fire-and-forget, so a command
+ * dispatched inside prompt() returns immediately while the turn it triggers
+ * is still running — and per-prompt event subscriptions (runPromptStreaming,
+ * used by web and channels) would close before the reply streams. Expanding
+ * up front makes the turn an ordinary prompt. The CLI uses the
+ * registerCommand path instead, where the TUI's long-lived subscription is
+ * unaffected.
+ */
+export function expandInnoSlashCommand(text: string): string | null {
+	if (!text.startsWith("/")) return null;
+	const spaceIndex = text.indexOf(" ");
+	const name = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	const command = INNO_SLASH_COMMANDS.find((entry) => entry.name === name);
+	if (!command) return null;
+	const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+	return command.buildMessage(args);
+}
+
 export function createInnoExtension(
 	configHolder: ConfigHolder,
 	paths: RuntimePaths,
@@ -207,6 +272,21 @@ export function createInnoExtension(
 		);
 		for (const tool of learnerTools) {
 			pi.registerTool(tool);
+		}
+
+		// 2b. Inno slash commands (web + CLI). Unlike the bundled plugins' TUI
+		// overlay commands, these run headless: the handler expands into a normal
+		// user message that steers the agent to the right memory tool, so the
+		// result streams back as an ordinary turn. listSlashCommands() marks
+		// them webSafe via INNO_SLASH_COMMAND_NAMES (inline extension factories
+		// get a synthetic "<inline:N>" sourceInfo, so the path is not usable).
+		for (const command of INNO_SLASH_COMMANDS) {
+			pi.registerCommand(command.name, {
+				description: command.description,
+				handler: async (args) => {
+					pi.sendUserMessage(command.buildMessage(args.trim()));
+				},
+			});
 		}
 
 		// 3. Register scheduler tools

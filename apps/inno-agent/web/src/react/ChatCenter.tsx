@@ -33,6 +33,14 @@ import { BusyBlocker, QuestionHint } from "./chat/ChatStatusBanners.js";
 import { ChatUploadChips } from "./chat/ChatUploadChips.js";
 import { ChatWelcome } from "./chat/ChatWelcome.js";
 import { SmartInputControl } from "./chat/SmartInputControl.js";
+import { SlashCommandPalette } from "./chat/SlashCommandPalette.js";
+import {
+	buildSlashPaletteEntries,
+	slashQueryFromDraft,
+	type SlashPaletteAction,
+	type SlashPaletteEntry,
+} from "./chat/slash-palette-utils.js";
+import { fetchSlashCommands, type SlashCommandItem } from "../api/commands.js";
 import { WorkspaceContext } from "./chat/WorkspaceContext.js";
 import type { WorkspaceChoice } from "./WorkspaceSwitcher.js";
 import {
@@ -93,6 +101,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	const welcomeLayoutRef = useRef<HTMLDivElement | null>(null);
 	const resizeFrameRef = useRef<number | null>(null);
 	const draftRef = useRef("");
+	const [draftValue, setDraftValue] = useState(draftRef.current);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +129,22 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	const [draftHasContent, setDraftHasContent] = useState(() => Boolean(draftRef.current.trim()));
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
 	const [pasteBlocks, setPasteBlocks] = useState<PendingPasteBlock[]>([]);
+
+	// Slash-command palette (Codex-style): opens while the draft is a bare
+	// "/query". App actions (new chat, model picker) run locally; agent
+	// commands come from GET /api/commands and are inserted into the composer —
+	// the backend session expands/dispatches them in session.prompt().
+	const [slashCommands, setSlashCommands] = useState<SlashCommandItem[]>([]);
+	const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+	const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		fetchSlashCommands()
+			.then((items) => { if (!cancelled) setSlashCommands(items); })
+			.catch(() => { /* palette simply stays limited to app actions */ });
+		return () => { cancelled = true; };
+	}, []);
 
 	// New-chat workspace selection is draft state until the first message creates
 	// a session. The active session path is bound in handleWorkspaceChange.
@@ -475,6 +500,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		const el = inputRef.current;
 		if (!el) return;
 		draftRef.current = el.value;
+		setDraftValue(el.value);
 		setDraftHasContent(el.value.trim().length > 0);
 		// Safari drops in-progress IME composition (e.g. Chinese/Japanese input)
 		// when the textarea's height/overflow/selection is mutated mid-composition,
@@ -551,6 +577,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		const el = inputRef.current;
 		if (!el) return;
 		draftRef.current = el.value;
+		setDraftValue(el.value);
 		setDraftHasContent(el.value.trim().length > 0);
 		scheduleResizeInput();
 	}, [scheduleResizeInput]);
@@ -775,6 +802,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 
 		const resetComposer = () => {
 			draftRef.current = "";
+			setDraftValue("");
 			setDraftHasContent(false);
 			if (inputRef.current) {
 				inputRef.current.value = "";
@@ -922,13 +950,120 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		wsMode,
 	]);
 
+	const setComposerText = useCallback((text: string) => {
+		draftRef.current = text;
+		setDraftValue(text);
+		const el = inputRef.current;
+		if (el) {
+			el.value = text;
+			el.focus();
+			resizeInput();
+		}
+	}, [resizeInput]);
+
+	const slashQuery = slashQueryFromDraft(draftValue);
+	const slashPaletteOpen = slashQuery !== null && slashDismissedFor !== draftValue && !chat.isSending;
+
+	const slashAppActions = useMemo(() => {
+		const actions: Array<{ action: SlashPaletteAction; name: string; description: string }> = [];
+		// On the welcome screen the composer is already a fresh session draft,
+		// so "new chat" would be a no-op.
+		if (!isWelcome) actions.push({ action: "new-chat", name: "new", description: t("chat.slashPalette.newChatDesc") });
+		actions.push({ action: "model", name: "model", description: t("chat.slashPalette.modelDesc") });
+		// Simple Mode hides the Notebook/Profile surfaces, so don't offer them.
+		if (!simpleMode) {
+			actions.push({ action: "profile", name: "profile", description: t("chat.slashPalette.profileDesc") });
+		}
+		actions.push({ action: "jobs", name: "jobs", description: t("chat.slashPalette.jobsDesc") });
+		actions.push({ action: "skills", name: "skills", description: t("chat.slashPalette.skillsDesc") });
+		actions.push({ action: "settings", name: "settings", description: t("chat.slashPalette.settingsDesc") });
+		return actions;
+	}, [isWelcome, simpleMode, t]);
+
+	const slashEntries = useMemo(() => {
+		if (slashQuery === null) return [];
+		// Bundled plugins' extension commands (rpiv-todo, pi-web-access, MCP
+		// adapter) are TUI overlays gated on ctx.hasUI — they no-op server-side,
+		// so only Inno's own webSafe commands are offered alongside skills and
+		// prompt templates (both expand into a normal turn).
+		const agentCommands = slashCommands.filter((command) => command.source !== "extension" || command.webSafe === true);
+		return buildSlashPaletteEntries(slashAppActions, agentCommands, slashQuery);
+	}, [slashAppActions, slashCommands, slashQuery]);
+
+	// Restart keyboard navigation from the top whenever the query changes.
+	useEffect(() => {
+		setSlashActiveIndex(0);
+	}, [slashQuery]);
+
+	const handleSlashSelect = useCallback((entry: SlashPaletteEntry) => {
+		if (entry.group === "app") {
+			setComposerText("");
+			const openRightPanelTab = (tab: "notebook" | "profile" | "skills" | "jobs") => {
+				appStore.setRightPanelTab(tab);
+				if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
+			};
+			switch (entry.action) {
+				case "new-chat": {
+					const workspaceId = workspaceStore.activeWorkspaceId;
+					if (workspaceId) sessionsStore.beginNewSessionIn(workspaceId);
+					else sessionsStore.beginNewSession();
+					break;
+				}
+				case "model":
+					setModelPickerOpen(true);
+					break;
+				case "profile":
+					openRightPanelTab("profile");
+					break;
+				case "jobs":
+					openRightPanelTab("jobs");
+					break;
+				case "skills":
+					openRightPanelTab("skills");
+					break;
+				case "settings":
+					appStore.openSettings();
+					break;
+			}
+			return;
+		}
+		// Agent command: stage "/name " in the composer so the user can add
+		// arguments; sending goes through the normal chat path, where the
+		// backend session expands skills/templates or runs extension commands.
+		setComposerText(`/${entry.name} `);
+	}, [setComposerText]);
+
 	const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		if (slashPaletteOpen) {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setSlashDismissedFor(draftValue);
+				return;
+			}
+			if (slashEntries.length > 0) {
+				if (event.key === "ArrowDown") {
+					event.preventDefault();
+					setSlashActiveIndex((index) => (index + 1) % slashEntries.length);
+					return;
+				}
+				if (event.key === "ArrowUp") {
+					event.preventDefault();
+					setSlashActiveIndex((index) => (index - 1 + slashEntries.length) % slashEntries.length);
+					return;
+				}
+				if (event.key === "Enter" || event.key === "Tab") {
+					event.preventDefault();
+					handleSlashSelect(slashEntries[Math.min(slashActiveIndex, slashEntries.length - 1)]);
+					return;
+				}
+			}
+		}
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
 			handleSend();
 		}
-	}, [handleSend]);
+	}, [handleSend, slashPaletteOpen, slashEntries, slashActiveIndex, draftValue, handleSlashSelect]);
 
 	const handleStop = useCallback(() => chatStore.cancel(), []);
 	const handleReconnect = useCallback(() => void chatStore.reconnect(), []);
@@ -958,6 +1093,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		el.focus();
 		el.setRangeText(block.text, start, end, "end");
 		draftRef.current = el.value;
+		setDraftValue(el.value);
 		setDraftHasContent(el.value.trim().length > 0);
 		setPasteBlocks((prev) => prev.filter((item) => item.id !== blockId));
 		resizeInput();
@@ -1119,6 +1255,15 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 			onStop={handleStop}
 			onReconnect={handleReconnect}
 			onRetry={handleRetry}
+			slashPalette={slashPaletteOpen ? (
+				<SlashCommandPalette
+					entries={slashEntries}
+					activeIndex={slashActiveIndex}
+					query={slashQuery ?? ""}
+					onSelect={handleSlashSelect}
+					onActiveChange={setSlashActiveIndex}
+				/>
+			) : undefined}
 			/>
 		);
 	};
