@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "motion/react";
 import { PanelRightOpen, PanelRightClose, Columns2, Maximize2, BookOpen, BriefcaseBusiness, FolderKanban, Settings, Sparkles, UserRound } from "lucide-react";
@@ -8,7 +8,6 @@ import { settingsStore } from "../stores/settings-store.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { recoverFromDynamicImportError } from "../utils/dynamic-import-recovery.js";
 
-const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser.js").then((mod) => ({ default: mod.WorkspaceBrowser })));
 const Notebook = lazy(() => import("./Notebook.js").then((mod) => ({ default: mod.Notebook })));
 const JobsPanel = lazy(() => import("./JobsPanel.js").then((mod) => ({ default: mod.JobsPanel })));
 const LearnerProfilePanel = lazy(() => import("./LearnerProfilePanel.js").then((mod) => ({ default: mod.LearnerProfilePanel })));
@@ -35,7 +34,7 @@ const TAB_ICONS: Record<RightPanelTab, ReactNode> = {
 };
 
 class WorkspaceContentErrorBoundary extends Component<
-	{ resetKey: RightPanelTab; children: ReactNode },
+	{ resetKey: string; onRetry(): void; children: ReactNode },
 	{ error: Error | null }
 > {
 	state: { error: Error | null } = { error: null };
@@ -49,7 +48,7 @@ class WorkspaceContentErrorBoundary extends Component<
 		console.error("[workspace-panel] failed to render lazy content", error, info);
 	}
 
-	componentDidUpdate(prevProps: { resetKey: RightPanelTab }) {
+	componentDidUpdate(prevProps: { resetKey: string }) {
 		if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
 			this.setState({ error: null });
 		}
@@ -66,6 +65,16 @@ class WorkspaceContentErrorBoundary extends Component<
 					<button
 						type="button"
 						className="inno-primary-button rounded-md px-3 py-1.5 text-xs text-white"
+						onClick={() => {
+							this.setState({ error: null });
+							this.props.onRetry();
+						}}
+					>
+						Retry panel
+					</button>
+					<button
+						type="button"
+						className="text-xs text-[var(--inno-text-muted)] underline underline-offset-2"
 						onClick={() => window.location.reload()}
 					>
 						Refresh page
@@ -77,6 +86,18 @@ class WorkspaceContentErrorBoundary extends Component<
 	}
 }
 
+function WorkspaceBrowserContent({ retryKey, onPreviewFile }: { retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"] }) {
+	const Browser = useMemo(
+		() => lazy(() => import("./WorkspaceBrowser.js").then((mod) => ({ default: mod.WorkspaceBrowser }))),
+		[retryKey],
+	);
+	return (
+		<Suspense fallback={<WorkspaceContentFallback />}>
+			<Browser onPreviewFile={onPreviewFile} />
+		</Suspense>
+	);
+}
+
 function WorkspaceContentFallback() {
 	return (
 		<div className="flex h-full items-center justify-center bg-[var(--inno-workspace-bg)] text-xs text-[var(--inno-text-muted)]">
@@ -85,12 +106,12 @@ function WorkspaceContentFallback() {
 	);
 }
 
-function WorkspaceContent({ activeTab, onPreviewFile }: { activeTab: RightPanelTab; onPreviewFile: WorkspacePanelProps["onPreviewFile"] }) {
+function WorkspaceContent({ activeTab, retryKey, onPreviewFile }: { activeTab: RightPanelTab; retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"] }) {
 	switch (activeTab) {
 		case "notebook":
 			return <Notebook />;
 		case "preview":
-			return <WorkspaceBrowser onPreviewFile={onPreviewFile} />;
+			return <WorkspaceBrowserContent retryKey={retryKey} onPreviewFile={onPreviewFile} />;
 		case "profile":
 			return <LearnerProfilePanel />;
 		case "skills":
@@ -103,6 +124,9 @@ function WorkspaceContent({ activeTab, onPreviewFile }: { activeTab: RightPanelT
 export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChange, onWidthChange, onPreviewFile }: WorkspacePanelProps) {
 	const { t } = useTranslation();
 	const [isResizing, setIsResizing] = useState(false);
+	const [contentRetryKey, setContentRetryKey] = useState(0);
+	const [hasOpenedWorkspace, setHasOpenedWorkspace] = useState(mode !== "collapsed");
+	const retryContent = useCallback(() => setContentRetryKey((key) => key + 1), []);
 
 	// In Simple Mode, hide the advanced tabs: notebook (L2 wiki), profile (L1),
 	// jobs (scheduled tasks) and skills — leaving just preview.
@@ -137,14 +161,24 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 		};
 	}, [isResizing, onWidthChange]);
 
+	// Keep the workspace browser mounted after its first open. Collapsing the
+	// panel should hide it, not restart its tree/preview lifecycle on reopen.
+	useEffect(() => {
+		if (mode !== "collapsed") setHasOpenedWorkspace(true);
+	}, [mode]);
+
 	const startResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
 		event.preventDefault();
 		setIsResizing(true);
 	}, []);
 
-	if (mode === "collapsed") {
-		return (
-			<aside className="relative h-full w-0 overflow-visible">
+	const compact = mode !== "full" && width < 500;
+	const collapsed = mode === "collapsed";
+	const shouldMountContent = hasOpenedWorkspace || !collapsed;
+
+	return (
+		<aside className={`workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col ${collapsed ? "overflow-visible border-l-0 bg-transparent" : "overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]"}`}>
+			{collapsed ? (
 				<button
 					className="absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-[var(--inno-text-subtle)] transition-colors hover:bg-white/90 hover:text-[var(--inno-text)] hover:shadow-sm"
 					title={t("workspace.openWorkspace") ?? ""}
@@ -152,14 +186,7 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 				>
 					<PanelRightOpen size={16} />
 				</button>
-			</aside>
-		);
-	}
-
-	const compact = mode !== "full" && width < 500;
-
-	return (
-		<aside className="workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]">
+			) : null}
 			{mode === "half" || mode === "quarter" ? (
 				<button
 					className="workspace-resize-handle"
@@ -169,7 +196,7 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 				/>
 			) : null}
 
-			<div className="flex h-10 items-center gap-1 border-b border-[var(--inno-border)] bg-[var(--inno-workspace-chrome)] px-2">
+			<div className={`flex h-10 items-center gap-1 border-b border-[var(--inno-border)] bg-[var(--inno-workspace-chrome)] px-2 ${collapsed ? "hidden" : ""}`}>
 				<div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
 					{tabs.map((tab) => {
 						const label = t(`workspace.tabs.${tab}`);
@@ -214,29 +241,31 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 			</div>
 
 			<div
-				className="flex-1 min-h-0 overflow-hidden bg-[var(--inno-workspace-bg)]"
+				className={`flex-1 min-h-0 overflow-hidden bg-[var(--inno-workspace-bg)] ${collapsed ? "hidden" : ""}`}
 				style={{
 					background:
 						"linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px), linear-gradient(rgba(37, 99, 235, 0.035) 1px, transparent 1px), var(--inno-workspace-bg)",
 					backgroundSize: "36px 36px",
 				}}
 			>
-				<AnimatePresence mode="wait">
-					<motion.div
-						key={activeTab}
-						className="h-full"
-						initial={{ opacity: 0, y: 6 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: -6 }}
-						transition={{ duration: 0.18, ease: "easeOut" }}
-					>
-						<WorkspaceContentErrorBoundary resetKey={activeTab}>
-							<Suspense fallback={<WorkspaceContentFallback />}>
-								<WorkspaceContent activeTab={activeTab} onPreviewFile={onPreviewFile} />
-							</Suspense>
-						</WorkspaceContentErrorBoundary>
-					</motion.div>
-				</AnimatePresence>
+				{shouldMountContent ? (
+					<AnimatePresence mode="wait">
+						<motion.div
+							key={`${activeTab}:${contentRetryKey}`}
+							className="h-full"
+							initial={{ opacity: 0, y: 6 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: -6 }}
+							transition={{ duration: 0.18, ease: "easeOut" }}
+						>
+							<WorkspaceContentErrorBoundary resetKey={`${activeTab}:${contentRetryKey}`} onRetry={retryContent}>
+								<Suspense fallback={<WorkspaceContentFallback />}>
+									<WorkspaceContent activeTab={activeTab} retryKey={contentRetryKey} onPreviewFile={onPreviewFile} />
+								</Suspense>
+							</WorkspaceContentErrorBoundary>
+						</motion.div>
+					</AnimatePresence>
+				) : null}
 			</div>
 		</aside>
 	);
