@@ -49,6 +49,7 @@ export function SmartInputControl({
 	const isRuleActive = (rule: SmartInputRule): boolean => Boolean(
 		smartInputSettings?.enabled
 			&& rule.enabled
+			&& rule.keyword
 			&& (rule.allExtensions || rule.extensions.length > 0),
 	);
 

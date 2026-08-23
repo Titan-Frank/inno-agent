@@ -1,6 +1,6 @@
 import type { SmartInputRule } from "../../../types/settings.js";
 import type { AttachmentBinding } from "../../../types/chat.js";
-import { KIND_COLORS, kindFromName, kindFromRule, nameMatchesRule, sameRuleFormat } from "./kinds.js";
+import { KIND_COLORS, activeRules, kindFromName, kindFromRule, nameMatchesRule, sameRuleFormat } from "./kinds.js";
 import {
 	analyzeKeywords,
 	buildOutgoing as buildOutgoingPure,
@@ -511,7 +511,7 @@ export class SmartInputEngine {
 	// ── analyze + render ────────────────────────────────────────────────────
 
 	private activeRules(): SmartInputRule[] {
-		return this.opts.data.getRules().filter((rule) => rule.enabled && rule.keyword && ((rule.isPreset !== true && rule.allExtensions) || rule.extensions.length > 0));
+		return activeRules(this.opts.data.getRules());
 	}
 
 	/**

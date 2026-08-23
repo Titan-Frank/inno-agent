@@ -211,7 +211,7 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 			return normalized.startsWith(".") ? normalized : `.${normalized}`;
 		};
 		const excluded = new Set((slot.rule.excludeExtensions ?? []).map(normalizeExtension).filter(Boolean));
-		if (slot.rule.isPreset !== true && slot.rule.allExtensions) {
+		if (slot.rule.allExtensions) {
 			const excludedLabel = Array.from(excluded).join("、");
 			return excludedLabel
 				? `${t("chat.smartInput.allFileTypes", "所有文件类型")}（${t("chat.smartInput.excludedFileTypes", "排除 {{types}}", { types: excludedLabel })}）`

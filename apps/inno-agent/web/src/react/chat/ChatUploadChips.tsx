@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { PendingUpload } from "./composer-utils.js";
-import { kindFromName } from "./smart-input/kinds.js";
+import type { SmartInputRule } from "../../types/settings.js";
+import { anyActiveRuleMatches, kindFromName } from "./smart-input/kinds.js";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu.js";
 import { buildDragFilePanel, hiddenDragImage } from "./smart-input/drag-utils.js";
 import { workspaceFileUrl } from "../../api/workspace.js";
@@ -17,6 +18,8 @@ export interface ChatUploadChipsProps {
 	onRetry?: (index: number) => void;
 	/** Present when smart input is on: right-click "insert as bubble". */
 	onInsertAsBubble?: (path: string) => void;
+	/** Smart-input rules used to gate "insert as bubble" on the file's format. */
+	rules?: SmartInputRule[];
 	/** Workspace context used to resolve previews for existing image files. */
 	workspaceId?: string;
 	/** Open a workspace file in the app's preview panel (click on chip). */
@@ -62,7 +65,7 @@ function createUploadDragImage(item: PendingUpload): HTMLElement {
  * selected for that send. Chips are draggable onto keyword bubbles and expose
  * a right-click menu when smart input is enabled.
  */
-export function ChatUploadChips({ uploads, onRemove, onRetry, onInsertAsBubble, workspaceId, onOpenWorkspaceFile }: ChatUploadChipsProps) {
+export function ChatUploadChips({ uploads, onRemove, onRetry, onInsertAsBubble, rules, workspaceId, onOpenWorkspaceFile }: ChatUploadChipsProps) {
 	const { t } = useTranslation();
 	const [menu, setMenu] = useState<{ x: number; y: number; index: number } | null>(null);
 	const [draggingId, setDraggingId] = useState<number | null>(null);
@@ -118,11 +121,12 @@ export function ChatUploadChips({ uploads, onRemove, onRetry, onInsertAsBubble, 
 		window.dispatchEvent(new CustomEvent("inno-smart-dragstart", { detail }));
 	};
 	const activeUpload = menu ? uploads[menu.index] : undefined;
+	const canInsertAsBubble = Boolean(activeUpload && onInsertAsBubble && rules && anyActiveRuleMatches(activeUpload.fileName, rules));
 	const menuItems: ContextMenuItem[] = activeUpload ? [
-		{
+		...(canInsertAsBubble ? [{
 			label: t("chat.smartInput.insertAsBubble", "插入为气泡"),
 			onSelect: () => onInsertAsBubble?.(activeUpload.path),
-		},
+		}] : []),
 		{
 			label: t("chat.smartInput.removeAttachment", "移除附件"),
 			danger: true,

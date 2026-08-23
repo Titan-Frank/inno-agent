@@ -1025,6 +1025,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 							if (item) engineRef.current?.insertAttachmentAsBubble(item);
 						}
 						: undefined}
+				rules={smartSettings?.rules}
 				workspaceId={activeWorkspaceId ?? uploadWorkspaceId ?? undefined}
 				onOpenWorkspaceFile={openSmartFilePreview}
 			/>

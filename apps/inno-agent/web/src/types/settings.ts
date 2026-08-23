@@ -140,7 +140,7 @@ export interface WebAccessSettingsPayload {
 /** One literal keyword → allowed file formats with optional exclusions. */
 export interface SmartInputRule {
 	id: string;
-	/** Built-in rules do not expose the all-formats mode in the UI. */
+	/** Built-in rules keep stable ids and win keyword resolution over generic user rules. */
 	isPreset: boolean;
 	keyword: string;
 	/** Allowed extensions when `allExtensions` is false. */

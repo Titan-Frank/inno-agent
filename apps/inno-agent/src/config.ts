@@ -74,7 +74,8 @@ export interface InnoSimpleModeConfig {
  * A rule matches by literal keyword only (no regex/segments). Each rule can
  * either map one keyword to a set of allowed file extensions, or accept all
  * file formats with an optional exclusion list. Users manage rules in
- * Settings → General (add / rename / edit extensions / toggle / delete).
+ * Settings → General (add / rename / edit extensions / toggle / delete); built-in
+ * rules are always retained and can only be toggled off.
  */
 export interface InnoSmartInputRule {
 	id: string;
@@ -379,10 +380,11 @@ export function normalizeSmartInputExtension(raw: string): string | null {
 
 /**
  * Normalize smart-input rules: trim keywords, drop empty/duplicate keywords
- * (first occurrence wins), normalize/dedupe allowed and excluded extensions,
- * and backfill stable ids for rules saved without one. A rule with no allowed
- * extensions is valid but matches nothing until the user either adds one or
- * enables all-formats mode.
+ * (system presets win duplicate keywords), normalize/dedupe allowed and
+ * excluded extensions, backfill stable ids for rules saved without one, and
+ * restore any missing built-in rules. A rule with no allowed extensions is
+ * valid but matches nothing until the user either adds one or enables
+ * all-formats mode.
  */
 export function normalizeSmartInputConfig(
 	smartInput: Partial<InnoSmartInputConfig> | undefined,
@@ -394,8 +396,17 @@ export function normalizeSmartInputConfig(
 			.map((ext) => normalizeSmartInputExtension(String(ext)))
 			.filter((ext): ext is string => ext !== null),
 	));
+	const configuredRules = Array.isArray(smartInput?.rules);
+	const isPresetCandidate = (rule: InnoSmartInputRule): boolean =>
+		rule.isPreset === true || (typeof rule.id === "string" && DEFAULT_SMART_INPUT_RULE_IDS.has(rule.id));
+	// A user-created rule may have the same keyword as a built-in rule in an
+	// older or hand-edited config. Process presets first so the built-in rule
+	// survives normalization and remains the preferred bubble keyword.
+	const rawRules = configuredRules
+		? [...(smartInput?.rules ?? [])].sort((a, b) => Number(isPresetCandidate(b)) - Number(isPresetCandidate(a)))
+		: [];
 	const rules: InnoSmartInputRule[] = [];
-	for (const rule of smartInput?.rules ?? []) {
+	for (const rule of rawRules) {
 		const keyword = (rule.keyword ?? "").trim();
 		if (!keyword || seenKeywords.has(keyword)) continue;
 		const extensions = normalizeExtensions(rule.extensions);
@@ -418,14 +429,30 @@ export function normalizeSmartInputConfig(
 			enabled: rule.enabled !== false,
 		});
 	}
+	const configuredPresets = new Map(
+		rules
+			.filter((rule) => DEFAULT_SMART_INPUT_RULE_IDS.has(rule.id))
+			.map((rule) => [rule.id, rule] as const),
+	);
+	const presetRules = DEFAULT_SMART_INPUT_RULES.map((preset) => {
+		const configured = configuredPresets.get(preset.id);
+		return configured ?? {
+			...preset,
+			extensions: [...preset.extensions],
+			excludeExtensions: [...preset.excludeExtensions],
+		};
+	});
+	const presetIds = new Set(presetRules.map((rule) => rule.id));
+	const presetKeywords = new Set(presetRules.map((rule) => rule.keyword));
+	const customRules = rules.filter((rule) =>
+		!presetIds.has(rule.id) && !presetKeywords.has(rule.keyword));
+
 	return {
 		// Default ON; only an explicit false opts out.
 		enabled: smartInput?.enabled !== false,
 		allowDrag: smartInput?.allowDrag !== false,
 		allowRightClick: smartInput?.allowRightClick !== false,
-		// Backfill defaults only when the rules array is absent (fresh config);
-		// a user who deleted every rule keeps the empty list.
-		rules: Array.isArray(smartInput?.rules) ? rules : DEFAULT_SMART_INPUT_RULES,
+		rules: [...presetRules, ...customRules],
 	};
 }
 

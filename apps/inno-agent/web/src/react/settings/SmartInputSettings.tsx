@@ -367,9 +367,11 @@ export function SmartInputSettings() {
 					<button
 						type="button"
 						className="inno-smart-set-delete"
-						title={t("settings.smartInput.deleteRule", "删除规则")}
-						disabled={state.isSaving}
-						onClick={() => patchConfig({ rules: draft.rules.filter((entry) => entry.id !== rule.id) })}
+						title={rule.isPreset
+							? t("settings.smartInput.presetRuleHint", "系统预设关键词不可删除，只能关闭")
+							: t("settings.smartInput.deleteRule", "删除规则")}
+						disabled={state.isSaving || rule.isPreset}
+						onClick={rule.isPreset ? undefined : () => patchConfig({ rules: draft.rules.filter((entry) => entry.id !== rule.id) })}
 					>
 						<Trash2 size={14} />
 					</button>

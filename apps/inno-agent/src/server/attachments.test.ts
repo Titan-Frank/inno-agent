@@ -35,7 +35,7 @@ describe("normalizeSmartInputExtension", () => {
 });
 
 describe("normalizeSmartInputConfig", () => {
-	it("defaults to enabled with the five built-in rules", () => {
+	it("defaults to enabled with the six built-in rules", () => {
 		const config = normalizeSmartInputConfig(undefined);
 		expect(config.enabled).toBe(true);
 		expect(config.allowDrag).toBe(true);
@@ -56,28 +56,42 @@ describe("normalizeSmartInputConfig", () => {
 				{ id: "", isPreset: false, keyword: "  ", extensions: [".png"], allExtensions: false, excludeExtensions: [], enabled: true },
 			],
 		});
-		expect(config.rules).toHaveLength(1);
-		expect(config.rules[0].keyword).toBe("报告");
-		expect(config.rules[0].extensions).toEqual([".pdf", ".docx"]);
-		expect(config.rules[0].allExtensions).toBe(false);
-		expect(config.rules[0].excludeExtensions).toEqual([".tmp"]);
+		const custom = config.rules.find((rule) => rule.keyword === "报告");
+		expect(custom).toBeDefined();
+		expect(custom).toMatchObject({ extensions: [".pdf", ".docx"], allExtensions: false, excludeExtensions: [".tmp"] });
 
 		const emptied = normalizeSmartInputConfig({ rules: [] });
-		expect(emptied.rules).toEqual([]);
+		expect(emptied.rules).toEqual(DEFAULT_SMART_INPUT_RULES);
 	});
 
-	it("keeps an all-formats rule usable without an allow-list", () => {
+	it("retains system presets, preserves disabled state, and drops duplicate custom keywords", () => {
+		const config = normalizeSmartInputConfig({
+			rules: [
+				{ id: "custom-pdf", isPreset: false, keyword: "pdf", extensions: [], allExtensions: true, excludeExtensions: [], enabled: true },
+				{ id: "custom-report", isPreset: false, keyword: "报告", extensions: [".md"], allExtensions: false, excludeExtensions: [], enabled: true },
+				{ id: "smart-rule-pdf", isPreset: true, keyword: "pdf", extensions: [".pdf"], allExtensions: false, excludeExtensions: [], enabled: false },
+			],
+		});
+		expect(config.rules.filter((rule) => rule.isPreset).map((rule) => rule.id)).toEqual(
+			DEFAULT_SMART_INPUT_RULES.map((rule) => rule.id),
+		);
+		expect(config.rules.find((rule) => rule.id === "smart-rule-pdf")?.enabled).toBe(false);
+		expect(config.rules.filter((rule) => rule.keyword === "pdf")).toHaveLength(1);
+		expect(config.rules.find((rule) => rule.id === "custom-report")).toBeDefined();
+	});
+
+	it("keeps a custom all-formats rule usable without an allow-list", () => {
 		const config = normalizeSmartInputConfig({
 			rules: [{ id: "a", isPreset: false, keyword: "附件", extensions: [], allExtensions: true, excludeExtensions: ["PDF"], enabled: true }],
 		});
-		expect(config.rules[0]).toMatchObject({ allExtensions: true, extensions: [], excludeExtensions: [".pdf"] });
+		expect(config.rules.find((rule) => rule.keyword === "附件")).toMatchObject({ allExtensions: true, extensions: [], excludeExtensions: [".pdf"] });
 	});
 
-	it("migrates built-in rules as presets and disables stale all-formats values", () => {
+	it("migrates built-in rules as presets and keeps their all-formats value", () => {
 		const config = normalizeSmartInputConfig({
 			rules: [{ id: "smart-rule-pdf", isPreset: true, keyword: "pdf", extensions: [".pdf"], allExtensions: true, excludeExtensions: [], enabled: true }],
 		});
-		expect(config.rules[0]).toMatchObject({ isPreset: true, allExtensions: false, extensions: [".pdf"] });
+		expect(config.rules[0]).toMatchObject({ isPreset: true, allExtensions: true, extensions: [".pdf"] });
 	});
 });
 

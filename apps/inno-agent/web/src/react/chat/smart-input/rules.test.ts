@@ -140,8 +140,8 @@ describe("file format rule matching", () => {
 		expect(nameMatchesRule("brief.pdf", limited)).toBe(false);
 	});
 
-	it("does not treat a preset rule as all-formats even if a stale config says so", () => {
+	it("treats a preset rule as all-formats when all-formats mode is on", () => {
 		const preset = { ...rule("pdf", []), isPreset: true, allExtensions: true };
-		expect(nameMatchesRule("notes.txt", preset)).toBe(false);
+		expect(nameMatchesRule("notes.txt", preset)).toBe(true);
 	});
 });

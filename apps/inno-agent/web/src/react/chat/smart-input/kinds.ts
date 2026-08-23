@@ -68,18 +68,17 @@ export function kindFromName(name: string): AttachmentFileKind {
 }
 
 /** Kind used for a rule preview. All-format rules use the neutral file color. */
-export function kindFromRule(rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions">): AttachmentFileKind {
-	return rule.isPreset !== true && rule.allExtensions ? "file" : kindFromExtension(rule.extensions[0] ?? "");
+export function kindFromRule(rule: Pick<SmartInputRule, "allExtensions" | "extensions">): AttachmentFileKind {
+	return rule.allExtensions ? "file" : kindFromExtension(rule.extensions[0] ?? "");
 }
 
 /**
  * Stable identity for a rule's accepted file formats. Extension order is not
- * meaningful, and built-in rules ignore the user-only all-formats flag.
- * Exclusions are part of the identity because they change which files a
- * bubble can receive.
+ * meaningful, and the all-formats flag applies to every rule. Exclusions are
+ * part of the identity because they change which files a bubble can receive.
  */
 export function ruleFormatKey(
-	rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+	rule: Pick<SmartInputRule, "allExtensions" | "extensions" | "excludeExtensions">,
 ): string {
 	const normalize = (values: string[] | undefined): string => Array.from(new Set(
 		(values ?? [])
@@ -87,14 +86,14 @@ export function ruleFormatKey(
 			.filter(Boolean)
 			.map((value) => value.startsWith(".") ? value : `.${value}`),
 	)).sort().join(",");
-	const allExtensions = rule.isPreset !== true && rule.allExtensions === true;
+	const allExtensions = rule.allExtensions === true;
 	return `${allExtensions ? "*" : normalize(rule.extensions)}|!${normalize(rule.excludeExtensions)}`;
 }
 
 /** Two bubbles can fuse only when their file-format contracts are identical. */
 export function sameRuleFormat(
-	a: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
-	b: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+	a: Pick<SmartInputRule, "allExtensions" | "extensions" | "excludeExtensions">,
+	b: Pick<SmartInputRule, "allExtensions" | "extensions" | "excludeExtensions">,
 ): boolean {
 	return ruleFormatKey(a) === ruleFormatKey(b);
 }
@@ -111,9 +110,21 @@ export function nameMatchesExtensions(name: string, extensions: string[]): boole
 /** Apply a rule's allow-all/allow-list mode, then reject excluded extensions. */
 export function nameMatchesRule(
 	name: string,
-	rule: Pick<SmartInputRule, "isPreset" | "allExtensions" | "extensions" | "excludeExtensions">,
+	rule: Pick<SmartInputRule, "allExtensions" | "extensions" | "excludeExtensions">,
 ): boolean {
 	if (nameMatchesExtensions(name, rule.excludeExtensions ?? [])) return false;
-	if (rule.isPreset !== true && rule.allExtensions === true) return true;
+	if (rule.allExtensions === true) return true;
 	return nameMatchesExtensions(name, rule.extensions ?? []);
+}
+
+/** Rules that can form a bubble: enabled, named, with a non-empty format contract. */
+export function activeRules(rules: SmartInputRule[]): SmartInputRule[] {
+	return rules.filter(
+		(rule) => rule.enabled && rule.keyword && (rule.allExtensions || rule.extensions.length > 0),
+	);
+}
+
+/** true when at least one active rule accepts `name`'s extension. */
+export function anyActiveRuleMatches(name: string, rules: SmartInputRule[]): boolean {
+	return activeRules(rules).some((rule) => nameMatchesRule(name, rule));
 }
