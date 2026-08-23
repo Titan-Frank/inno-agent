@@ -110,7 +110,6 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 		created: asString(raw.created) || asString(raw.updated),
 		type: (raw.type as WikiPageType) ?? "source-summary",
 		tags: asStringArray(raw.tags),
-		related: asStringArray(raw.related),
 		sources: asStringArray(raw.sources),
 		source_ids: asStringArray(raw.source_ids),
 		updated: asString(raw.updated),
@@ -119,6 +118,8 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 		contested,
 		contradictions: asStringArray(raw.contradictions),
 	};
+	const related = asStringArray(raw.related);
+	if (related.length > 0) frontmatter.related = related;
 	const conceptId = asString(raw.concept_id).trim();
 	if (conceptId) frontmatter.concept_id = conceptId;
 	if (prerequisites.length > 0) frontmatter.prerequisites = prerequisites;
@@ -154,6 +155,14 @@ function defaultSchemaContent(): string {
 
 ## Frontmatter
 
+Source pages also include:
+\`\`\`yaml
+authors: []
+year: YYYY
+url: ""
+venue: ""
+\`\`\`
+
 All pages must include YAML frontmatter:
 
 \`\`\`yaml
@@ -166,31 +175,6 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 \`\`\`
-
-Source pages also include:
-\`\`\`yaml
-authors: []
-year: YYYY
-url: ""
-venue: ""
-\`\`\`
-
-Concept pages may additionally declare a stable concept id and directional teaching dependencies:
-
-\`\`\`yaml
-concept_id: physics.inclined_plane_acceleration
-prerequisites:
-  - concept_id: physics.force_decomposition
-    relation: required
-    required_level: 0.65
-    importance: 0.9
-    source: teacher
-    source_confidence: 0.9
-    rationale: The learner must resolve forces along the incline.
-    scope: high-school-physics-standard-problem
-\`\`\`
-
-An ordinary \`[[wikilink]]\` means only that two pages are related. It must not be treated as a prerequisite unless the directional relationship is declared above.
 
 ## Index Format
 
