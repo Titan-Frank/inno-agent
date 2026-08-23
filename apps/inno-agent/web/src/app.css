@@ -2263,7 +2263,7 @@ button.inno-smart-ref-chip:hover {
 .inno-smart-badge {
 	position: absolute;
 	top: -5px;
-	right: -5px;
+	right: -2.5px;
 	min-width: 10px;
 	height: 10px;
 	padding: 0;

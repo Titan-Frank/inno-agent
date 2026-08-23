@@ -37,6 +37,14 @@ describe("analyzeKeywords", () => {
 		expect(kws[0].word).toBe("图片");
 	});
 
+	it("keeps only the longest overlapping keyword", () => {
+		const systemFile = { ...rule("文件"), isPreset: true };
+		const customFolder = rule("文件夹");
+		const { kws } = analyzeKeywords("文件夹", [systemFile, customFolder], new Set());
+		expect(kws).toHaveLength(1);
+		expect(kws[0]).toMatchObject({ start: 0, end: 3, word: "文件夹", rule: customFolder });
+	});
+
 	it("ignores disabled rules", () => {
 		const disabled = { ...rule("pdf"), enabled: false };
 		expect(analyzeKeywords("看pdf", [disabled], new Set()).kws).toHaveLength(0);

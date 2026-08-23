@@ -71,7 +71,9 @@ function* matchKeyword(value: string, keyword: string): Generator<{ start: numbe
 /**
  * Scan the composer text for bubble tokens (kept as slot ranges) and enabled
  * keyword occurrences (kept as keyword ranges). Keyword hits inside tokens
- * are skipped. Ranges are sorted by start offset.
+ * are skipped, and overlapping keyword hits keep the longest match so a
+ * custom "文件夹" keyword does not render alongside the system "文件" match.
+ * Ranges are sorted by start offset.
  */
 export function analyzeKeywords(
 	value: string,
@@ -89,16 +91,30 @@ export function analyzeKeywords(
 	}
 	const inSlot = (index: number) => slots.some((range) => index >= range.start && index < range.end);
 
-	const kws: KwRange[] = [];
+	const candidates: KwRange[] = [];
 	for (const rule of rules) {
 		if (!rule.enabled || !rule.keyword) continue;
 		for (const hit of matchKeyword(value, rule.keyword)) {
 			if (inSlot(hit.start)) continue;
 			const before = value.slice(Math.max(0, hit.start - 1), hit.start);
-			kws.push({ ...hit, hi: DEMONSTRATIVE.test(before), rule });
+			candidates.push({ ...hit, hi: DEMONSTRATIVE.test(before), rule });
 		}
 	}
-	kws.sort((a, b) => a.start - b.start);
+	// Rendered ranges cannot overlap: the mirror would otherwise append the
+	// shared text twice (for example, "文件" + "文件夹" → "文件文件夹").
+	// Prefer the longest keyword first; for equal-length duplicates, a system
+	// preset remains the deterministic winner.
+	const prioritized = [...candidates].sort((a, b) =>
+		(b.end - b.start) - (a.end - a.start)
+		|| Number(b.rule.isPreset === true) - Number(a.rule.isPreset === true)
+		|| a.start - b.start,
+	);
+	const kws: KwRange[] = [];
+	for (const candidate of prioritized) {
+		if (kws.some((range) => candidate.start < range.end && range.start < candidate.end)) continue;
+		kws.push(candidate);
+	}
+	kws.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
 	slots.sort((a, b) => a.start - b.start);
 	return { kws, slots };
 }
