@@ -65,7 +65,7 @@ export interface InnoSimpleModeConfig {
 }
 
 /**
- * Smart Input (便捷输入). Global, opt-in (default OFF). When enabled, the web
+ * Smart Input (便捷输入). Global, enabled by default. When enabled, the web
  * composer recognizes literal keywords (e.g. "pdf", "word") in the typed text
  * and converts them into file-binding bubbles; files bound to a bubble are
  * sent to the agent as structured attachments instead of relying on the model
@@ -419,7 +419,8 @@ export function normalizeSmartInputConfig(
 		});
 	}
 	return {
-		enabled: smartInput?.enabled === true,
+		// Default ON; only an explicit false opts out.
+		enabled: smartInput?.enabled !== false,
 		allowDrag: smartInput?.allowDrag !== false,
 		allowRightClick: smartInput?.allowRightClick !== false,
 		// Backfill defaults only when the rules array is absent (fresh config);

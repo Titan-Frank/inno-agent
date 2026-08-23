@@ -35,12 +35,16 @@ describe("normalizeSmartInputExtension", () => {
 });
 
 describe("normalizeSmartInputConfig", () => {
-	it("defaults to disabled with the five built-in rules", () => {
+	it("defaults to enabled with the five built-in rules", () => {
 		const config = normalizeSmartInputConfig(undefined);
-		expect(config.enabled).toBe(false);
+		expect(config.enabled).toBe(true);
 		expect(config.allowDrag).toBe(true);
 		expect(config.allowRightClick).toBe(true);
 		expect(config.rules).toEqual(DEFAULT_SMART_INPUT_RULES);
+	});
+
+	it("honors an explicit opt-out", () => {
+		expect(normalizeSmartInputConfig({ enabled: false }).enabled).toBe(false);
 	});
 
 	it("dedupes keywords, normalizes extensions and keeps an intentionally empty rule list", () => {
