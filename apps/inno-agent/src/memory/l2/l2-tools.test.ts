@@ -1,14 +1,26 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const parseDocumentMock = vi.hoisted(() => vi.fn());
+const summarizeContentMock = vi.hoisted(() => vi.fn());
+const generateRichWikiPagesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./document-parser.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./document-parser.js")>();
 	return { ...actual, parseDocument: parseDocumentMock };
+});
+
+vi.mock("./summarizer.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./summarizer.js")>();
+	return { ...actual, summarizeContent: summarizeContentMock };
+});
+
+vi.mock("./wiki-generator.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./wiki-generator.js")>();
+	return { ...actual, generateRichWikiPages: generateRichWikiPagesMock };
 });
 
 import type { L2Memory } from "./l2-memory.js";
@@ -71,6 +83,8 @@ async function archiveFile(
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	parseDocumentMock.mockReset();
+	summarizeContentMock.mockReset();
+	generateRichWikiPagesMock.mockReset();
 });
 
 describe("l2_archive", () => {
@@ -84,6 +98,7 @@ describe("l2_archive", () => {
 		expect(readFileSync(join(root, entries[0].rawPath), "utf8")).toContain("间隔重复");
 		expect(readFileSync(join(root, entries[0].extractedPath!), "utf8")).toContain("间隔重复");
 		expect(entries[0].wikiPages.length).toBeGreaterThan(0);
+		expect(entries[0].wikiPages[0]).toBe("wiki/sources/学习资料.md");
 		for (const pagePath of entries[0].wikiPages) {
 			expect(readFileSync(join(root, pagePath), "utf8")).toContain(entries[0].id);
 		}
@@ -96,6 +111,42 @@ describe("l2_archive", () => {
 
 		expect(readManifest(root)).toHaveLength(1);
 		expect(duplicate.details).toMatchObject({ duplicate: true });
+	});
+
+	it("re-ingests indexed content when a recorded wiki page is missing", async () => {
+		const root = makeTempDir();
+		const content = "页面缺失后应重新摄入的资料";
+		await archive(root, content);
+		const first = readManifest(root)[0];
+		const firstId = first.id;
+		rmSync(join(root, first.wikiPages[0]));
+
+		const result = await archive(root, content);
+		const entries = readManifest(root);
+
+		expect(result.details).not.toMatchObject({ duplicate: true });
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({ id: firstId, status: "indexed" });
+		expect(entries[0].wikiPages.every((pagePath) => existsSync(join(root, pagePath)))).toBe(true);
+	});
+
+	it("re-ingests indexed content when raw and extracted provenance are missing", async () => {
+		const root = makeTempDir();
+		const content = "来源文件缺失后应重新摄入的资料";
+		await archive(root, content);
+		const first = readManifest(root)[0];
+		rmSync(join(root, first.rawPath));
+		rmSync(join(root, first.extractedPath!));
+
+		const result = await archive(root, content);
+		const [entry] = readManifest(root);
+
+		expect(result.details).not.toMatchObject({ duplicate: true });
+		expect(entry.id).toBe(first.id);
+		expect(entry.rawPath).not.toBe(first.rawPath);
+		expect(entry.extractedPath).not.toBe(first.extractedPath);
+		expect(existsSync(join(root, entry.rawPath))).toBe(true);
+		expect(existsSync(join(root, entry.extractedPath!))).toBe(true);
 	});
 
 	it("discovers a linked concept near the end of a long source without a model", async () => {
@@ -149,6 +200,118 @@ describe("l2_archive", () => {
 		const entries = readManifest(root);
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({ id: "l2src_resume1", rawPath, extractedPath, status: "indexed" });
+	});
+
+	it("records a partial rich write as retryable after source/index metadata has been updated", async () => {
+		const root = makeTempDir();
+		const memory = fakeMemory(root);
+		const tool = createL2Tools(root, undefined, memory)[0];
+		summarizeContentMock.mockResolvedValue({ analysis: "analysis", sourceContext: "source", chunked: false });
+		generateRichWikiPagesMock.mockResolvedValue({
+			created: ["wiki/sources/学习资料.md"],
+			updated: [],
+			pages: ["wiki/sources/学习资料.md"],
+			reviews: 0,
+			warnings: ["Failed to write wiki/concepts/unwritable.md"],
+			hardFailures: ["wiki/concepts/unwritable.md"],
+			unrecoveredTruncatedPaths: [],
+		});
+
+		await expect((tool.execute as (...args: any[]) => Promise<any>)(
+			"partial-write",
+			{ title: "学习资料", content: "正文", sourceType: "markdown" },
+			undefined,
+			undefined,
+			{ model: {} as never, modelRegistry: {} as never },
+		)).rejects.toThrow("Ingest incomplete: 1 wiki file write failure(s)");
+
+		const entry = readManifest(root)[0];
+		expect(entry).toMatchObject({ status: "error", wikiPages: ["wiki/sources/学习资料.md"] });
+		expect(readFileSync(join(root, "wiki/index.md"), "utf8")).toContain("[[sources/学习资料]]");
+		expect(memory.indexPageByPath).not.toHaveBeenCalled();
+	});
+
+	it("returns rich-ingest warnings and review counts to the caller", async () => {
+		const root = makeTempDir();
+		const tool = createL2Tools(root, undefined, fakeMemory(root))[0];
+		summarizeContentMock.mockResolvedValue({ analysis: "analysis", sourceContext: "source", chunked: false });
+		generateRichWikiPagesMock.mockResolvedValue({
+			created: ["wiki/sources/学习资料.md"],
+			updated: [],
+			pages: ["wiki/sources/学习资料.md"],
+			reviews: 2,
+			warnings: ["Dropped wiki/concepts/off-route.md"],
+			hardFailures: [],
+			unrecoveredTruncatedPaths: [],
+		});
+
+		const result = await (tool.execute as (...args: any[]) => Promise<any>)(
+			"soft-warning",
+			{ title: "学习资料", content: "正文", sourceType: "markdown" },
+			undefined,
+			undefined,
+			{ model: {} as never, modelRegistry: {} as never },
+		);
+
+		expect(result.details).toMatchObject({
+			reviewCount: 2,
+			warnings: ["Dropped wiki/concepts/off-route.md"],
+		});
+		expect(result.content[0].text).toContain("待审阅事项: 2 个");
+		expect(result.content[0].text).toContain("归档完成，但有 1 条警告");
+	});
+
+	it("adds a deterministic ingest log when rich generation omits wiki/log.md", async () => {
+		const root = makeTempDir();
+		const tool = createL2Tools(root, undefined, fakeMemory(root))[0];
+		summarizeContentMock.mockResolvedValue({ analysis: "analysis", sourceContext: "source", chunked: false });
+		generateRichWikiPagesMock.mockResolvedValue({
+			created: ["wiki/sources/学习资料.md"],
+			updated: [],
+			pages: ["wiki/sources/学习资料.md"],
+			reviews: 0,
+			warnings: [],
+			hardFailures: [],
+			unrecoveredTruncatedPaths: [],
+		});
+
+		await (tool.execute as (...args: any[]) => Promise<any>)(
+			"deterministic-log",
+			{ title: "学习资料", content: "正文", sourceType: "markdown", sourceIdentity: "source.md" },
+			undefined,
+			undefined,
+			{ model: {} as never, modelRegistry: {} as never },
+		);
+
+		expect(readFileSync(join(root, "wiki/log.md"), "utf8")).toContain("## [");
+		expect(readFileSync(join(root, "wiki/log.md"), "utf8")).toContain("ingest | source.md");
+	});
+
+	it("does not register a missing rich source fallback in the manifest", async () => {
+		const root = makeTempDir();
+		const tool = createL2Tools(root, undefined, fakeMemory(root))[0];
+		summarizeContentMock.mockResolvedValue({ analysis: "analysis", sourceContext: "source", chunked: false });
+		generateRichWikiPagesMock.mockResolvedValue({
+			created: ["wiki/concepts/kept.md"],
+			updated: [],
+			pages: ["wiki/concepts/kept.md"],
+			reviews: 0,
+			warnings: ["Failed to write fallback source summary"],
+			hardFailures: [],
+			unrecoveredTruncatedPaths: [],
+		});
+
+		const result = await (tool.execute as (...args: any[]) => Promise<any>)(
+			"missing-fallback",
+			{ title: "缺失来源", content: "正文", sourceType: "markdown" },
+			undefined,
+			undefined,
+			{ model: {} as never, modelRegistry: {} as never },
+		);
+
+		const entry = readManifest(root)[0];
+		expect(result.details.wikiPagePath).toContain("wiki/sources/");
+		expect(entry.wikiPages).toEqual(["wiki/concepts/kept.md"]);
 	});
 
 	it("resolves relative files against the active session workspace", async () => {
@@ -222,7 +385,7 @@ describe("l2_archive", () => {
 		expect(readManifest(root).map((entry) => entry.title)).toEqual(["第一篇", "第二篇"]);
 	});
 
-	it("continues the archive queue after an earlier archive fails", async () => {
+	it("keeps post-completeness retrieval index failures non-critical and continues the archive queue", async () => {
 		const root = makeTempDir();
 		const firstIndex = deferred<void>();
 		const memory = fakeMemory(root);
@@ -251,8 +414,9 @@ describe("l2_archive", () => {
 		expect(readManifest(root)).toHaveLength(1);
 
 		firstIndex.reject(new Error("index failed"));
-		await expect(firstArchive).rejects.toThrow("index failed");
+		await expect(firstArchive).resolves.toMatchObject({ details: { wikiPagePath: expect.any(String) } });
 		await expect(secondArchive).resolves.toMatchObject({ details: { wikiPagePath: expect.any(String) } });
+		expect(readManifest(root).find((entry) => entry.title === "失败资料")?.status).toBe("indexed");
 		expect(readManifest(root).find((entry) => entry.title === "后续资料")?.status).toBe("indexed");
 	});
 

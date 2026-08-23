@@ -295,10 +295,48 @@ describe("server smoke", () => {
 
 	it("wiki: pages/graph/stats return 200, missing page 404, traversal 400", async () => {
 		expect((await api("/api/wiki/pages")).status).toBe(200);
+		expect((await api("/api/wiki/reviews")).status).toBe(200);
 		expect((await api("/api/wiki/graph")).status).toBe(200);
 		expect((await api("/api/wiki/stats")).status).toBe(200);
 		expect((await api("/api/wiki/page?path=wiki/concepts/nope.md")).status).toBe(404);
 		expect((await api("/api/wiki/page?path=../escape.md")).status).toBe(400);
+	});
+
+	it("wiki: page updates keep the deterministic index synchronized", async () => {
+		const path = "wiki/concepts/index-sync-smoke.md";
+		const content = [
+			"---",
+			"title: Index Sync Smoke",
+			"created: 2026-08-18",
+			"type: concept",
+			"tags: []",
+			"related: []",
+			"sources: []",
+			"source_ids: []",
+			"updated: 2026-08-18",
+			"status: draft",
+			"confidence: medium",
+			"---",
+			"# Index Sync Smoke",
+		].join("\n");
+
+		const saved = await fetch(`http://127.0.0.1:${port}/api/wiki/page`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path, content }),
+		});
+		expect(saved.status).toBe(200);
+		const indexAfterSave = await api("/api/wiki/page?path=wiki/index.md");
+		expect(indexAfterSave.status).toBe(200);
+		expect(((await indexAfterSave.json()) as { content: string }).content).toContain("[[concepts/index-sync-smoke]]");
+
+		const removed = await fetch(`http://127.0.0.1:${port}/api/wiki/page?path=${encodeURIComponent(path)}`, {
+			method: "DELETE",
+		});
+		expect(removed.status).toBe(200);
+		const indexAfterDelete = await api("/api/wiki/page?path=wiki/index.md");
+		expect(indexAfterDelete.status).toBe(200);
+		expect(((await indexAfterDelete.json()) as { content: string }).content).not.toContain("[[concepts/index-sync-smoke]]");
 	});
 
 	it("POST /api/l2/raw/upload stores a file and rejects empty payloads", async () => {

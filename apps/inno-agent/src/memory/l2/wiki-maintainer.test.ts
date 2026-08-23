@@ -1,15 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ManifestEntry, WikiPageFrontmatter } from "./types.js";
 import {
+	appendLog,
 	createSourcePage,
 	ensureL2Directories,
 	parseFrontmatter,
+	readMaintenanceContext,
 	rebuildIndex,
 	serializeFrontmatter,
+	updateIndexAfterIngest,
 } from "./wiki-maintainer.js";
 
 const tempDirs: string[] = [];
@@ -49,6 +52,7 @@ describe("L2 wiki maintenance", () => {
 			created: "2026-07-30",
 			type: "concept",
 			tags: ["yaml:value", "中文 标签"],
+			related: [],
 			sources: ["wiki/sources/source.md"],
 			source_ids: ["l2src_source1"],
 			updated: "2026-07-30",
@@ -66,8 +70,14 @@ describe("L2 wiki maintenance", () => {
 		const root = makeTempDir();
 		ensureL2Directories(root);
 
-		expect(readFileSync(join(root, "wiki", "SCHEMA.md"), "utf8")).toContain("# L2 Wiki Schema");
-		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toContain("# L2 Wiki 索引");
+		expect(readFileSync(join(root, "wiki", "SCHEMA.md"), "utf8")).toContain("# Wiki Schema");
+		const purpose = readFileSync(join(root, "wiki", "PURPOSE.md"), "utf8");
+		expect(purpose).toContain("## Scope\n\n**In scope:**\n-");
+		expect(purpose).not.toContain("What is in scope? What is explicitly out of scope?");
+		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toBe("# Wiki Index\n");
+		expect(readMaintenanceContext(root).index).toBe("");
+		expect(readFileSync(join(root, "wiki", "log.md"), "utf8")).toBe("");
+		appendLog(root, "ingest", "Fallback");
 		expect(readFileSync(join(root, "wiki", "log.md"), "utf8")).toContain("# L2 Wiki Log");
 	});
 
@@ -84,6 +94,52 @@ describe("L2 wiki maintenance", () => {
 		expect(parsed.frontmatter?.source_ids).toEqual([source.id]);
 		expect(parsed.frontmatter?.sources).toEqual([source.rawPath]);
 		expect(page).toContain(source.extractedPath);
-		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toContain(pagePath);
+		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toContain(`[[${pagePath.replace(/^wiki\//, "").replace(/\.md$/, "")}]]`);
+	});
+
+	it("materializes the target first-ingest index shape", () => {
+		const root = makeTempDir();
+		ensureL2Directories(root);
+		const source = entry();
+		const pagePath = createSourcePage(root, source, "## 摘要\n\n核心结论。", source.extractedPath);
+
+		expect(readMaintenanceContext(root).index).toBe("");
+		expect(updateIndexAfterIngest(root, [pagePath])).toBe(true);
+		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toBe([
+			"# Wiki Index",
+			"",
+			"## Recently Updated",
+			`- [[${pagePath.replace(/^wiki\//, "").replace(/\.md$/, "")}]] — ${source.title}`,
+			"",
+		].join("\n"));
+	});
+
+	it("updates the ingest index incrementally and preserves existing sections", () => {
+		const root = makeTempDir();
+		ensureL2Directories(root);
+		const source = entry();
+		const pagePath = createSourcePage(root, source, "## 摘要\n\n核心结论。", source.extractedPath);
+		const indexPath = join(root, "wiki", "index.md");
+		const existing = `${readFileSync(indexPath, "utf8").trimEnd()}\n\n## Custom\n- Keep me\n`;
+		writeFileSync(indexPath, existing, "utf8");
+
+		expect(updateIndexAfterIngest(root, [pagePath])).toBe(true);
+		const updated = readFileSync(indexPath, "utf8");
+		expect(updated).toContain("## Custom\n- Keep me");
+		expect(updated).toContain(`[[${pagePath.replace(/^wiki\//, "").replace(/\.md$/, "")}]]`);
+		expect(updateIndexAfterIngest(root, [pagePath])).toBe(false);
+	});
+
+	it("preserves schema-defined directories when rebuilding the index", () => {
+		const root = makeTempDir();
+		ensureL2Directories(root);
+		mkdirSync(join(root, "wiki", "methods"), { recursive: true });
+		writeFileSync(join(root, "wiki", "methods", "custom.md"), `${serializeFrontmatter({
+			title: "Custom method", created: "2026-07-30", type: "method", tags: [], sources: [], source_ids: [],
+			updated: "2026-07-30", status: "draft", confidence: "medium",
+		})}\n# Custom method\n`, "utf8");
+
+		rebuildIndex(root, []);
+		expect(readFileSync(join(root, "wiki", "index.md"), "utf8")).toContain("[[methods/custom]] — Custom method");
 	});
 });

@@ -119,7 +119,7 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 		contradictions: asStringArray(raw.contradictions),
 	};
 	const related = asStringArray(raw.related);
-	if (related.length > 0) frontmatter.related = related;
+	frontmatter.related = related;
 	const conceptId = asString(raw.concept_id).trim();
 	if (conceptId) frontmatter.concept_id = conceptId;
 	if (prerequisites.length > 0) frontmatter.prerequisites = prerequisites;

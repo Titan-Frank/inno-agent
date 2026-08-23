@@ -112,11 +112,15 @@ describe("L2 wiki link maintenance", () => {
 		expect(alpha).toContain("[[Beta]]");
 		expect(alpha).toContain("[[Existing Knowledge]]");
 		expect(alpha).not.toContain("Hallucinated Page");
-		expect(parseFrontmatter(alpha).frontmatter?.tags).toEqual(["concept", "alpha-topic", "mechanism", "durable"]);
-		expect(parseFrontmatter(alpha).frontmatter?.tags).not.toContain("test");
+		const alphaFrontmatter = parseFrontmatter(alpha).frontmatter;
+		expect(alphaFrontmatter?.tags).toEqual(["concept", "alpha-topic", "mechanism", "durable"]);
+		expect(alphaFrontmatter?.tags).not.toContain("test");
+		expect(alphaFrontmatter?.related).toEqual(["beta", "existing-knowledge"]);
 
 		const graph = buildWikiGraph(root);
 		expect(graph.maintenance.missing).toEqual([]);
+		expect(graph.nodes.some((node) => node.id === "wiki/concepts/existing.md")).toBe(true);
+		expect(graph.edges.some((edge) => edge.target === "wiki/concepts/existing.md")).toBe(true);
 		expect(graph.edges).toContainEqual(expect.objectContaining({
 			source: alphaPath,
 			target: betaPath,
@@ -138,6 +142,7 @@ describe("L2 wiki link maintenance", () => {
 				created: "2026-07-29",
 				type: "concept",
 				tags: ["concept"],
+				related: ["older-topic"],
 				sources: ["wiki/sources/older.md"],
 				source_ids: ["l2src_older"],
 				updated: "2026-07-29",
@@ -172,7 +177,9 @@ describe("L2 wiki link maintenance", () => {
 		expect(result.pages).toEqual(["wiki/concepts/shared-memory.md"]);
 		expect(result.created).toEqual([]);
 		expect(result.updated).toEqual(["wiki/concepts/shared-memory.md"]);
-		expect(readFileSync(join(root, "wiki", "concepts", "shared-memory.md"), "utf8")).toContain(source.id);
+		const updated = readFileSync(join(root, "wiki", "concepts", "shared-memory.md"), "utf8");
+		expect(updated).toContain(source.id);
+		expect(parseFrontmatter(updated).frontmatter?.related).toEqual(["older-topic"]);
 		expect(() => readFileSync(join(root, "wiki", "entities", "shared-memory.md"), "utf8")).toThrow();
 	});
 });
