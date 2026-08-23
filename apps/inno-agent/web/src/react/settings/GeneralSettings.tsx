@@ -77,7 +77,8 @@ function CloseBehaviorSelect() {
 export function GeneralSettings() {
 	const { t } = useTranslation();
 	return (
-		<SettingsSection title={t("settings.tabs.general")} description={t("settings.sections.general.desc", "外观与语言偏好")}>
+		<>
+			<SettingsSection title={t("settings.tabs.general")} description={t("settings.sections.general.desc", "外观与语言偏好")}>
 			<SettingsCard>
 				<SettingsRow
 					label={t("settings.theme")}
@@ -99,6 +100,7 @@ export function GeneralSettings() {
 					control={<CloseBehaviorSelect />}
 				/>
 			</SettingsCard>
-		</SettingsSection>
+			</SettingsSection>
+		</>
 	);
 }

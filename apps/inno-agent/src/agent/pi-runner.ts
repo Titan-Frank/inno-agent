@@ -550,6 +550,63 @@ async function promptWithoutNativeImages(
 }
 
 /**
+ * Append a text block to the last user message of the outgoing model context.
+ * Used for structured chat attachments: the persisted session keeps the user's
+ * original prompt verbatim while the model-visible copy carries the validated
+ * file-binding context. Copy-on-write — the source message list is untouched,
+ * so retries that re-run the transform never accumulate the block.
+ */
+function appendToLastUserMessage(messages: AgentMessages, extra: string): AgentMessages {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as { role?: string; content?: unknown };
+		if (message.role !== "user") continue;
+		const copy = [...messages];
+		if (typeof message.content === "string") {
+			copy[i] = { ...messages[i], content: `${message.content}\n\n${extra}` } as AgentMessages[number];
+		} else if (Array.isArray(message.content)) {
+			copy[i] = {
+				...messages[i],
+				content: [...message.content, { type: "text" as const, text: extra }],
+			} as AgentMessages[number];
+		} else {
+			continue;
+		}
+		return copy;
+	}
+	return messages;
+}
+
+/**
+ * Run `run` with a temporary transformContext that appends the attachment
+ * context block to the last user message just before it reaches the model.
+ * Composes with the image-fallback transform (which may wrap the same hook):
+ * whichever wrapper is installed first becomes the other's "original", so
+ * both effects apply and both are restored in order.
+ */
+async function withAttachmentContext(
+	session: AgentSession,
+	attachmentContext: string | undefined,
+	run: () => Promise<void>,
+): Promise<void> {
+	if (!attachmentContext) {
+		await run();
+		return;
+	}
+	const originalTransform = session.agent.transformContext;
+	session.agent.transformContext = async (messages, signal) => {
+		const transformed = originalTransform
+			? await originalTransform(messages, signal)
+			: messages;
+		return appendToLastUserMessage(transformed, attachmentContext);
+	};
+	try {
+		await run();
+	} finally {
+		session.agent.transformContext = originalTransform;
+	}
+}
+
+/**
  * Send the prompt with the current turn's images but history image blocks
  * stripped — the first retry after an oversized-body (413) rejection.
  */
@@ -1024,7 +1081,12 @@ export function getLoadedSkills() {
  * `imageFallbackPrompt` is sent instead of `prompt` when the images cannot go
  * to the model natively (text-only model or provider rejection).
  */
-export async function runPrompt(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
+export async function runPrompt(
+	prompt: string,
+	images?: ImageContent[],
+	imageFallbackPrompt?: string,
+	attachmentContext?: string,
+): Promise<string> {
 	const session = getSession();
 
 	let output = "";
@@ -1080,10 +1142,11 @@ export async function runPrompt(prompt: string, images?: ImageContent[], imageFa
 			output = "";
 			streamError = undefined;
 		};
-		await promptWithNativeImageFallback(session, prompt, nativeImages, {
-			onRetry: resetAttempt,
-			onFallback: resetAttempt,
-		}, imageFallbackPrompt);
+		await withAttachmentContext(session, attachmentContext, () =>
+			promptWithNativeImageFallback(session, prompt, nativeImages, {
+				onRetry: resetAttempt,
+				onFallback: resetAttempt,
+			}, imageFallbackPrompt));
 	} finally {
 		unsubscribe();
 		obsUnsub();
@@ -1104,8 +1167,13 @@ export async function runPrompt(prompt: string, images?: ImageContent[], imageFa
  * Run a prompt with serialized access (only one prompt at a time).
  * All concurrent calls are queued and executed sequentially.
  */
-export function runPromptSerialized(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
-	return enqueue(() => runPrompt(prompt, images, imageFallbackPrompt));
+export function runPromptSerialized(
+	prompt: string,
+	images?: ImageContent[],
+	imageFallbackPrompt?: string,
+	attachmentContext?: string,
+): Promise<string> {
+	return enqueue(() => runPrompt(prompt, images, imageFallbackPrompt, attachmentContext));
 }
 
 /**
@@ -1118,10 +1186,11 @@ export function runPromptInSession(
 	prompt: string,
 	images?: ImageContent[],
 	imageFallbackPrompt?: string,
+	attachmentContext?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		await switchToSession(sessionPath);
-		return runPrompt(prompt, images, imageFallbackPrompt);
+		return runPrompt(prompt, images, imageFallbackPrompt, attachmentContext);
 	});
 }
 
@@ -1308,6 +1377,7 @@ export function runPromptStreamingInSession(
 	lifecycle?: PromptRunLifecycle,
 	cwdOverride?: string,
 	imageFallbackPrompt?: string,
+	attachmentContext?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		let output = "";
@@ -1353,18 +1423,19 @@ export function runPromptStreamingInSession(
 					}
 				});
 				try {
-					await promptWithNativeImageFallback(session, prompt, nativeImages, {
-						onRetry: () => {
-							nativeAttemptRejected = false;
-							output = "";
-							streamError = undefined;
-						},
-						onFallback: () => {
-							retryingWithoutNativeImages = true;
-							output = "";
-							streamError = undefined;
-						},
-					}, imageFallbackPrompt);
+					await withAttachmentContext(session, attachmentContext, () =>
+						promptWithNativeImageFallback(session, prompt, nativeImages, {
+							onRetry: () => {
+								nativeAttemptRejected = false;
+								output = "";
+								streamError = undefined;
+							},
+							onFallback: () => {
+								retryingWithoutNativeImages = true;
+								output = "";
+								streamError = undefined;
+							},
+						}, imageFallbackPrompt));
 				} finally {
 					unsubscribe();
 					obsUnsub();

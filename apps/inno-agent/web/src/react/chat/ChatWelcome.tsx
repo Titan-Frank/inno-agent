@@ -10,7 +10,6 @@ interface ChatWelcomeProps {
 	simpleMode: boolean;
 	togglingMode: boolean;
 	onToggleMode: () => void;
-	uploadChips: ReactNode;
 	questionHint: ReactNode;
 	busyBlocker: ReactNode;
 	composer: ReactNode;
@@ -35,7 +34,6 @@ export function ChatWelcome({
 	simpleMode,
 	togglingMode,
 	onToggleMode,
-	uploadChips,
 	questionHint,
 	busyBlocker,
 	composer,
@@ -87,14 +85,13 @@ export function ChatWelcome({
 							/>
 						</div>
 
-						{uploadChips}
 						{questionHint}
 						{busyBlocker}
 					</div>
 
 					<div className="inno-welcome-composer-shell">
 						{composer}
-						{simpleMode || !workspaceContext ? null : <div className="mt-2">{workspaceContext}</div>}
+						{workspaceContext ? <div className="mt-2">{workspaceContext}</div> : null}
 					</div>
 
 					{simpleMode && (presets.length > 0 || presetsLoaded || isLoadingPresets || presetsRefreshError) ? (

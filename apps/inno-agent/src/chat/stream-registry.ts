@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { logger } from "../logger.js";
+import type { ChatAttachments } from "../server/attachments.js";
 
 export type StreamStatus = "queued" | "running" | "completed" | "error" | "aborted";
 
@@ -17,6 +18,8 @@ export interface StreamInputSnapshot {
 	prompt: string;
 	submittedAt: string;
 	images: Array<{ mimeType: string; workspacePath: string; previewUrl?: string }>;
+	/** Structured attachments accepted with this turn (bubble bindings + loose files). */
+	attachments?: ChatAttachments;
 }
 
 export interface ActiveStreamTool {

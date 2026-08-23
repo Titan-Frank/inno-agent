@@ -29,15 +29,17 @@ export function createDocumentTools(): ToolDefinition[] {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const typed = params as {
 				filePath: string;
 				includePageDetails?: boolean;
 				includeScreenshots?: boolean;
 			};
 
-			// Resolve path relative to workspace
-			const workspaceDir = process.env.INNO_WORKSPACE_DIR || process.cwd();
+			// The tool context is session-scoped. The process environment points at
+			// the runtime's default workspace and can be different from the
+			// workspace bound to the current chat session.
+			const workspaceDir = ctx.cwd || process.env.INNO_WORKSPACE_DIR || process.cwd();
 			const resolvedPath = isAbsolute(typed.filePath)
 				? typed.filePath
 				: resolve(workspaceDir, typed.filePath);

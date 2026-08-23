@@ -6,11 +6,38 @@ export interface ChatMessage {
 	tools?: ChatToolRecord[];
 	channel?: string;
 	images?: Array<{ previewUrl: string; mimeType: string }>;
+	/** Structured attachments sent with this user turn (keyword-bubble
+	 * bindings + loosely attached files). Renders as inline ref-chips. */
+	attachments?: ChatAttachments;
 	/** Backend/model error surfaced for this turn (e.g. HTTP 413 over-long context). */
 	error?: string;
 	turnId?: string;
 	transient?: boolean;
 	complete?: boolean;
+}
+
+// --- Structured chat attachments (便捷输入 / plain attachments) ---
+
+export type AttachmentFileKind = "pdf" | "doc" | "xls" | "ppt" | "image" | "file";
+
+export interface AttachmentRef {
+	/** Session-workspace-relative path (forward slashes). */
+	path: string;
+	kind: AttachmentFileKind;
+	source: "workspace" | "upload";
+}
+
+export interface AttachmentBinding {
+	/** The literal keyword the user converted into a bubble. */
+	word: string;
+	/** Occurrence index of `word` in the visible message text (0-based). */
+	wordIndex: number;
+	files: AttachmentRef[];
+}
+
+export interface ChatAttachments {
+	bindings: AttachmentBinding[];
+	loose: AttachmentRef[];
 }
 
 export interface ChatToolRecord {
@@ -78,6 +105,7 @@ export interface StreamInputSnapshot {
 	prompt: string;
 	submittedAt: string;
 	images: Array<{ mimeType: string; workspacePath: string; previewUrl?: string }>;
+	attachments?: ChatAttachments;
 }
 
 export interface StreamSnapshot {

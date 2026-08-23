@@ -9,6 +9,14 @@ const mocks = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	refresh: vi.fn(),
 	refreshUntilTopic: vi.fn(),
+	ensureWindowForPanel: vi.fn(),
+	appStore: {
+		workspaceWidth: 640,
+		workspaceMode: "half" as "collapsed" | "quarter" | "half" | "full",
+		setRightPanelTab: vi.fn(),
+		setWorkspaceWidth: vi.fn(),
+		setWorkspaceMode: vi.fn(),
+	},
 }));
 
 vi.mock("../api/chat.js", () => ({
@@ -23,14 +31,9 @@ vi.mock("../api/sessions.js", () => ({ getSession: mocks.getSession }));
 vi.mock("./sessions-store.js", () => ({ sessionsStore: { currentSessionId: "session.jsonl", refresh: mocks.refresh, refreshUntilTopic: mocks.refreshUntilTopic } }));
 vi.mock("./notebook-store.js", () => ({ notebookStore: { loadAll: vi.fn() } }));
 vi.mock("./app-store.js", () => ({
-	appStore: {
-		workspaceWidth: 640,
-		workspaceMode: "half",
-		setRightPanelTab: vi.fn(),
-		setWorkspaceWidth: vi.fn(),
-		setWorkspaceMode: vi.fn(),
-	},
+	appStore: mocks.appStore,
 }));
+vi.mock("./window-expansion.js", () => ({ ensureWindowForPanel: mocks.ensureWindowForPanel }));
 vi.mock("./workspace-store.js", () => ({
 	workspaceStore: {
 		streamingPreview: null,
@@ -88,6 +91,9 @@ describe("ChatStore stream ownership", () => {
 		mocks.submitChatQuestion.mockResolvedValue({ accepted: true });
 		mocks.getChatStatus.mockResolvedValue(activeSnapshot());
 		mocks.getSession.mockResolvedValue({ messages: [], messageCount: 0, sessionRevision: "0:0" });
+		mocks.ensureWindowForPanel.mockResolvedValue("unavailable");
+		mocks.appStore.workspaceWidth = 640;
+		mocks.appStore.workspaceMode = "half";
 	});
 
 	it("keeps the owner while a scoped cancellation waits for its terminal event", async () => {
@@ -145,6 +151,28 @@ describe("ChatStore stream ownership", () => {
 			toolCallId: "question-1",
 			contentOffset: 6,
 		});
+	});
+
+	it("keeps opening the streaming preview when native window expansion is unavailable", async () => {
+		mocks.appStore.workspaceWidth = 520;
+		mocks.appStore.workspaceMode = "collapsed";
+		mocks.streamChat.mockImplementation(async function* () {
+			yield envelope(1, { type: "stream_state", status: "running" });
+			yield envelope(2, {
+				type: "tool_start",
+				toolCallId: "write-1",
+				toolName: "write",
+				args: { path: "notes.md", content: "# Generated notes" },
+			});
+			yield envelope(3, { type: "aborted", message: "Stopped", persisted: false });
+		});
+
+		const store = new ChatStoreImpl();
+		await store.send("generate notes");
+		await vi.waitFor(() => expect(mocks.ensureWindowForPanel).toHaveBeenCalledWith("right", 640, "half"));
+		await vi.waitFor(() => expect(mocks.appStore.setRightPanelTab).toHaveBeenCalledWith("preview"));
+		expect(mocks.appStore.setWorkspaceWidth).toHaveBeenCalledWith(640);
+		expect(mocks.appStore.setWorkspaceMode).toHaveBeenCalledWith("half");
 	});
 
 	it("materializes the full answered questionnaire as soon as it is submitted", async () => {
@@ -325,6 +353,7 @@ describe("ChatStore stream ownership", () => {
 			CLIENT_REQUEST_ID,
 			expect.any(AbortSignal),
 			images,
+			undefined,
 		);
 
 		store.detach();

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, Folder, Plus, Search, X, Ban, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Folder, Plus, Search, X, Ban, LoaderCircle } from "lucide-react";
 import type { WorkspaceMeta } from "../api/workspaces.js";
+import { PopoverSurface } from "./ui/PopoverSurface.js";
 
 export type WorkspaceChoice =
 	| { kind: "workspace"; workspaceId: string }
@@ -132,11 +133,11 @@ export function WorkspaceSwitcher({
 					<Folder size={15} />
 				</span>
 				<span className="inno-workspace-switcher-label" title={triggerLabel}>{triggerLabel}</span>
-				{busy ? <LoaderCircle size={13} className="inno-workspace-switcher-spinner" aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+				{busy ? <LoaderCircle size={13} className="inno-workspace-switcher-spinner" aria-hidden="true" /> : open ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
 			</button>
 
 			{open ? (
-				<div className="inno-workspace-switcher-menu" role="menu" aria-label={t("workspace.switch")}>
+				<PopoverSurface className="inno-workspace-switcher-menu" role="menu" aria-label={t("workspace.switch")}>
 					{creating ? (
 						<div className="inno-workspace-create-form">
 							<div className="inno-workspace-menu-heading">{t("workspace.newWorkspace")}</div>
@@ -241,7 +242,7 @@ export function WorkspaceSwitcher({
 							</button>
 						</>
 					)}
-				</div>
+				</PopoverSurface>
 			) : null}
 		</div>
 	);

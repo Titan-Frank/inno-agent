@@ -109,6 +109,7 @@ export interface InnoSettings {
 	};
 	memory?: { l1Enabled: boolean; l2Enabled: boolean; l3Enabled: boolean };
 	simpleMode?: { enabled: boolean };
+	smartInput?: SmartInputSettings;
 	mcp?: { enabled: boolean };
 	ui?: { theme: string; closeBehavior: WindowCloseBehavior };
 }
@@ -134,4 +135,26 @@ export interface WebAccessSettingsPayload {
 	provider?: string;
 	/** Per-provider credential/URL updates; "****…" keeps existing, "" clears. */
 	values?: Record<string, string>;
+}
+
+/** One literal keyword → allowed file formats with optional exclusions. */
+export interface SmartInputRule {
+	id: string;
+	/** Built-in rules keep stable ids and win keyword resolution over generic user rules. */
+	isPreset: boolean;
+	keyword: string;
+	/** Allowed extensions when `allExtensions` is false. */
+	extensions: string[];
+	/** Accept every file format before applying `excludeExtensions`. */
+	allExtensions: boolean;
+	/** Extensions rejected after the allow-list/all-formats check. */
+	excludeExtensions: string[];
+	enabled: boolean;
+}
+
+export interface SmartInputSettings {
+	enabled: boolean;
+	allowDrag: boolean;
+	allowRightClick: boolean;
+	rules: SmartInputRule[];
 }

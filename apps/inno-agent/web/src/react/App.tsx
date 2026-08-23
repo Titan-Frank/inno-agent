@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import { appStore, type RightPanelTab, type WorkspaceMode } from "../stores/app-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { themeStore, type ThemeId } from "../stores/theme-store.js";
@@ -10,16 +10,12 @@ import { SessionSidebar } from "./SessionSidebar.js";
 import { WorkspacePanel } from "./WorkspacePanel.js";
 import { SettingsOverlay } from "./settings/SettingsOverlay.js";
 import {
-	CHAT_BASELINE_WIDTH,
-	SIDEBAR_WIDTH,
-	getEffectiveWorkspaceWidth,
 	fitPanelLayout,
 } from "../stores/app-layout.js";
+import { ensureWindowForPanel } from "../stores/window-expansion.js";
 
 /** Below this width the chat takes the whole window. */
 const CHAT_ONLY_BP = 960;
-type WindowExpansionSide = "left" | "right";
-type PanelSpaceResult = "ready" | "busy" | "unavailable";
 
 let initializationPromise: Promise<void> | null = null;
 
@@ -33,26 +29,6 @@ function initializeApp(): Promise<void> {
 	return initializationPromise;
 }
 
-function waitForViewportWidth(minWidth: number): Promise<boolean> {
-	if (window.innerWidth >= minWidth) return Promise.resolve(true);
-
-	return new Promise((resolve) => {
-		const startedAt = performance.now();
-		const check = () => {
-			if (window.innerWidth >= minWidth) {
-				resolve(true);
-				return;
-			}
-			if (performance.now() - startedAt >= 600) {
-				resolve(false);
-				return;
-			}
-			window.requestAnimationFrame(check);
-		};
-		check();
-	});
-}
-
 export function App() {
 	const app = useStoreSnapshot(appStore, () => ({
 		rightPanelTab: appStore.rightPanelTab,
@@ -60,8 +36,6 @@ export function App() {
 		workspaceMode: appStore.workspaceMode,
 		workspaceWidth: appStore.workspaceWidth,
 	}));
-	const pendingExpansion = useRef<WindowExpansionSide | null>(null);
-
 	useEffect(() => {
 		void initializeApp();
 		const onPopState = () => {
@@ -138,38 +112,6 @@ export function App() {
 	}, []);
 
 	const setTab = useCallback((tab: RightPanelTab) => appStore.setRightPanelTab(tab), []);
-	const ensureWindowForPanel = useCallback(async (
-		side: WindowExpansionSide,
-		requestedWorkspaceWidth?: number,
-		requestedWorkspaceMode?: WorkspaceMode,
-	): Promise<PanelSpaceResult> => {
-		// Read the store at call time. Opening both panels is sequential, so the
-		// second expansion must see the sidebar state changed by the first one.
-		const currentSidebarCollapsed = appStore.sidebarCollapsed;
-		const currentWorkspaceMode = appStore.workspaceMode;
-		const workspaceWidth = requestedWorkspaceWidth ?? appStore.workspaceWidth;
-		const workspaceMode = requestedWorkspaceMode ?? currentWorkspaceMode;
-		const leftWidth = currentSidebarCollapsed && side !== "left" ? 0 : SIDEBAR_WIDTH;
-		const rightWidth = currentWorkspaceMode === "collapsed" && side !== "right"
-			? 0
-			: getEffectiveWorkspaceWidth(workspaceWidth, workspaceMode === "collapsed" ? "half" : workspaceMode);
-		const requiredWidth = CHAT_BASELINE_WIDTH + leftWidth + rightWidth;
-		const additionalWidth = Math.max(0, requiredWidth - window.innerWidth);
-		if (additionalWidth === 0) return "ready";
-
-		const expandWindowWidth = window.innoDesktop?.expandWindowWidth;
-		if (!expandWindowWidth) return "unavailable";
-		if (pendingExpansion.current) return "busy";
-		pendingExpansion.current = side;
-		try {
-			const expanded = await expandWindowWidth(side, additionalWidth);
-			if (!expanded) return "unavailable";
-			return (await waitForViewportWidth(requiredWidth)) ? "ready" : "unavailable";
-		} finally {
-			pendingExpansion.current = null;
-		}
-	}, []);
-
 	const openPresetPanels = useCallback(async () => {
 		const previewWidth = 560;
 		if (appStore.workspaceMode === "full") {
@@ -241,7 +183,7 @@ export function App() {
 				style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
 			>
 				<SessionSidebar collapsed={app.sidebarCollapsed} onOpen={openSidebar} />
-				<ChatCenter onOpenPresetPanels={openPresetPanels} />
+				<ChatCenter onOpenPresetPanels={openPresetPanels} onPreviewFile={openFilePreview} />
 				<WorkspacePanel
 					activeTab={app.rightPanelTab}
 					mode={app.workspaceMode}

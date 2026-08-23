@@ -194,41 +194,6 @@ inno-app-shell {
 	transition: none;
 }
 
-/* Sidebar */
-inno-session-sidebar {
-	display: flex;
-	flex-direction: column;
-	height: 100%;
-	min-height: 0;
-	overflow: hidden;
-	border-right: 1px solid var(--inno-border);
-	background: var(--inno-sidebar-bg);
-	font-size: 12px;
-	line-height: 1.35;
-}
-
-.app-layout--workspace-full:not(.app-layout--sidebar-collapsed) inno-session-sidebar {
-	visibility: hidden;
-	pointer-events: none;
-}
-
-.app-layout--workspace-full inno-chat-center {
-	visibility: hidden;
-	pointer-events: none;
-}
-
-/* Chat center */
-inno-chat-center {
-	display: flex;
-	flex-direction: column;
-	height: 100%;
-	min-height: 0;
-	min-width: 0;
-	overflow: hidden;
-	background: var(--inno-chat-bg);
-	box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.45);
-}
-
 /* Current-conversation minimap. It belongs to the chat viewport (not the
    session sidebar) and only appears when the chat column has enough room for
    the hover card without crowding the message column. */
@@ -260,10 +225,6 @@ inno-workspace-panel {
 	line-height: 1.4;
 }
 
-inno-session-sidebar button,
-inno-session-sidebar input,
-inno-session-sidebar select,
-inno-session-sidebar textarea,
 inno-workspace-panel button,
 inno-workspace-panel input,
 inno-workspace-panel select,
@@ -364,8 +325,7 @@ inno-workspace-panel textarea {
 	transform: scale(0.97);
 }
 
-.inno-primary-button,
-.inno-primary-icon-button {
+.inno-primary-button {
 	border-color: transparent;
 	background: var(--inno-accent);
 	color: #ffffff;
@@ -373,20 +333,17 @@ inno-workspace-panel textarea {
 	transition: background-color var(--inno-dur-ui) var(--inno-ease-out), border-color var(--inno-dur-ui) var(--inno-ease-out), color var(--inno-dur-ui) var(--inno-ease-out), box-shadow var(--inno-dur-ui) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out);
 }
 
-.inno-primary-button:hover:not(:disabled),
-.inno-primary-icon-button:hover:not(:disabled) {
+.inno-primary-button:hover:not(:disabled) {
 	background: var(--inno-tech);
 	color: #ffffff;
 	box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
 }
 
-.inno-primary-button:active:not(:disabled),
-.inno-primary-icon-button:active:not(:disabled) {
+.inno-primary-button:active:not(:disabled) {
 	transform: scale(0.97);
 }
 
-.inno-primary-button:disabled,
-.inno-primary-icon-button:disabled {
+.inno-primary-button:disabled {
 	cursor: not-allowed;
 }
 
@@ -469,6 +426,127 @@ inno-workspace-panel textarea {
 	border: 0;
 	outline: none;
 	box-shadow: none;
+}
+
+.inno-composer-attachments {
+	position: relative;
+	overflow: visible;
+}
+
+.inno-upload-chip {
+	box-sizing: border-box;
+	height: 30px;
+	min-height: 30px;
+	align-items: center;
+}
+
+.inno-upload-chip.is-dragging {
+	opacity: 0.5;
+	cursor: grabbing;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+.inno-inline-image-card {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 52px;
+	height: 52px;
+	padding: 3px;
+	border: 1px solid var(--inno-border);
+	border-radius: 12px;
+	background: var(--inno-surface-muted);
+	box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+}
+
+.inno-inline-image-preview,
+.inno-upload-image-preview {
+	position: absolute;
+	left: 50%;
+	bottom: calc(100% + 8px);
+	z-index: 40;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	max-width: min(280px, calc(100vw - 32px));
+	max-height: 280px;
+	padding: 5px;
+	border: 1px solid var(--inno-border);
+	border-radius: 12px;
+	background: var(--inno-surface);
+	box-shadow: 0 10px 30px rgba(31, 35, 40, 0.2), 0 2px 6px rgba(31, 35, 40, 0.1);
+	opacity: 0;
+	visibility: hidden;
+	transform: translate(-50%, 6px) scale(0.96);
+	transform-origin: bottom center;
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out), visibility var(--inno-dur-fast);
+	pointer-events: none;
+}
+
+.inno-upload-image-preview {
+	z-index: 80;
+	width: max-content;
+}
+
+.inno-inline-image-preview img,
+.inno-upload-image-preview img {
+	display: block;
+	max-width: 268px;
+	max-height: 268px;
+	border-radius: 6px;
+	object-fit: contain;
+}
+.inno-upload-image-card {
+	position: relative;
+	overflow: visible;
+	border-radius: 12px;
+}
+
+.inno-upload-image-thumb {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	flex: 0 0 auto;
+	overflow: hidden;
+	border: 1px solid var(--inno-border);
+	border-radius: 8px;
+	background: var(--inno-surface);
+}
+
+.inno-upload-image-thumb img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.inno-inline-image-card:hover .inno-inline-image-preview,
+.inno-inline-image-card:focus-within .inno-inline-image-preview,
+.inno-upload-image-card:hover .inno-upload-image-preview,
+.inno-upload-image-card:focus-within .inno-upload-image-preview {
+	opacity: 1;
+	visibility: visible;
+	transform: translate(-50%, 0) scale(1);
+}
+
+.inno-upload-image-card.is-dragging .inno-upload-image-preview {
+	opacity: 0 !important;
+	visibility: hidden !important;
+	transform: translate(-50%, 6px) scale(0.96) !important;
 }
 
 /* On the welcome screen, keep the composer centered while its textarea grows:
@@ -631,15 +709,233 @@ inno-workspace-panel textarea {
    workspace choice reads as session context, not as another input control. */
 .inno-workspace-context-row {
 	display: flex;
+	flex-wrap: wrap;
 	min-width: 0;
 	align-items: center;
 	gap: 8px;
 	min-height: 36px;
 }
 
+/* Center label text with the Beta badge on one flex line so the badge never
+   shifts the button content off the container's vertical center. */
+.inno-workspace-switcher-label {
+	display: inline-flex;
+	min-width: 0;
+	align-items: center;
+	gap: 4px;
+}
+
+.inno-workspace-smart-input-trigger {
+	max-width: 240px;
+}
+
+.inno-workspace-smart-input {
+	position: relative;
+	min-width: 0;
+}
+
+.inno-composer-smart-input {
+	flex: 0 0 auto;
+}
+
+.inno-composer-smart-input .inno-workspace-switcher-menu {
+	right: 0;
+	left: auto;
+	transform-origin: bottom right;
+}
+
+.inno-workspace-smart-input-panel {
+	/* Use the workspace picker's menu shell so both controls share the same
+	   width, radius, shadow, animation, and edge spacing. */
+	gap: 0;
+	width: min(292px, calc(100vw - 24px));
+}
+
+/* Keep the shared menu shell, but give this denser settings content a little
+   more breathing room than the workspace option list. */
+.inno-workspace-switcher-menu.inno-workspace-smart-input-panel {
+	padding: 14px;
+}
+
+.inno-workspace-smart-input-panel-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.inno-workspace-smart-input-panel-title {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--inno-text);
+}
+
+.inno-workspace-smart-input-panel-desc {
+	margin-top: 4px;
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--inno-text-muted);
+}
+
+.inno-workspace-smart-input-panel-section {
+	margin-top: 10px;
+	padding: 9px;
+	border: 1px solid color-mix(in srgb, var(--inno-border) 75%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--inno-surface-muted) 70%, transparent);
+}
+
+.inno-workspace-smart-input-panel-section-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: 10.5px;
+	font-weight: 600;
+	color: var(--inno-text-muted);
+}
+
+.inno-workspace-smart-input-rules {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+	margin-top: 8px;
+}
+
+.inno-workspace-smart-input-rule {
+	display: inline-flex;
+	align-items: center;
+	min-height: 22px;
+	padding: 2px 7px;
+	border-radius: 6px;
+	border: 1px solid transparent;
+	background: var(--inno-surface);
+	color: var(--inno-text);
+	font-size: 11px;
+	line-height: 16px;
+	cursor: pointer;
+	transition: background-color var(--inno-dur-fast) var(--inno-ease-out), border-color var(--inno-dur-fast) var(--inno-ease-out), color var(--inno-dur-fast) var(--inno-ease-out);
+}
+
+.inno-workspace-smart-input-rule.is-active {
+	border-color: var(--inno-accent);
+	background: var(--inno-accent);
+	color: var(--inno-surface);
+}
+
+.inno-workspace-smart-input-rule.is-off {
+	border-style: dashed;
+	border-color: var(--inno-border);
+	background: transparent;
+	color: var(--inno-text-muted);
+}
+
+.inno-workspace-smart-input-rule:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--inno-accent) 55%, var(--inno-border));
+}
+
+.inno-workspace-smart-input-rule.is-active:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--inno-accent) 86%, var(--inno-text));
+}
+
+.inno-workspace-smart-input-rule:disabled {
+	cursor: wait;
+	opacity: 0.7;
+}
+
+.inno-workspace-smart-input-empty,
+.inno-workspace-smart-input-hint {
+	margin-top: 7px;
+	font-size: 10.5px;
+	line-height: 1.45;
+	color: var(--inno-text-subtle);
+}
+
+.inno-workspace-smart-input-settings {
+	display: inline-flex;
+	width: 100%;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	margin-top: 10px;
+	padding: 7px 9px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 32%, var(--inno-border));
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--inno-accent-soft) 55%, transparent);
+	color: var(--inno-accent);
+	font-size: 11px;
+	cursor: pointer;
+	transition: background-color var(--inno-dur-ui) var(--inno-ease-out);
+}
+
+.inno-workspace-smart-input-settings:hover {
+	background: var(--inno-accent-soft);
+}
+
+.inno-workspace-smart-input-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	color: inherit;
+}
+
+.inno-workspace-smart-input-label {
+	max-width: 120px;
+}
+
+.inno-workspace-smart-input-feature-hint {
+	margin: 8px 2px 0;
+	font-size: 10.5px;
+	line-height: 1.45;
+	color: var(--inno-text-subtle);
+}
+
+.inno-workspace-smart-input-feature-hint .is-enabled {
+	color: var(--inno-text);
+}
+
+.inno-smart-beta {
+	display: inline-flex;
+	align-items: center;
+	margin-left: 2px;
+	padding: 1.5px 7px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 18%, transparent);
+	background: color-mix(in srgb, var(--inno-accent) 7%, transparent);
+	color: var(--inno-text-muted);
+	font-size: 10px;
+	font-weight: 500;
+	line-height: 1;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	vertical-align: 0.14em;
+	/* CJK glyphs sit slightly above their line-box center, so the badge needs
+	   a tiny lift to optically align with 便捷输入-style labels. */
+	transform: translateY(-1.5px);
+	user-select: none;
+}
+
+.inno-smart-beta--settings {
+	margin-left: 6px;
+	font-size: 10px;
+	font-weight: 600;
+}
+
 .inno-workspace-switcher {
 	position: relative;
 	min-width: 0;
+}
+
+/* Shared shell for anchored menus and portal-rendered smart-input panels. */
+.inno-popover-surface {
+	border: 1px solid color-mix(in srgb, var(--inno-border-strong) 58%, transparent);
+	border-radius: 14px;
+	background: var(--inno-surface-raised);
+	box-shadow: 0 16px 40px rgba(31, 35, 40, 0.16), 0 2px 7px rgba(31, 35, 40, 0.08);
 }
 
 .inno-workspace-switcher-trigger {
@@ -713,10 +1009,6 @@ inno-workspace-panel textarea {
 	flex-direction: column;
 	gap: 6px;
 	padding: 7px;
-	border: 1px solid color-mix(in srgb, var(--inno-border-strong) 58%, transparent);
-	border-radius: 14px;
-	background: var(--inno-surface-raised);
-	box-shadow: 0 16px 40px rgba(31, 35, 40, 0.16), 0 2px 7px rgba(31, 35, 40, 0.08);
 	transform-origin: bottom left;
 	animation: inno-workspace-menu-in var(--inno-dur-fast) var(--inno-ease-out) both;
 }
@@ -962,12 +1254,7 @@ inno-workspace-panel textarea {
 
 @media (prefers-reduced-motion: reduce) {
 	.inno-workspace-switcher-menu,
-	.inno-workspace-switcher-spinner {
-		animation: none;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
+	.inno-workspace-switcher-spinner,
 	.inno-composer-model-menu {
 		animation: none;
 	}
@@ -1019,47 +1306,65 @@ inno-workspace-panel textarea {
 .inno-paste-card {
 	display: flex;
 	align-items: center;
-	width: min(100%, 200px);
-	min-height: 48px;
-	gap: 8px;
-	padding: 6px 7px;
-	border: 1px solid var(--inno-border);
+	width: min(100%, 240px);
+	min-height: 30px;
+	gap: 5px;
+	padding: 4px 6px;
+	border: 0;
 	border-radius: 12px;
+	background: var(--inno-surface-muted);
+	box-shadow: none;
+	cursor: pointer;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out), box-shadow var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-paste-card:hover,
+.inno-paste-card:focus-visible {
 	background: var(--inno-surface-raised);
-	box-shadow: 0 1px 2px rgba(31, 35, 40, 0.04);
+	box-shadow: 0 3px 10px rgba(31, 35, 40, 0.1);
+	outline: none;
 }
 
 .inno-paste-card-icon {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 30px;
-	height: 30px;
+	width: 20px;
+	height: 20px;
 	flex: 0 0 auto;
-	border-radius: 8px;
-	background: var(--inno-surface-muted);
-	color: var(--inno-text-muted);
-}
-
-.inno-paste-card-action {
-	padding: 0;
-	border: 0;
+	border-radius: 5px;
 	background: transparent;
-	color: var(--inno-text-muted);
-	cursor: pointer;
+	color: var(--inno-accent);
 }
 
-.inno-paste-card-action:hover {
+.inno-paste-card-copy {
+	display: flex;
+	min-width: 0;
+	flex: 1 1 auto;
+	align-items: baseline;
+	gap: 4px;
+	font-size: 11px;
+	line-height: 1.2;
+}
+
+.inno-paste-card-preview {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	color: var(--inno-text);
-	text-decoration: underline;
+}
+
+.inno-paste-card-count {
+	flex: 0 0 auto;
+	color: var(--inno-text-subtle);
 }
 
 .inno-paste-card-remove {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 22px;
-	height: 22px;
+	width: 18px;
+	height: 18px;
 	flex: 0 0 auto;
 	padding: 0;
 	border: 0;
@@ -1078,6 +1383,24 @@ inno-workspace-panel textarea {
 	border: 1px solid var(--inno-border);
 	background: var(--inno-surface);
 	box-shadow: none;
+}
+
+/* Keep file extensions visible when the filename stem needs to truncate. */
+.inno-file-name {
+	display: inline-flex;
+	min-width: 0;
+	max-width: 100%;
+	align-items: baseline;
+}
+.inno-file-name-stem {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-file-name-extension {
+	flex: 0 0 auto;
+	white-space: nowrap;
 }
 
 .inno-workspace-tab {
@@ -1252,31 +1575,6 @@ inno-workspace-panel textarea {
 	line-height: 1.2;
 }
 
-.inno-panel-title {
-	font-size: 13px;
-	line-height: 1.3;
-}
-
-.inno-panel-text {
-	font-size: 12px;
-	line-height: 1.45;
-}
-
-.inno-panel-meta {
-	font-size: 11px;
-	line-height: 1.35;
-}
-
-.inno-panel-button {
-	font-size: 12px;
-	line-height: 1.2;
-}
-
-.inno-panel-input {
-	font-size: 12px;
-	line-height: 1.45;
-}
-
 .vertical-label {
 	writing-mode: vertical-rl;
 	text-orientation: mixed;
@@ -1333,7 +1631,6 @@ inno-workspace-panel textarea {
 	mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.38), transparent 42%, transparent 100%);
 }
 
-:root[data-theme="innospark"] inno-chat-center,
 :root[data-theme="innospark"] .inno-chat-grid {
 	background: var(--inno-chat-bg);
 }
@@ -1353,7 +1650,7 @@ inno-workspace-panel textarea {
 }
 
 :root[data-theme="innospark"] .inno-sidebar-scope [role="button"]:hover,
-:root[data-theme="innospark"] .inno-sidebar-scope button:hover:not(:disabled):not(.inno-channel-filter-chip):not(.inno-primary-button):not(.inno-primary-icon-button) {
+:root[data-theme="innospark"] .inno-sidebar-scope button:hover:not(:disabled):not(.inno-channel-filter-chip):not(.inno-primary-button) {
 	background: rgba(255, 255, 255, 0.86);
 	box-shadow: 0 1px 2px rgba(85, 90, 255, 0.05);
 }
@@ -1363,7 +1660,6 @@ inno-workspace-panel textarea {
 	transform: scale(0.97);
 }
 
-:root[data-theme="innospark"] .inno-panel-title,
 :root[data-theme="innospark"] .inno-sidebar-title,
 :root[data-theme="innospark"] .inno-workspace-tab,
 :root[data-theme="innospark"] h1,
@@ -1371,8 +1667,6 @@ inno-workspace-panel textarea {
 	color: var(--inno-text);
 }
 
-:root[data-theme="innospark"] inno-chat-center h1,
-:root[data-theme="innospark"] inno-chat-center h2,
 :root[data-theme="innospark"] .inno-chat-grid h1,
 :root[data-theme="innospark"] .inno-chat-grid h2 {
 	color: var(--inno-accent);
@@ -1541,4 +1835,1259 @@ inno-workspace-panel textarea {
 .flip-card-back {
 	backface-visibility: hidden;
 	transform: rotateY(180deg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Smart input (便捷输入) — keyword bubbles + structured file bindings.
+   Ported from prototypes/smart-input-bubble.html (v76) and re-skinned onto
+   --inno-* tokens. Fixed type-color hues blend into each theme via
+   color-mix; no dark-theme hardcoding.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.inno-smart {
+	/* Per-kind accent hues kept from the prototype palette. */
+	--smart-type-pdf: #ef4444;
+	--smart-type-doc: #3b82f6;
+	--smart-type-xls: #22c55e;
+	--smart-type-ppt: #f97316;
+	--smart-type-image: #a855f7;
+	--smart-type-file: #8b92a5;
+	--smart-kw: #dc2626;
+	--smart-kw-strong: #b91c1c;
+}
+
+/* ── Format icon (shared by chips, pills, panels, settings previews) ── */
+.inno-file-type-icon {
+	flex-shrink: 0;
+}
+
+/* ── Sent message: inline binding bubbles + ref-chips ── */
+.inno-smart-ref-inline {
+	display: inline;
+	white-space: normal;
+}
+.inno-smart-ref-word {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	vertical-align: baseline;
+	padding: 0 6px;
+	margin: 0 1px;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 82%, var(--inno-surface));
+	font-weight: 600;
+	font-size: 11.5px;
+	line-height: 18px;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out), border-color var(--inno-dur-fast) var(--inno-ease-out);
+	cursor: default;
+}
+.inno-smart-ref-inline:hover .inno-smart-ref-word {
+	background: color-mix(in srgb, var(--inno-accent-soft) 100%, var(--inno-surface));
+	border-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.inno-smart-ref-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	vertical-align: baseline;
+	max-width: 180px;
+	padding: 1px 8px;
+	margin: 0 1px;
+	border-radius: 9999px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface-muted);
+	font-size: 11.5px;
+	line-height: 18px;
+	color: var(--inno-text);
+	text-decoration: none;
+	transition: border-color var(--inno-dur-fast) var(--inno-ease-out), background var(--inno-dur-fast) var(--inno-ease-out);
+}
+a.inno-smart-ref-chip:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-surface);
+}
+button.inno-smart-ref-chip {
+	cursor: pointer;
+	font: inherit;
+	text-align: left;
+}
+button.inno-smart-ref-chip:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-surface);
+}
+
+/* ── Floating panels (read-only binding panel + composer status/fill menus) ── */
+.inno-smart-panel {
+	position: fixed;
+	z-index: 60;
+	padding: 8px;
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-panel.is-closing {
+	opacity: 0;
+	transform: translateY(4px);
+	transition: opacity 130ms var(--inno-ease-out), transform 130ms var(--inno-ease-out);
+}
+.inno-smart-panel--status {
+	box-sizing: border-box;
+	width: min(360px, calc(100vw - 16px));
+}
+.inno-smart-panel--status.is-single-column {
+	width: min(280px, calc(100vw - 16px));
+}
+.inno-smart-panel--status .inno-smart-panel-list {
+	max-height: 180px;
+}
+.inno-smart-panel-title {
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--inno-text);
+	padding: 2px 4px 6px;
+}
+.inno-smart-panel-list {
+	display: grid;
+	gap: 2px;
+	max-height: 212px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.inno-smart-panel-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 4px 6px;
+	border-radius: 6px;
+	font-size: 11.5px;
+	background: var(--inno-surface-muted);
+	color: var(--inno-text);
+}
+.inno-smart-panel-row:hover {
+	background: color-mix(in srgb, var(--inno-accent-soft) 60%, var(--inno-surface-muted));
+}
+.inno-smart-panel-name {
+	min-width: 0;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-smart-src-tag {
+	flex-shrink: 0;
+	font-size: 10px;
+	padding: 0 4px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--inno-text-subtle) 12%, transparent);
+	color: var(--inno-text-muted);
+}
+.inno-smart-panel-caption {
+	margin-top: 6px;
+	padding: 0 4px;
+	font-size: 10.5px;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+	color: var(--inno-text-subtle);
+}
+
+@keyframes inno-smart-panel-in {
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Composer attachment menu (📎 workspace + local files) ── */
+.inno-smart-attach-menu {
+	max-height: 264px;
+	overflow-y: auto;
+}
+.inno-smart-attach-menu-caption {
+	padding: 6px 10px 4px;
+	font-size: 10.5px;
+	font-weight: 600;
+	color: var(--inno-text-subtle);
+	text-transform: none;
+	letter-spacing: 0.02em;
+}
+
+/* ── OS-file drag-over affordance on the composer ── */
+.inno-composer.is-osfile-over {
+	border-color: color-mix(in srgb, var(--inno-success) 45%, transparent);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--inno-success) 12%, transparent);
+}
+
+/* ── Retry affordance for failed uploads ── */
+.inno-smart-retry-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	color: var(--inno-danger);
+	transition: background var(--inno-dur-fast) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-retry-btn:hover {
+	background: var(--inno-danger-bg);
+}
+.inno-smart-retry-btn:active {
+	transform: scale(0.94);
+}
+
+/* ── Three-layer composer (mirror / textarea / hit) ── */
+.inno-smart-wrap {
+	position: relative;
+	overflow: hidden;
+}
+.inno-smart-wrap.is-active {
+	--inno-smart-font-size: 16px;
+	--inno-smart-line-height: 24px;
+}
+.inno-smart-wrap .inno-composer-textarea {
+	position: relative;
+	z-index: 2;
+	background: transparent;
+	/* Keep the transparent source control's line breaking identical to the
+	   mirror, including long strings without spaces after a bubble. */
+	overflow-wrap: anywhere;
+	word-break: normal;
+}
+.inno-smart-wrap.is-active textarea.inno-composer-textarea {
+	color: transparent;
+	caret-color: var(--inno-accent);
+	font-size: var(--inno-smart-font-size);
+	line-height: var(--inno-smart-line-height);
+}
+/* The textarea is only the editable source layer. Let the mirror paint the
+   selection, otherwise the browser highlights hidden token markers instead of
+   the visible text and bubbles. */
+.inno-smart-wrap.is-active textarea.inno-composer-textarea::selection {
+	background: transparent !important;
+	color: transparent !important;
+}
+.inno-smart-mirror {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	pointer-events: none;
+	/* The parent is the viewport. Keep this content layer visible so the
+	   translateY(scrollTop) mirror can still expose the final lines. */
+	overflow: visible;
+	white-space: pre-wrap;
+	/* `break-word` keeps an unbroken word's min-content width, so a long
+	   string after a bubble gets pushed to the next line as a whole. `anywhere`
+	   allows it to start in the remaining space and wrap naturally there. */
+	overflow-wrap: anywhere;
+	word-break: normal;
+	/* Must mirror .inno-composer-textarea metrics exactly. */
+	padding: 8px 8px;
+	font-size: var(--inno-smart-font-size, 14px);
+	line-height: var(--inno-smart-line-height, 20px);
+	font-family: inherit;
+	font-weight: inherit;
+	letter-spacing: inherit;
+}
+.inno-smart-selection {
+	background: var(--inno-selection-bg, rgba(37, 99, 235, 0.16));
+	border-radius: 2px;
+	/* Paint the leading between line boxes without changing text metrics. */
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+	box-shadow: 0 0 0 3px var(--inno-selection-bg, rgba(37, 99, 235, 0.16));
+}
+/* Slot tokens reserve the textarea width for the overlaid bubble, but must
+   not be painted as raw token text beneath it. */
+.inno-smart-slot-tok {
+	display: inline-block;
+	vertical-align: baseline;
+	white-space: pre;
+	color: transparent;
+}
+.inno-smart-hit {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	pointer-events: none;
+}
+.inno-smart-hit > * {
+	pointer-events: auto;
+}
+
+/* Measurement probes — never visible, sized like their real counterparts. */
+.inno-smart-ta-probe {
+	position: absolute;
+	visibility: hidden;
+	white-space: pre;
+	font-size: var(--inno-smart-font-size, 14px);
+	line-height: var(--inno-smart-line-height, 20px);
+	font-family: inherit;
+	font-weight: inherit;
+	letter-spacing: inherit;
+}
+.inno-smart-chip-probe {
+	position: absolute;
+	visibility: hidden;
+	white-space: pre;
+	font-size: 11.5px;
+	font-weight: 600;
+	line-height: 18px;
+	font-family: inherit;
+	padding: 0 6px;
+	border: 1px solid transparent;
+}
+
+/* ── Keyword underline ── */
+.inno-smart-kw {
+	text-decoration: underline dashed var(--smart-kw, var(--inno-danger));
+	text-decoration-thickness: 2px;
+	text-underline-offset: 3px;
+	transition: color var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-kw.is-hi {
+	text-decoration-style: solid;
+	text-decoration-color: var(--smart-kw-strong, var(--inno-danger));
+	font-weight: 600;
+}
+.inno-smart-kw.is-hot {
+	color: var(--smart-kw, var(--inno-danger));
+}
+.inno-smart-kw-hit {
+	position: absolute;
+	min-width: 0;
+	border-radius: 9999px;
+	background: transparent;
+	border: 0;
+	padding: 0;
+	cursor: pointer;
+	/* invisible until hover */
+	transition: background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-kw-hit:hover {
+	background: transparent;
+}
+.inno-smart-kw-hit:focus,
+.inno-smart-kw-hit:focus-visible {
+	outline: none;
+	box-shadow: none;
+}
+
+/* ── In-text bubble chip ── */
+.inno-smart-chip {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 36px;
+	height: 20px;
+	border-radius: 9999px;
+	font-size: 11.5px;
+	font-weight: 600;
+	line-height: 18px;
+	cursor: grab;
+	touch-action: none;
+	user-select: none;
+	border: 1px solid color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 45%, transparent);
+	background: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 10%, var(--inno-surface));
+	color: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 72%, var(--inno-text));
+	box-shadow: 0 1px 2px color-mix(in srgb, var(--inno-text) 8%, transparent);
+	transition: transform var(--inno-dur-ui) var(--inno-ease-out), box-shadow var(--inno-dur-ui) var(--inno-ease-out), background var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-chip-word {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-smart-chip.is-empty {
+	border-style: dashed;
+	color: var(--inno-text-muted);
+}
+.inno-smart-chip.is-filled {
+	border-style: solid;
+}
+.inno-smart-chip.is-selected {
+	background: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 18%, var(--inno-selection-bg, rgba(37, 99, 235, 0.16)));
+	border-color: var(--smart-bc, var(--inno-accent));
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 22%, transparent), 0 1px 2px color-mix(in srgb, var(--inno-text) 8%, transparent);
+}
+.inno-smart-chip.is-spawn {
+	animation: inno-smart-materialize 240ms var(--inno-ease-out) backwards;
+}
+.inno-smart-chip.is-drag-match {
+	animation: inno-smart-breathe 1.2s ease-in-out infinite;
+}
+.inno-smart-chip.is-drop-ok {
+	transform: scale(1.12);
+	box-shadow: 0 4px 14px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 38%, transparent);
+	border-color: var(--smart-bc, var(--inno-accent));
+}
+.inno-smart-chip.is-drop-partial {
+	transform: scale(1.08);
+	box-shadow: 0 4px 14px color-mix(in srgb, var(--inno-warning) 32%, transparent);
+	border-color: var(--inno-warning);
+}
+.inno-smart-chip.is-merge-ok {
+	transform: scale(1.12);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--inno-accent) 18%, transparent), 0 4px 16px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 42%, transparent);
+	border-color: var(--inno-accent);
+}
+.inno-smart-chip.is-merge-ok::after {
+	content: attr(data-merge-label);
+	position: absolute;
+	left: 50%;
+	top: calc(100% + 5px);
+	transform: translateX(-50%);
+	padding: 1px 6px;
+	border-radius: 9999px;
+	background: var(--inno-accent);
+	color: var(--inno-on-accent, #fff);
+	font-size: 9px;
+	font-weight: 700;
+	line-height: 14px;
+	white-space: nowrap;
+	pointer-events: none;
+}
+.inno-smart-chip.is-drop-bad {
+	animation: inno-smart-shake 500ms var(--inno-ease-out);
+	border-color: var(--inno-danger);
+	color: var(--inno-danger);
+}
+.inno-smart-chip.is-drag-ghost {
+	position: fixed;
+	z-index: 100;
+	pointer-events: none;
+	opacity: 0.9;
+	left: 0;
+	top: 0;
+}
+
+.inno-smart-badge {
+	position: absolute;
+	top: -5px;
+	right: -2.5px;
+	min-width: 10px;
+	height: 10px;
+	padding: 0;
+	border-radius: 9999px;
+	background: var(--smart-bc, var(--inno-accent));
+	color: #fff;
+	font-size: 7px;
+	font-weight: 700;
+	line-height: 10px;
+	text-align: center;
+	box-shadow: 0 0 0 1px var(--inno-surface);
+}
+.inno-smart-badge.is-pop {
+	animation: inno-smart-pop 260ms var(--inno-ease-out);
+}
+.inno-smart-chip-x {
+	position: absolute;
+	top: -7px;
+	left: -7px;
+	width: 14px;
+	height: 14px;
+	border-radius: 9999px;
+	border: 0;
+	padding: 0;
+	background: var(--inno-surface);
+	border: 1px solid var(--inno-border);
+	color: var(--inno-text-muted);
+	font-size: 10px;
+	line-height: 12px;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), color var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-chip:hover .inno-smart-chip-x {
+	opacity: 1;
+}
+.inno-smart-chip-x:hover {
+	background: var(--inno-danger);
+	color: #fff;
+	border-color: var(--inno-danger);
+}
+
+/* Keep drag hit zones aligned with the visible bubble and keyword. */
+body.inno-smart-dragging .inno-smart-chip::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+}
+body.inno-smart-dragging .inno-smart-kw-hit::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+}
+
+/* ── Dwell progress follower (cursor ring while hovering a keyword 1s) ── */
+.inno-smart-dwell-follower {
+	position: fixed;
+	z-index: 200;
+	width: 20px;
+	height: 20px;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, var(--inno-surface) 76%, var(--inno-border-strong));
+	background:
+		radial-gradient(closest-side, color-mix(in srgb, var(--inno-surface) 92%, transparent) 58%, transparent 60% 100%),
+		conic-gradient(from 0deg, color-mix(in srgb, var(--inno-accent) 92%, var(--inno-text-muted)) var(--dwell-p, 0%), color-mix(in srgb, var(--inno-border-strong) 48%, transparent) 0);
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, var(--inno-accent) 10%, transparent),
+		0 3px 10px rgba(31, 35, 40, 0.2),
+		0 0 12px color-mix(in srgb, var(--inno-accent) 16%, transparent);
+	pointer-events: none;
+}
+.inno-drag-follower-ext.is-hidden-by-dwell {
+	display: none;
+}
+
+.inno-smart-dwell-follower.is-inline {
+	position: static;
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+}
+
+.inno-smart-dwell-follower i {
+	display: none;
+}
+
+.inno-drag-follower {
+	position: fixed;
+	z-index: 220;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	box-sizing: border-box;
+	max-width: 260px;
+	padding: 5px 8px;
+	border: 1px solid var(--inno-border);
+	border-radius: 12px;
+	background: var(--inno-surface-muted);
+	box-shadow: 0 6px 18px rgba(31, 35, 40, 0.16);
+	color: var(--inno-text);
+	font-size: 12px;
+	line-height: 18px;
+	pointer-events: none;
+}
+
+.inno-drag-follower-files {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.inno-drag-follower-file {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	max-width: 240px;
+	white-space: nowrap;
+}
+
+.inno-drag-follower-ext {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	min-width: 26px;
+	height: 16px;
+	padding: 0 4px;
+	border: 1px solid var(--inno-border);
+	border-radius: 4px;
+	background: var(--inno-surface);
+	color: var(--inno-text-subtle);
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+}
+
+.inno-drag-follower-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.inno-drag-follower-count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	margin-left: auto;
+	min-width: 24px;
+	height: 16px;
+	padding: 0 6px;
+	border-radius: 999px;
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 1;
+}
+
+/* Stacked-sheet hint behind a multi-file drag panel. */
+.inno-drag-follower.is-multi {
+	box-shadow:
+		3px 3px 0 -1px var(--inno-surface-muted),
+		3px 3px 0 0 var(--inno-border),
+		6px 6px 0 -1px var(--inno-surface-muted),
+		6px 6px 0 0 var(--inno-border),
+		0 6px 18px rgba(31, 35, 40, 0.16);
+}
+
+.inno-drag-follower-more {
+	color: var(--inno-text-subtle);
+	font-size: 10px;
+}
+
+.inno-drag-follower-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 22px;
+	padding: 2px 6px;
+	border-radius: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.inno-drag-follower.has-status .inno-drag-follower-status {
+	border-top: 1px solid var(--inno-border);
+	padding-top: 5px;
+	margin-top: 1px;
+}
+
+.inno-drag-follower-status.is-match {
+	color: var(--inno-success);
+}
+.inno-drag-follower-status.is-mismatch {
+	color: var(--inno-danger);
+}
+.inno-drag-follower-status.is-partial {
+	color: var(--inno-warning);
+}
+
+.inno-drag-follower-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	font-size: 12px;
+	line-height: 1;
+}
+.inno-drag-follower-icon > svg {
+	width: 14px;
+	height: 14px;
+}
+.inno-drag-follower-icon .is-positive {
+	color: var(--inno-success);
+}
+.inno-drag-follower-icon .is-negative {
+	color: var(--inno-danger);
+}
+
+.inno-drag-follower-word {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.inno-drag-follower-label {
+	color: var(--inno-text-subtle);
+	font-weight: 500;
+}
+
+@keyframes inno-smart-materialize {
+	from { transform: scale(0.6); opacity: 0; }
+	to { transform: scale(1); opacity: 1; }
+}
+@keyframes inno-smart-breathe {
+	0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 30%, transparent); }
+	50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 14%, transparent); }
+}
+@keyframes inno-smart-shake {
+	0%, 100% { transform: translateX(0); }
+	20%, 60% { transform: translateX(-3px); }
+	40%, 80% { transform: translateX(3px); }
+}
+@keyframes inno-smart-pop {
+	0% { transform: scale(0.5); }
+	60% { transform: scale(1.25); }
+	100% { transform: scale(1); }
+}
+
+/* ── Smart input toast (auto-dismissing, bottom-center) ── */
+.inno-smart-toast {
+	position: fixed;
+	left: 50%;
+	bottom: 108px;
+	transform: translateX(-50%);
+	z-index: 70;
+	max-width: min(420px, calc(100vw - 48px));
+	padding: 6px 14px;
+	border-radius: 9999px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface-raised);
+	color: var(--inno-text);
+	font-size: 12px;
+	box-shadow: var(--inno-shadow-soft);
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+	pointer-events: none;
+}
+.inno-smart-toast.is-error {
+	border-color: var(--inno-danger-border);
+	background: color-mix(in srgb, var(--inno-danger-bg) 60%, var(--inno-surface-raised));
+	color: var(--inno-danger);
+}
+
+/* ── Fill menu / menu extras ── */
+.inno-smart-panel--fill {
+	box-sizing: border-box;
+	width: min(440px, calc(100vw - 32px));
+	padding: 8px;
+}
+.inno-smart-panel--fill.is-empty {
+	width: min(320px, calc(100vw - 32px));
+}
+.inno-smart-fill-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 2px;
+	margin-bottom: 9px;
+}
+.inno-smart-fill-head .inno-smart-panel-title {
+	/* Match the 22px control height exactly so the title's line box and the
+	   buttons share one center line; padding would offset the glyphs. */
+	padding: 0;
+	line-height: 22px;
+}
+.inno-smart-fill-plus {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	color: var(--inno-text-muted);
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-fill-plus:hover,
+.inno-smart-fill-plus.is-on {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-fill-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+}
+.inno-smart-fill-actions .inno-smart-fill-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 3px;
+	min-height: 22px;
+	padding: 2px 7px;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.inno-smart-fill-actions .inno-smart-fill-btn.is-primary {
+	min-width: 34px;
+}
+.inno-smart-panel-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+	gap: 2px;
+}
+.inno-smart-panel-pick {
+	box-sizing: border-box;
+	cursor: pointer;
+	border: 1px solid transparent;
+	width: 100%;
+	min-width: 0;
+	height: 30px;
+	min-height: 30px;
+	overflow: hidden;
+	text-align: left;
+}
+.inno-smart-panel-pick.is-on {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+}
+.inno-smart-panel-empty {
+	padding: 8px 10px;
+	font-size: 11.5px;
+	color: var(--inno-text-subtle);
+}
+.inno-smart-panel-empty.is-loading {
+	color: var(--inno-text-muted);
+}
+.inno-smart-fill-btn {
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	padding: 3px 10px;
+	font-size: 11.5px;
+	color: var(--inno-text);
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-fill-btn:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--inno-accent) 40%, transparent);
+}
+.inno-smart-fill-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.inno-smart-fill-btn.is-primary {
+	background: var(--inno-accent);
+	border-color: transparent;
+	color: var(--inno-surface);
+}
+.inno-smart-fill-btn.is-primary:hover:not(:disabled) {
+	opacity: 0.9;
+}
+.inno-smart-panel-remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	border: 0;
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-panel-remove:hover {
+	color: var(--inno-danger);
+	background: var(--inno-danger-bg);
+}
+/* ── Context menu ── */
+.inno-smart-menu {
+	position: fixed;
+	z-index: 60;
+	min-width: 180px;
+	padding: 4px;
+	border: 1px solid var(--inno-border);
+	border-radius: 10px;
+	background: var(--inno-surface-raised);
+	box-shadow: var(--inno-shadow-soft);
+	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+}
+.inno-smart-menu-item {
+	display: block;
+	width: 100%;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	padding: 6px 10px;
+	font-size: 12px;
+	text-align: left;
+	color: var(--inno-text);
+	cursor: pointer;
+	transition: background var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-menu-item:hover {
+	background: var(--inno-accent-soft);
+}
+.inno-smart-menu-item.is-danger {
+	color: var(--inno-danger);
+}
+.inno-smart-menu-item.is-danger:hover {
+	background: var(--inno-danger-bg);
+}
+
+/* ── Workspace files are draggable from the whole row ── */
+.inno-smart-ws-drag-row {
+	cursor: grab;
+}
+.inno-smart-ws-drag-row:active {
+	cursor: grabbing;
+}
+.inno-smart-ws-hl {
+	background: color-mix(in srgb, var(--inno-accent) 12%, transparent) !important;
+	outline: 1px solid color-mix(in srgb, var(--inno-accent) 35%, transparent);
+	outline-offset: -1px;
+}
+
+/* ── Settings: smart input rule manager ── */
+.inno-smart-set-card {
+	padding: 14px;
+}
+.inno-smart-set-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 10px;
+}
+.inno-smart-set-count {
+	display: inline-flex;
+	align-items: center;
+	min-height: 20px;
+	padding: 2px 8px;
+	border-radius: 9999px;
+	background: var(--inno-surface-muted);
+	color: var(--inno-text-muted);
+	font-size: 10.5px;
+	line-height: 16px;
+}
+.inno-smart-set-list {
+	display: grid;
+	gap: 8px;
+}
+.inno-smart-set-row {
+	display: grid;
+	min-width: 0;
+	gap: 10px;
+	padding: 11px 12px 12px;
+	border-radius: 8px;
+	border: 1px solid color-mix(in srgb, var(--inno-border) 72%, transparent);
+	background: color-mix(in srgb, var(--inno-surface) 82%, var(--inno-surface-muted));
+	transition: border-color var(--inno-dur-fast) var(--inno-ease-out), background var(--inno-dur-fast) var(--inno-ease-out), box-shadow var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-row:hover {
+	border-color: var(--inno-border-strong);
+	background: var(--inno-surface-raised);
+	box-shadow: 0 2px 8px rgba(31, 35, 40, 0.04);
+}
+.inno-smart-set-row.is-new {
+	border-color: color-mix(in srgb, var(--inno-accent) 35%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 36%, var(--inno-surface));
+}
+.inno-smart-set-row.is-off {
+	opacity: 0.72;
+}
+.inno-smart-set-row-head {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.inno-smart-set-identity {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 8px;
+}
+.inno-smart-set-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	box-sizing: border-box;
+	height: 28px;
+	max-width: min(220px, 45vw);
+	padding: 3px 10px;
+	overflow: hidden;
+	min-width: 56px;
+	justify-content: center;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+	background: color-mix(in srgb, var(--inno-accent-soft) 78%, var(--inno-surface));
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 20px;
+	color: var(--inno-text);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: text;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-pill:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+}
+.inno-smart-set-pill.is-off {
+	border-style: dashed;
+	color: var(--inno-text-muted);
+}
+.inno-smart-set-keyword-input {
+	width: min(150px, 42vw);
+	box-sizing: border-box;
+	height: 28px;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 55%, transparent);
+	background: var(--inno-surface);
+	padding: 3px 10px;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 20px;
+	color: var(--inno-text);
+	outline: none;
+	box-shadow: var(--inno-ring);
+}
+.inno-smart-set-keyword-input.is-primary {
+	flex: 0 1 150px;
+	box-shadow: none;
+	border-color: var(--inno-border);
+}
+.inno-smart-set-mode {
+	display: inline-flex;
+	max-width: 180px;
+	padding: 3px 7px;
+	overflow: hidden;
+	border-radius: 5px;
+	background: var(--inno-surface-muted);
+	color: var(--inno-text-subtle);
+	font-size: 10.5px;
+	line-height: 16px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inno-smart-set-new-hint {
+	min-width: 0;
+	flex: 1 1 auto;
+	color: var(--inno-text-subtle);
+	font-size: 10.5px;
+	line-height: 18px;
+}
+.inno-smart-set-format-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1.35fr) minmax(190px, 0.85fr);
+	gap: 10px;
+	min-width: 0;
+	padding-top: 10px;
+	border-top: 1px solid color-mix(in srgb, var(--inno-border) 68%, transparent);
+}
+.inno-smart-set-format-block {
+	min-width: 0;
+	padding: 8px 9px;
+	border: 1px solid color-mix(in srgb, var(--inno-border) 68%, transparent);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--inno-surface) 72%, var(--inno-surface-muted));
+}
+.inno-smart-set-format-block.is-exclude {
+	border-style: dashed;
+	background: color-mix(in srgb, var(--inno-surface-muted) 64%, var(--inno-surface));
+}
+.inno-smart-set-format-head {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.inno-smart-set-format-count.is-empty {
+	color: var(--inno-text-subtle);
+}
+
+.inno-smart-set-format-label {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 6px;
+	color: var(--inno-text-muted);
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 16px;
+}
+.inno-smart-set-format-count {
+	flex: 0 0 auto;
+	color: var(--inno-text-subtle);
+	font-size: 10px;
+	font-weight: 400;
+}
+.inno-smart-set-format-values {
+	display: flex;
+	min-width: 0;
+	min-height: 23px;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.inno-smart-set-exts {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+	min-width: 0;
+	flex: 1 1 auto;
+}
+.inno-smart-set-empty {
+	color: var(--inno-text-subtle);
+	font-size: 10.5px;
+	font-style: italic;
+	line-height: 20px;
+}
+.inno-smart-set-ext {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	border-radius: 6px;
+	background: var(--inno-surface-muted);
+	border: 1px solid transparent;
+	padding: 1px 4px 1px 6px;
+	font-size: 11px;
+	line-height: 16px;
+	color: var(--inno-text-muted);
+	font-variant-ligatures: none;
+}
+.inno-smart-set-ext:hover {
+	border-color: var(--inno-border);
+}
+.inno-smart-set-ext-x {
+	border: 0;
+	background: transparent;
+	padding: 0;
+	width: 12px;
+	height: 12px;
+	border-radius: 3px;
+	color: var(--inno-text-subtle);
+	font-size: 11px;
+	line-height: 12px;
+	cursor: pointer;
+	opacity: 0;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-ext:hover .inno-smart-set-ext-x,
+.inno-smart-set-row.is-new .inno-smart-set-ext-x {
+	opacity: 1;
+}
+.inno-smart-set-ext-x:hover {
+	color: var(--inno-danger);
+}
+.inno-smart-set-ext-add {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 6px;
+	border: 1px dashed var(--inno-border);
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-ext-add:hover {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	border-style: solid;
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-set-ext-input {
+	width: 76px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 55%, transparent);
+	background: var(--inno-surface);
+	padding: 1px 6px;
+	font-size: 11px;
+	line-height: 16px;
+	outline: none;
+}
+.inno-smart-set-all-row {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 23px;
+}
+
+.inno-smart-set-all-text {
+	font-size: 11px;
+	color: var(--inno-text-muted);
+}
+
+.inno-smart-set-all-hint {
+	display: inline-flex;
+	align-items: center;
+	margin-left: 8px;
+	font-size: 10.5px;
+	color: var(--inno-text-subtle);
+}
+.inno-smart-set-delete {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	border: 0;
+	background: transparent;
+	color: var(--inno-text-subtle);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-delete:hover {
+	color: var(--inno-danger);
+	background: var(--inno-danger-bg);
+}
+.inno-smart-set-add {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	background: var(--inno-surface);
+	padding: 3px 10px;
+	font-size: 11.5px;
+	color: var(--inno-text-muted);
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-add:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--inno-accent) 45%, transparent);
+	background: var(--inno-accent-soft);
+	color: var(--inno-accent);
+}
+.inno-smart-set-add:active:not(:disabled),
+.inno-smart-set-action:active:not(:disabled) {
+	transform: scale(0.97);
+}
+.inno-smart-set-action {
+	border-radius: 6px;
+	border: 1px solid var(--inno-border);
+	padding: 2px 10px;
+	font-size: 11.5px;
+	cursor: pointer;
+	transition: all var(--inno-dur-fast) var(--inno-ease-out);
+}
+.inno-smart-set-action.is-ghost {
+	background: var(--inno-surface);
+	color: var(--inno-text-muted);
+}
+.inno-smart-set-action.is-primary {
+	background: var(--inno-accent);
+	border-color: transparent;
+	color: var(--inno-surface);
+}
+.inno-smart-set-action:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.inno-smart-set-error {
+	margin: 4px 2px 8px;
+	font-size: 11px;
+	color: var(--inno-danger);
+	animation: inno-smart-shake 400ms var(--inno-ease-out);
+}
+
+@media (max-width: 640px) {
+	.inno-smart-set-card-head,
+	.inno-smart-set-row-head {
+		align-items: flex-start;
+	}
+	.inno-smart-set-card-head {
+		flex-wrap: wrap;
+	}
+	.inno-smart-set-row-head {
+		flex-wrap: wrap;
+	}
+	.inno-smart-set-format-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.inno-smart-set-new-hint {
+		order: 3;
+		flex-basis: 100%;
+	}
 }

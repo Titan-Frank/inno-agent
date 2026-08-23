@@ -29,6 +29,7 @@ import {
 	officeFormat,
 	safeJoinReal,
 	workspaceFileKind,
+	normalizeWorkspaceRelativePath,
 	WORKSPACE_IGNORES,
 	WORKSPACE_TREE_MAX_DEPTH,
 	type WorkspaceTreeNode,
@@ -318,7 +319,12 @@ export async function handleWorkspacesRoutes(
 	const safeWorkspacePath = (workspaceId: string | null | undefined, userPath: string): string | null => {
 		const root = workspaceRegistry.resolveWorkspaceDir(workspaceId ?? TEMP_WORKSPACE_ID);
 		if (!root) return null;
-		return safeJoinReal(root, userPath.replace(/^\/+/, ""));
+		const normalizedPath = normalizeWorkspaceRelativePath(userPath);
+		// A workspace path may have a harmless `./` prefix, but a leading `/`
+		// (or a Windows drive prefix) is an absolute path and must not be turned
+		// into a relative path by the API boundary.
+		if (normalizedPath.startsWith("/") || /^[A-Za-z]:\//.test(normalizedPath)) return null;
+		return safeJoinReal(root, normalizedPath);
 	};
 
 	// --- Workspace API ---

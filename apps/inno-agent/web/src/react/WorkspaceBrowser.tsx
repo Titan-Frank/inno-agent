@@ -1,5 +1,7 @@
 import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import type { DragDropManager } from "dnd-core";
 import { Tree, type NodeRendererProps, type TreeApi, type CreateHandler, type RenameHandler, type DeleteHandler, type MoveHandler } from "react-arborist";
 import { RefreshCw, FileText, FileType, Globe, File, FolderOpen, Folder, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Sparkles, Download, FileCode2, Presentation, FileSpreadsheet, Copy, Check, ListChecks, Trash2 } from "lucide-react";
 import { workspaceStore, type StreamingWorkspacePreview } from "../stores/workspace-store.js";
@@ -17,6 +19,9 @@ import type { WorkspaceFileDetail, WorkspaceFileKind, WorkspaceOfficeFormat } fr
 import { type ArboristNode, toArboristNodes } from "../types/workspace.js";
 import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { useStoreSnapshot } from "./hooks.js";
+import { ContextMenu, type ContextMenuItem } from "./ui/ContextMenu.js";
+import { FileName } from "./FileName.js";
+import { buildDragFilePanel, hiddenDragImage } from "./chat/smart-input/drag-utils.js";
 import "@earendil-works/pi-web-ui";
 
 // Heavy office renderers are lazy-loaded so docx-preview / xlsx stay off the
@@ -526,7 +531,7 @@ function FileContentPane({ onToggleSidebar, sidebarOpen }: { onToggleSidebar: ()
 				{/* Editor toolbar */}
 				<div className="flex h-10 items-center justify-between border-b border-[var(--inno-border)] bg-[var(--inno-surface)] px-3">
 					<div className="min-w-0">
-						<div className="truncate text-sm font-medium">{state.file.name}</div>
+						<FileName name={state.file.name} className="text-sm font-medium" />
 						<div className="truncate text-[10px] text-[var(--inno-text-muted)]">{t("files.editing", "Editing")} · {state.file.path}</div>
 					</div>
 					<div className="flex items-center gap-1.5">
@@ -573,7 +578,7 @@ function FileContentPane({ onToggleSidebar, sidebarOpen }: { onToggleSidebar: ()
 						{sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
 					</button>
 					<div className="min-w-0">
-						<div className="truncate text-sm font-medium">{state.file?.name ?? t("preview.noFile", "No file selected")}</div>
+						{state.file ? <FileName name={state.file.name} className="text-sm font-medium" /> : <div className="text-sm font-medium">{t("preview.noFile", "No file selected")}</div>}
 						<div className="truncate text-[10px] text-[var(--inno-text-muted)]">
 							{state.file ? `${state.file.path} · ${formatSize(state.file.size)}` : t("preview.selectFile", "Select a file to preview")}
 						</div>
@@ -603,34 +608,104 @@ function FileContentPane({ onToggleSidebar, sidebarOpen }: { onToggleSidebar: ()
 
 /* ---------- Custom Node Renderer ---------- */
 
+interface WorkspaceDragItem {
+	name: string;
+	path: string;
+	source: "workspace";
+}
+
 interface WorkspaceMultiSelectState {
 	enabled: boolean;
 	selectedIds: ReadonlySet<string>;
+	selectedFiles: ReadonlyArray<WorkspaceDragItem>;
 	toggleFile: (path: string) => void;
 	addFile: (path: string) => void;
+	exit: () => void;
 }
 
 const WorkspaceMultiSelectContext = createContext<WorkspaceMultiSelectState>({
 	enabled: false,
 	selectedIds: new Set(),
+	selectedFiles: [],
 	toggleFile: () => undefined,
 	addFile: () => undefined,
+	exit: () => undefined,
 });
 
+function collectSelectedWorkspaceFiles(nodes: ArboristNode[], selectedIds: ReadonlySet<string>, out: WorkspaceDragItem[] = []): WorkspaceDragItem[] {
+	for (const node of nodes) {
+		if (node.isLeaf && selectedIds.has(node.path)) {
+			out.push({ name: node.name, path: node.path, source: "workspace" });
+		}
+		if (node.children) collectSelectedWorkspaceFiles(node.children, selectedIds, out);
+	}
+	return out;
+}
+
+function createWorkspaceDragImage(items: ReadonlyArray<WorkspaceDragItem>): HTMLElement {
+	// Same shared panel the smart-input follower uses, so drags look identical
+	// whether or not smart input is enabled.
+	return buildDragFilePanel(items, true);
+}
+
 function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<ArboristNode> & { onPreviewFile?: PreviewFileHandler }) {
+	const { t } = useTranslation();
 	const isDir = !node.isLeaf;
+	const isFileDragSource = node.isLeaf && !node.isEditing;
 	const multiSelect = useContext(WorkspaceMultiSelectContext);
 	const selected = multiSelect.enabled ? multiSelect.selectedIds.has(node.data.path) : node.isSelected;
 
 	return (
 		<div
-			ref={dragHandle}
+			// Files use the native file-binding drag source below. Keeping the
+			// arborist drag handle on the same element makes react-dnd treat the
+			// file drag as a tree move and prevents the composer from receiving it.
+			ref={isFileDragSource ? undefined : dragHandle}
+			draggable={isFileDragSource}
 			style={style}
+			data-ws-path={node.data.path}
 			className={`group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer select-none ${
 				selected
 					? "bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]"
 					: "text-[var(--inno-text-muted)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]"
-			}`}
+			} ${isFileDragSource ? "inno-smart-ws-drag-row" : ""}`}
+			title={isFileDragSource ? t("chat.smartInput.dragToAttach", "拖到输入框添加到文件区") : undefined}
+			onDragStart={(event) => {
+				if (!isFileDragSource) return;
+				event.stopPropagation();
+				const item = { name: node.data.name, path: node.data.path, source: "workspace" as const };
+				const items = multiSelect.enabled && multiSelect.selectedIds.has(node.data.path) && multiSelect.selectedFiles.length > 0
+					? [...multiSelect.selectedFiles]
+					: [item];
+				const payload = items.length === 1 ? items[0] : { source: "workspace" as const, items };
+				if (items.length > 1) event.currentTarget.dataset.multiDrag = "1";
+				event.dataTransfer.setData("application/x-inno-file", JSON.stringify(payload));
+				event.dataTransfer.setData("text/plain", `ws:${node.data.path}`);
+				event.dataTransfer.effectAllowed = "copy";
+				const dragImage = createWorkspaceDragImage(items);
+				window.dispatchEvent(new CustomEvent("inno-smart-dragstart", { detail: { items } }));
+				if (document.body.classList.contains("inno-smart-dragging")) {
+					// Smart input renders its own live follower; hide the native snapshot.
+					event.dataTransfer.setDragImage(hiddenDragImage(), 0, 0);
+				} else {
+					// Keep the drag preview above the pointer. The composer uses the area
+					// under the pointer for attachment chips and smart-input feedback; a
+					// centered preview would cover that target while dragging.
+					event.dataTransfer.setDragImage(dragImage, 6, dragImage.offsetHeight + 2);
+				}
+				window.setTimeout(() => dragImage.remove(), 0);
+			}}
+			onDragEnd={(event) => {
+				if (!isFileDragSource) return;
+				event.stopPropagation();
+				// A finished multi-file drag has served its purpose; leave
+				// multi-select so the browser returns to its normal state.
+				if (event.currentTarget.dataset.multiDrag === "1") {
+					delete event.currentTarget.dataset.multiDrag;
+					multiSelect.exit?.();
+				}
+				window.dispatchEvent(new CustomEvent("inno-smart-dragend"));
+			}}
 			onClick={(e) => {
 				e.stopPropagation();
 				if (isDir) node.toggle();
@@ -640,11 +715,11 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 						return;
 					}
 					if (node.isSelected) {
+						node.deselect();
 						if (onPreviewFile) {
 							void onPreviewFile(DEFAULT_PREVIEW_PANEL_WIDTH);
 							return;
 						}
-						node.deselect();
 						return;
 					}
 					node.select();
@@ -707,7 +782,7 @@ function Node({ node, style, dragHandle, onPreviewFile }: NodeRendererProps<Arbo
 				/>
 			) : (
 				<>
-					<span className="min-w-0 flex-1 truncate">{node.data.name}</span>
+					<FileName name={node.data.name} className="min-w-0 flex-1" />
 					{node.isLeaf && <span className="text-[10px] opacity-50">{formatSize(node.data.size)}</span>}
 				</>
 			)}
@@ -727,42 +802,27 @@ interface CtxMenuState {
 	isRoot?: boolean;
 }
 
-function ContextMenu({ state, onClose, treeRef, workspaceId }: { state: CtxMenuState; onClose: () => void; treeRef: React.RefObject<TreeApi<ArboristNode> | null>; workspaceId?: string }) {
+function WorkspaceContextMenu({ state, onClose, treeRef, workspaceId }: { state: CtxMenuState; onClose: () => void; treeRef: React.RefObject<TreeApi<ArboristNode> | null>; workspaceId?: string }) {
 	const { t } = useTranslation();
-	const items = state.isRoot
+	const items: ContextMenuItem[] = state.isRoot
 		? [
-			{ label: t("files.newFile", "New File"), action: () => { treeRef.current?.create({ parentId: null, type: "leaf" }); } },
-			{ label: t("files.newFolder", "New Folder"), action: () => { treeRef.current?.create({ parentId: null, type: "internal" }); } },
-			{ label: t("files.downloadFolder", "Download as ZIP"), action: () => { triggerDownload(workspaceFolderZipUrl("", workspaceId)); } },
+			{ label: t("files.newFile", "New File"), onSelect: () => { treeRef.current?.create({ parentId: null, type: "leaf" }); } },
+			{ label: t("files.newFolder", "New Folder"), onSelect: () => { treeRef.current?.create({ parentId: null, type: "internal" }); } },
+			{ label: t("files.downloadFolder", "Download as ZIP"), onSelect: () => { triggerDownload(workspaceFolderZipUrl("", workspaceId)); } },
 		]
 		: [
-			{ label: t("files.rename", "Rename"), action: () => { const n = treeRef.current?.get(state.nodePath); n?.edit(); } },
+			{ label: t("files.rename", "Rename"), onSelect: () => { const n = treeRef.current?.get(state.nodePath); n?.edit(); } },
 			...(state.isDir
-				? [{ label: t("files.downloadFolder", "Download as ZIP"), action: () => { triggerDownload(workspaceFolderZipUrl(state.nodePath, workspaceId)); } }]
-				: [{ label: t("files.download", "Download"), action: () => { triggerDownload(workspaceFileUrl(state.nodePath, workspaceId, true)); } }]),
-			{ label: t("files.delete", "Delete"), action: () => { const n = treeRef.current?.get(state.nodePath); if (n) treeRef.current?.delete(n.id); } },
+				? [{ label: t("files.downloadFolder", "Download as ZIP"), onSelect: () => { triggerDownload(workspaceFolderZipUrl(state.nodePath, workspaceId)); } }]
+				: [{ label: t("files.download", "Download"), onSelect: () => { triggerDownload(workspaceFileUrl(state.nodePath, workspaceId, true)); } }]),
+			{ label: t("files.delete", "Delete"), danger: true, onSelect: () => { const n = treeRef.current?.get(state.nodePath); if (n) treeRef.current?.delete(n.id); } },
 			...(state.isDir ? [
-				{ label: t("files.newFileHere", "New File Here"), action: () => { const n = treeRef.current?.get(state.nodePath); n?.open(); treeRef.current?.create({ parentId: state.nodePath, type: "leaf" }); } },
-				{ label: t("files.newFolderHere", "New Folder Here"), action: () => { const n = treeRef.current?.get(state.nodePath); n?.open(); treeRef.current?.create({ parentId: state.nodePath, type: "internal" }); } },
+				{ label: t("files.newFileHere", "New File Here"), onSelect: () => { const n = treeRef.current?.get(state.nodePath); n?.open(); treeRef.current?.create({ parentId: state.nodePath, type: "leaf" }); } },
+				{ label: t("files.newFolderHere", "New Folder Here"), onSelect: () => { const n = treeRef.current?.get(state.nodePath); n?.open(); treeRef.current?.create({ parentId: state.nodePath, type: "internal" }); } },
 			] : []),
 		];
 
-	return (
-		<>
-			<div className="fixed inset-0 z-40" onClick={onClose} />
-			<div className="fixed z-50 min-w-[140px] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] py-1 shadow-lg" style={{ left: state.x, top: state.y }}>
-				{items.map((item) => (
-					<button
-						key={item.label}
-						className="flex w-full items-center px-3 py-1.5 text-left text-xs text-[var(--inno-text)] hover:bg-[var(--inno-surface-muted)]"
-						onClick={() => { item.action(); onClose(); }}
-					>
-						{item.label}
-					</button>
-				))}
-			</div>
-		</>
-	);
+	return <ContextMenu x={state.x} y={state.y} items={items} onClose={onClose} />;
 }
 
 /* ---------- Delete Confirmation ---------- */
@@ -793,7 +853,7 @@ function DeleteConfirm({ paths, onConfirm, onCancel }: { paths: string[]; onConf
 
 /* ---------- Main Component ---------- */
 
-export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFileHandler }) {
+export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?: PreviewFileHandler; dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const treeRef = useRef<TreeApi<ArboristNode>>(null);
 	const skillUploadRef = useRef<HTMLInputElement>(null);
@@ -811,6 +871,7 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 
 	const state = useStoreSnapshot(workspaceStore, () => ({
 		tree: workspaceStore.tree,
+		currentFilePath: workspaceStore.currentFile?.path ?? null,
 		isLoadingTree: workspaceStore.isLoadingTree,
 		isMutating: workspaceStore.isMutating,
 		activeWorkspaceId: workspaceStore.activeWorkspaceId,
@@ -843,12 +904,37 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		if (!el) return;
 		const ro = new ResizeObserver(([entry]) => {
 			if (entry) {
-				setTreeHeight(Math.floor(entry.contentRect.height));
+				// The browser stays mounted while the outer panel is collapsed.
+				// ResizeObserver reports 0 for a display:none ancestor; keep
+				// react-arborist on a valid positive viewport until the panel is
+				// visible and the observer reports its real size.
+				setTreeHeight(Math.max(1, Math.floor(entry.contentRect.height)));
 				setTreeWidth(Math.max(180, Math.floor(entry.contentRect.width)));
 			}
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
+	}, []);
+
+	// Smart input linkage: highlight (and scroll to) tree rows whose paths the
+	// composer panels are hovering.
+	useEffect(() => {
+		const onHighlight = (event: Event) => {
+			const paths = (event as CustomEvent<string[] | null>).detail;
+			const root = treeContainerRef.current ?? rootRef.current;
+			if (!root) return;
+			const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-ws-path]"));
+			let first: HTMLElement | null = null;
+			const active = Array.isArray(paths) ? paths : [];
+			for (const row of rows) {
+				const on = active.includes(row.dataset.wsPath ?? "");
+				row.classList.toggle("inno-smart-ws-hl", on);
+				if (on && !first) first = row;
+			}
+			if (first) first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		};
+		window.addEventListener("inno-smart-highlight", onHighlight);
+		return () => window.removeEventListener("inno-smart-highlight", onHighlight);
 	}, []);
 
 	useEffect(() => {
@@ -902,6 +988,23 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		return toArboristNodes(state.tree.children);
 	}, [state.tree]);
 
+	// File previews can also be opened from the smart-input panel, bypassing
+	// the tree node's click handler. Keep react-arborist's visual selection in
+	// sync with the store so both entry points identify the same file.
+	useEffect(() => {
+		if (multiSelectMode || !state.currentFilePath) return;
+		const node = treeRef.current?.get(state.currentFilePath);
+		if (node && !node.isSelected) node.select();
+	}, [multiSelectMode, state.currentFilePath, arboristData]);
+
+	// One Set shared by the file collection and the context value; collecting
+	// with an empty selection would still walk the whole tree, so short-circuit.
+	const selectedFileIdSet = useMemo(() => new Set(selectedFileIds), [selectedFileIds]);
+	const selectedFiles = useMemo(
+		() => selectedFileIdSet.size === 0 ? [] : collectSelectedWorkspaceFiles(arboristData, selectedFileIdSet),
+		[arboristData, selectedFileIdSet],
+	);
+
 	/* --- Tree handlers --- */
 
 	const onCreate: CreateHandler<ArboristNode> = useCallback(async ({ parentId, type }) => {
@@ -950,13 +1053,20 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 			setSelectedFileIds([]);
 			if (currentPath) treeRef.current?.get(currentPath)?.select();
 		} else {
-			setSelectedFileIds(currentPath ? [currentPath] : []);
+			// Entering multi-select starts empty. The preview selection is not a
+			// checked file and must not inflate the visible count or drag batch.
+			setSelectedFileIds([]);
 		}
 		setMultiSelectMode((enabled) => !enabled);
 	}, [multiSelectMode]);
 
-	const toggleSelectedFile = useCallback((path: string) => {
-		setSelectedFileIds((current) => current.includes(path)
+	/** Leave multi-select after a completed multi-file drag. */
+	const exitMultiSelect = useCallback(() => {
+		setSelectedFileIds([]);
+		setMultiSelectMode(false);
+	}, []);
+
+	const toggleSelectedFile = useCallback((path: string) => {		setSelectedFileIds((current) => current.includes(path)
 			? current.filter((id) => id !== path)
 			: [...current, path]);
 	}, []);
@@ -967,10 +1077,12 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 
 	const multiSelectState = useMemo<WorkspaceMultiSelectState>(() => ({
 		enabled: multiSelectMode,
-		selectedIds: new Set(selectedFileIds),
+		selectedIds: selectedFileIdSet,
+		selectedFiles,
 		toggleFile: toggleSelectedFile,
 		addFile: addSelectedFile,
-	}), [multiSelectMode, selectedFileIds, toggleSelectedFile, addSelectedFile]);
+		exit: exitMultiSelect,
+	}), [multiSelectMode, selectedFileIdSet, selectedFiles, toggleSelectedFile, addSelectedFile, exitMultiSelect]);
 
 	/* --- Upload handlers --- */
 
@@ -1099,6 +1211,7 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 									data={arboristData}
 									width={treeWidth}
 									height={treeHeight}
+									dndManager={dndManager}
 									indent={16}
 									rowHeight={28}
 									openByDefault={false}
@@ -1141,7 +1254,7 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 			) : null}
 
 			{/* Context Menu */}
-			{ctxMenu && <ContextMenu state={ctxMenu} onClose={() => setCtxMenu(null)} treeRef={treeRef} workspaceId={state.activeWorkspaceId ?? undefined} />}
+			{ctxMenu && <WorkspaceContextMenu state={ctxMenu} onClose={() => setCtxMenu(null)} treeRef={treeRef} workspaceId={state.activeWorkspaceId ?? undefined} />}
 
 			{/* Delete Confirmation */}
 			{deleteConfirm && <DeleteConfirm paths={deleteConfirm.ids} onConfirm={() => void handleConfirmDelete()} onCancel={() => setDeleteConfirm(null)} />}

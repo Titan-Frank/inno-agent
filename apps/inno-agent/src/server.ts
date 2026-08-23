@@ -1405,10 +1405,15 @@ const server = createServer(async (req, res) => {
 			const sendBody = method === "GET";
 			// Try exact file in web/dist
 			if (staticPath && serveStatic(req, res, staticPath, sendBody, webDistDir)) return;
-			// SPA fallback: serve index.html for non-API paths only. An unmatched
-			// /api/* route must fall through to the JSON 404 — returning HTML with
-			// a 200 status breaks API client error handling.
-			if (urlPath !== "/api" && !urlPath.startsWith("/api/") && serveStatic(req, res, join(webDistDir, "index.html"), sendBody, webDistDir)) return;
+			// Never route an asset miss through the SPA fallback. Returning
+			// index.html with a 200 status for a stale hashed JS/CSS URL makes the
+			// browser report an opaque dynamic-import failure instead of exposing
+			// the real missing asset and prevents a panel retry from recovering.
+			const isAssetRequest = urlPath === "/assets" || urlPath.startsWith("/assets/");
+			// SPA fallback: serve index.html for non-API, non-asset paths only. An
+			// unmatched /api/* route must fall through to the JSON 404 — returning
+			// HTML with a 200 status breaks API client error handling.
+			if (!isAssetRequest && urlPath !== "/api" && !urlPath.startsWith("/api/") && serveStatic(req, res, join(webDistDir, "index.html"), sendBody, webDistDir)) return;
 		}
 
 		// --- 404 ---
