@@ -9,6 +9,7 @@ import type {
 	WikiPageStatus,
 	ConfidenceLevel,
 	ManifestEntry,
+	WikiPrerequisite,
 } from "./types.js";
 import { logger } from "../../logger.js";
 import { listWikiPagePaths } from "./wiki-page-files.js";
@@ -37,6 +38,8 @@ export function serializeFrontmatter(fm: WikiPageFrontmatter): string {
 	};
 	if (fm.contested !== undefined) obj.contested = fm.contested;
 	if (fm.contradictions && fm.contradictions.length > 0) obj.contradictions = fm.contradictions;
+	if (fm.concept_id) obj.concept_id = fm.concept_id;
+	if (fm.prerequisites && fm.prerequisites.length > 0) obj.prerequisites = fm.prerequisites;
 
 	const doc = new YamlDocument(obj);
 	const tagsNode = doc.get("tags", true) as { flow?: boolean } | undefined;
@@ -76,22 +79,52 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 			: contestedRaw === false || contestedRaw === "false"
 				? false
 				: undefined;
+	const prerequisites: WikiPrerequisite[] = Array.isArray(raw.prerequisites)
+		? raw.prerequisites.flatMap((value) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+			const item = value as Record<string, unknown>;
+			const conceptId = asString(item.concept_id).trim();
+			if (!conceptId) return [];
+			const relation = item.relation === "supporting" ? "supporting" as const : "required" as const;
+			const source: WikiPrerequisite["source"] = item.source === "curated"
+				|| item.source === "teacher"
+				|| item.source === "model_inferred"
+				? item.source
+				: "imported" as const;
+			const numberOrUndefined = (candidate: unknown): number | undefined =>
+				typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
+			return [{
+				concept_id: conceptId,
+				relation,
+				required_level: numberOrUndefined(item.required_level),
+				importance: numberOrUndefined(item.importance),
+				source,
+				source_confidence: numberOrUndefined(item.source_confidence),
+				rationale: asString(item.rationale) || undefined,
+				scope: asString(item.scope) || undefined,
+			}];
+		})
+		: [];
+	const frontmatter: WikiPageFrontmatter = {
+		title: asString(raw.title),
+		created: asString(raw.created) || asString(raw.updated),
+		type: (raw.type as WikiPageType) ?? "source-summary",
+		tags: asStringArray(raw.tags),
+		related: asStringArray(raw.related),
+		sources: asStringArray(raw.sources),
+		source_ids: asStringArray(raw.source_ids),
+		updated: asString(raw.updated),
+		status: (raw.status as WikiPageStatus) ?? "draft",
+		confidence: (raw.confidence as ConfidenceLevel) ?? "medium",
+		contested,
+		contradictions: asStringArray(raw.contradictions),
+	};
+	const conceptId = asString(raw.concept_id).trim();
+	if (conceptId) frontmatter.concept_id = conceptId;
+	if (prerequisites.length > 0) frontmatter.prerequisites = prerequisites;
 
 	return {
-		frontmatter: {
-			title: asString(raw.title),
-			created: asString(raw.created) || asString(raw.updated),
-			type: (raw.type as WikiPageType) ?? "source-summary",
-			tags: asStringArray(raw.tags),
-			related: asStringArray(raw.related),
-			sources: asStringArray(raw.sources),
-			source_ids: asStringArray(raw.source_ids),
-			updated: asString(raw.updated),
-			status: (raw.status as WikiPageStatus) ?? "draft",
-			confidence: (raw.confidence as ConfidenceLevel) ?? "medium",
-			contested,
-			contradictions: asStringArray(raw.contradictions),
-		},
+		frontmatter,
 		body,
 	};
 }
@@ -141,6 +174,23 @@ year: YYYY
 url: ""
 venue: ""
 \`\`\`
+
+Concept pages may additionally declare a stable concept id and directional teaching dependencies:
+
+\`\`\`yaml
+concept_id: physics.inclined_plane_acceleration
+prerequisites:
+  - concept_id: physics.force_decomposition
+    relation: required
+    required_level: 0.65
+    importance: 0.9
+    source: teacher
+    source_confidence: 0.9
+    rationale: The learner must resolve forces along the incline.
+    scope: high-school-physics-standard-problem
+\`\`\`
+
+An ordinary \`[[wikilink]]\` means only that two pages are related. It must not be treated as a prerequisite unless the directional relationship is declared above.
 
 ## Index Format
 
