@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { DragDropManager } from "dnd-core";
 import { Tree, type NodeRendererProps } from "react-arborist";
 import { RefreshCw, Upload, Trash2, ChevronLeft, File, FileText, FileType, Folder, FolderOpen, Globe, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Library, Download, Check, FileCode2, Search } from "lucide-react";
 import { skillsStore } from "../stores/skills-store.js";
@@ -14,6 +15,7 @@ import { checkboxCls } from "./ui/checkbox.js";
 import { Spinner } from "./ui/Spinner.js";
 import { LazyCodeEditor } from "./LazyCodeEditor.js";
 import { LazyMarkdownEditor } from "./LazyMarkdownEditor.js";
+import { FileName } from "./FileName.js";
 import "@earendil-works/pi-web-ui";
 
 /* ---------- helpers (same as WorkspaceBrowser) ---------- */
@@ -126,7 +128,7 @@ function SkillFileNode({ node, style, dragHandle }: NodeRendererProps<ArboristNo
 			<span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--inno-text-subtle)]">
 				{nodeIcon(node.data.name, isDir, node.isOpen)}
 			</span>
-			<span className="min-w-0 flex-1 truncate">{node.data.name}</span>
+			<FileName name={node.data.name} className="min-w-0 flex-1" />
 			{node.isLeaf && <span className="text-[10px] opacity-50">{formatSize(node.data.size)}</span>}
 		</div>
 	);
@@ -157,7 +159,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 							{sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
 						</button>
 						<div className="min-w-0">
-							<div className="truncate text-sm font-medium">{state.file.name}</div>
+							<FileName name={state.file.name} className="text-sm font-medium" />
 							<div className="truncate text-[10px] text-[var(--inno-text-muted)]">{t("files.editing", "Editing")} · {state.file.path}</div>
 						</div>
 					</div>
@@ -189,7 +191,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 						{sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
 					</button>
 					<div className="min-w-0">
-						<div className="truncate text-sm font-medium">{state.file?.name ?? t("preview.noFile", "No file selected")}</div>
+						{state.file ? <FileName name={state.file.name} className="text-sm font-medium" /> : <div className="text-sm font-medium">{t("preview.noFile", "No file selected")}</div>}
 						<div className="truncate text-[10px] text-[var(--inno-text-muted)]">
 							{state.file ? `${state.file.path} · ${formatSize(state.file.size)}` : t("preview.selectFile", "Select a file to preview")}
 						</div>
@@ -212,7 +214,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 
 /* ---------- Skill Detail View ---------- */
 
-function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }) {
+function SkillDetail({ skill, onBack, dndManager }: { skill: SkillInfo; onBack: () => void; dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const treeContainerRef = useRef<HTMLDivElement>(null);
 	const [treeHeight, setTreeHeight] = useState(400);
@@ -227,7 +229,7 @@ function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }
 		const el = treeContainerRef.current;
 		if (!el) return;
 		const ro = new ResizeObserver(([entry]) => {
-			if (entry) setTreeHeight(Math.floor(entry.contentRect.height));
+			if (entry) setTreeHeight(Math.max(1, Math.floor(entry.contentRect.height)));
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
@@ -289,6 +291,7 @@ function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }
 							data={arboristData}
 							width={240}
 							height={treeHeight}
+							dndManager={dndManager}
 							indent={16}
 							rowHeight={28}
 							openByDefault
@@ -458,7 +461,7 @@ function SkillLibraryModal({ onClose }: { onClose: () => void }) {
 
 /* ---------- Main SkillsPanel ---------- */
 
-export function SkillsPanel() {
+export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const uploadRef = useRef<HTMLInputElement | null>(null);
 	const state = useStoreSnapshot(skillsStore, () => ({
@@ -496,7 +499,7 @@ export function SkillsPanel() {
 		return (
 			<div className="flex h-full flex-col p-3">
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-					<SkillDetail skill={activeSkill} onBack={() => skillsStore.deselectSkill()} />
+					<SkillDetail skill={activeSkill} onBack={() => skillsStore.deselectSkill()} dndManager={dndManager} />
 				</div>
 			</div>
 		);

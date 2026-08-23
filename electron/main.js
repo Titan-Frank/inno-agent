@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, shell, dialog, nativeImage, ipcMain } from "electron";
+import { app, BrowserWindow, Tray, Menu, shell, dialog, nativeImage, ipcMain, screen } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -91,6 +91,17 @@ function isCloseDialogCopy(value) {
     && typeof buttons.cancel === "string";
 }
 
+ipcMain.handle("inno-open-path", (event, path) => {
+  if (typeof path !== "string"
+    || path.length === 0
+    || !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents) {
+    return "";
+  }
+  return shell.openPath(path);
+});
+
 ipcMain.on("inno-close-dialog-copy", (_event, copy) => {
   if (!isCloseDialogCopy(copy)) return;
   closeDialogCopy = {
@@ -104,6 +115,51 @@ ipcMain.on("inno-close-dialog-copy", (_event, copy) => {
     },
     remember: copy.remember,
   };
+});
+
+const MAX_WINDOW_EXPANSION = 1200;
+
+function isWindowExpansionRequest(value) {
+  return value
+    && typeof value === "object"
+    && (value.side === "left" || value.side === "right")
+    && Number.isFinite(value.additionalWidth)
+    && value.additionalWidth >= 0;
+}
+
+ipcMain.handle("inno-expand-window-width", (event, request) => {
+  if (!isWindowExpansionRequest(request)
+    || !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents) {
+    return false;
+  }
+
+  const additionalWidth = Math.min(Math.round(request.additionalWidth), MAX_WINDOW_EXPANSION);
+  if (additionalWidth === 0) return true;
+
+  const currentBounds = mainWindow.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const workArea = display.workArea;
+  const nextWidth = currentBounds.width + additionalWidth;
+
+  // Never expand beyond the usable display area. In that case the renderer
+  // keeps the panel collapsed instead of squeezing the chat into the gap.
+  if (nextWidth > workArea.width) return false;
+
+  const requestedX = request.side === "left"
+    ? currentBounds.x - additionalWidth
+    : currentBounds.x;
+  const minX = workArea.x;
+  const maxX = workArea.x + workArea.width - nextWidth;
+  const nextX = Math.max(minX, Math.min(requestedX, maxX));
+
+  mainWindow.setBounds({
+    ...currentBounds,
+    x: nextX,
+    width: nextWidth,
+  }, true);
+  return true;
 });
 
 // ── Loading 窗口（服务启动期间显示） ────────────────────────────────────────
@@ -211,6 +267,22 @@ function openMainWindow() {
   });
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
+
+  // 原生右键菜单：Electron 默认不弹出系统菜单，这里补上文本编辑的基础项。
+  mainWindow.webContents.on("context-menu", (event, params) => {
+    const items = [];
+    if (params.selectionText) {
+      items.push({ role: "cut", label: "剪切", enabled: params.isEditable });
+      items.push({ role: "copy", label: "复制" });
+    }
+    if (params.isEditable) {
+      items.push({ role: "paste", label: "粘贴" });
+      items.push({ role: "selectAll", label: "全选" });
+    }
+    if (items.length === 0) return;
+    const menu = Menu.buildFromTemplate(items);
+    menu.popup({ window: mainWindow });
+  });
 
   // 关闭 loading 窗口
   loadingWindow?.close();

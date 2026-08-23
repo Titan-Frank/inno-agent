@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Database, KeyRound, Globe } from "lucide-react";
+import { ChevronDown, Database, KeyRound, Globe, Search } from "lucide-react";
 import { settingsStore } from "../../stores/settings-store.js";
-import type { InnoSettings } from "../../types/settings.js";
+import { getWebAccessSettings, saveWebAccessSettings } from "../../api/settings.js";
+import type { InnoSettings, WebAccessSettings } from "../../types/settings.js";
 import { inputCls } from "../ui/input.js";
 import { SettingsSection } from "./primitives.js";
 
@@ -368,6 +369,158 @@ function TavilySettings({ settings }: { settings: InnoSettings }) {
 	);
 }
 
+/* ---------- Web Research Settings (pi-web-access: web_research / source_check / fetch_content) ---------- */
+
+function WebResearchSettings() {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const [data, setData] = useState<WebAccessSettings | null>(null);
+	const [provider, setProvider] = useState("auto");
+	const [draft, setDraft] = useState<Record<string, string>>({});
+	const [saving, setSaving] = useState(false);
+	const [saved, setSaved] = useState(false);
+
+	useEffect(() => {
+		let cancelled = false;
+		getWebAccessSettings()
+			.then((d) => {
+				if (cancelled) return;
+				setData(d);
+				setProvider(d.defaultProvider);
+			})
+			.catch(() => {});
+		return () => { cancelled = true; };
+	}, []);
+
+	const configuredCount = data?.providers.filter((p) => p.configured).length ?? 0;
+	const dirty = Boolean(data) && (provider !== data!.defaultProvider || Object.keys(draft).length > 0);
+
+	async function handleSave() {
+		if (!data) return;
+		setSaving(true);
+		setSaved(false);
+		try {
+			const values: Record<string, string> = {};
+			for (const [id, v] of Object.entries(draft)) values[id] = v.trim();
+			const next = await saveWebAccessSettings({ provider, values });
+			setData(next);
+			setProvider(next.defaultProvider);
+			setDraft({});
+			setSaved(true);
+		} catch {
+			// surfaced by api client
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function handleClear(id: string) {
+		setSaving(true);
+		setSaved(false);
+		try {
+			const next = await saveWebAccessSettings({ values: { [id]: "" } });
+			setData(next);
+			setProvider(next.defaultProvider);
+			setDraft((prev) => {
+				const { [id]: _drop, ...rest } = prev;
+				return rest;
+			});
+		} catch {
+			// surfaced by api client
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="min-w-0 rounded-lg bg-[var(--inno-surface)] p-4">
+			<button className="inno-settings-card-toggle flex w-full min-w-0 items-start gap-2 text-left" onClick={() => setOpen((v) => !v)}>
+				<Search size={16} className="mt-0.5 shrink-0 text-[var(--inno-text)]" />
+				<div className="min-w-0 flex-1">
+					<h4 className="break-words text-sm font-medium text-[var(--inno-text)]">{t("settings.webResearch.title", "深度调研 (web_research)")}</h4>
+					<p className="mt-1 max-w-full break-words text-xs leading-relaxed text-[var(--inno-text-muted)]">
+						{t("settings.webResearch.desc", "多角度、多源头联网调研与事实核查（source_check），支持 Tavily / Brave / Exa / Perplexity 等 20+ 搜索源；DuckDuckGo 免配置兜底。与上方 Tavily 快速搜索并存。")}
+					</p>
+					{!open && (
+						<p className="mt-1 break-all text-[11px] leading-relaxed text-[var(--inno-text-subtle)]">
+							{t("settings.webResearch.summary", "默认源: {{provider}} · 已配置 {{count}} 个源", {
+								provider: data?.defaultProvider ?? "auto",
+								count: configuredCount,
+							})}
+						</p>
+					)}
+				</div>
+				<ChevronDown size={14} className={`mt-1 shrink-0 text-[var(--inno-text-subtle)] transition-transform ${open ? "rotate-180" : ""}`} />
+			</button>
+
+			{open && data ? (
+				<div className="mt-3 grid gap-2.5">
+					<label className="grid gap-1 text-xs text-[var(--inno-text-muted)]">
+						{t("settings.webResearch.defaultProvider", "默认搜索源")}
+						<select
+							className={inputCls}
+							value={provider}
+							onChange={(e) => { setProvider(e.target.value); setSaved(false); }}
+						>
+							<option value="auto">auto（自动选择）</option>
+							{data.providers.map((p) => (
+								<option key={p.id} value={p.id}>
+									{p.id}{p.configured ? " ✓" : p.kind === "none" ? `（${t("settings.webResearch.keyless", "免配置")}）` : ""}
+								</option>
+							))}
+						</select>
+					</label>
+
+					{data.providers.map((p) =>
+						p.kind === "none" ? (
+							<div key={p.id} className="flex items-center justify-between gap-2 text-xs text-[var(--inno-text-muted)]">
+								<span>{p.id}</span>
+								<span className="text-[var(--inno-text-subtle)]">{t("settings.webResearch.keyless", "免配置")}</span>
+							</div>
+						) : (
+							<div key={p.id} className="flex min-w-0 items-center gap-2">
+								<input
+									className={inputCls}
+									type={p.kind === "key" ? "password" : "text"}
+									value={draft[p.id] ?? ""}
+									onChange={(e) => {
+										setDraft((prev) => ({ ...prev, [p.id]: e.target.value }));
+										setSaved(false);
+									}}
+									placeholder={p.configured ? p.maskedValue : p.kind === "url" ? "https://searxng.example.com" : `${p.id} API Key`}
+									autoComplete="off"
+								/>
+								{p.configured && (
+									<button
+										disabled={saving}
+										onClick={() => void handleClear(p.id)}
+										className="flex h-8 shrink-0 items-center rounded-md border border-[var(--inno-border)] px-3 text-xs text-[var(--inno-text-muted)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]"
+									>
+										{t("settings.webResearch.clear", "清除")}
+									</button>
+								)}
+							</div>
+						),
+					)}
+
+					<div className="flex min-w-0 flex-wrap items-center gap-2">
+						<button
+							disabled={saving || !dirty}
+							onClick={() => void handleSave()}
+							className="flex h-8 shrink-0 items-center rounded-md inno-primary-button px-3 text-xs text-white disabled:opacity-50"
+						>
+							{saving ? t("common.loading") : saved ? t("settings.webResearch.saved", "已保存") : t("common.save")}
+						</button>
+					</div>
+					<p className="text-[11px] leading-relaxed text-[var(--inno-text-subtle)]">
+						{t("settings.webResearch.hint", "更多搜索源与高级选项可直接编辑配置目录下的 web-search.json。")}
+					</p>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 /* ---------- Integrations category page ---------- */
 
 export function IntegrationsSettings({ settings }: { settings: InnoSettings }) {
@@ -377,6 +530,7 @@ export function IntegrationsSettings({ settings }: { settings: InnoSettings }) {
 			<ContentHubSettings settings={settings} />
 			<OcrSettings settings={settings} />
 			<TavilySettings settings={settings} />
+			<WebResearchSettings />
 		</SettingsSection>
 	);
 }

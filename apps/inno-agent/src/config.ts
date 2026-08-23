@@ -65,6 +65,70 @@ export interface InnoSimpleModeConfig {
 }
 
 /**
+ * Smart Input (便捷输入). Global, enabled by default. When enabled, the web
+ * composer recognizes literal keywords (e.g. "pdf", "word") in the typed text
+ * and converts them into file-binding bubbles; files bound to a bubble are
+ * sent to the agent as structured attachments instead of relying on the model
+ * to guess which file a demonstrative ("这份") refers to.
+ *
+ * A rule matches by literal keyword only (no regex/segments). Each rule can
+ * either map one keyword to a set of allowed file extensions, or accept all
+ * file formats with an optional exclusion list. Users manage rules in
+ * Settings → General (add / rename / edit extensions / toggle / delete); built-in
+ * rules are always retained and can only be toggled off.
+ */
+export interface InnoSmartInputRule {
+	id: string;
+	/** Built-in rule ids are recognized during config migration. */
+	isPreset: boolean;
+	keyword: string;
+	/** Allowed extensions when `allExtensions` is false. */
+	extensions: string[];
+	/** Accept every file format before applying `excludeExtensions`. */
+	allExtensions: boolean;
+	/** Extensions rejected after the allow-list/all-formats check. */
+	excludeExtensions: string[];
+	enabled: boolean;
+}
+
+export interface InnoSmartInputConfig {
+	enabled: boolean;
+	allowDrag: boolean;
+	allowRightClick: boolean;
+	rules: InnoSmartInputRule[];
+}
+
+/** Default keyword rules — common document nouns mapped to real extensions. */
+export const DEFAULT_SMART_INPUT_RULES: InnoSmartInputRule[] = [
+	{ id: "smart-rule-pdf", isPreset: true, keyword: "pdf", extensions: [".pdf"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-word", isPreset: true, keyword: "word", extensions: [".doc", ".docx"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-excel", isPreset: true, keyword: "excel", extensions: [".xls", ".xlsx"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{ id: "smart-rule-ppt", isPreset: true, keyword: "ppt", extensions: [".ppt", ".pptx"], allExtensions: false, excludeExtensions: [], enabled: true },
+	{
+		id: "smart-rule-image",
+		isPreset: true,
+		keyword: "图片",
+		extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"],
+		allExtensions: false,
+		excludeExtensions: [],
+		enabled: true,
+	},
+	{
+		// Generic "文件" rule: accepts every format by default but ships
+		// disabled — users opt in from the settings panel.
+		id: "smart-rule-file",
+		isPreset: true,
+		keyword: "文件",
+		extensions: [],
+		allExtensions: true,
+		excludeExtensions: [],
+		enabled: false,
+	},
+];
+
+const DEFAULT_SMART_INPUT_RULE_IDS = new Set(DEFAULT_SMART_INPUT_RULES.map((rule) => rule.id));
+
+/**
  * MCP (Model Context Protocol) support via the pi-mcp-adapter extension.
  * Master switch (default OFF, opt-in). Server definitions live in the standard
  * MCP config file `<configDir>/mcp.json` (managed through the web UI or edited
@@ -183,6 +247,7 @@ export interface InnoConfig {
 	subagents?: InnoSubagentsConfig;
 	memory?: InnoMemoryConfig;
 	simpleMode?: InnoSimpleModeConfig;
+	smartInput?: InnoSmartInputConfig;
 	mcp?: InnoMcpConfig;
 	ui?: InnoUiConfig;
 	scheduler?: InnoSchedulerConfig;
@@ -203,6 +268,22 @@ export interface InnoConfig {
 	 */
 	tavily?: {
 		apiKey: string;
+	};
+	/**
+	 * Third-party PI extensions bundled with inno-agent. Both default to
+	 * enabled; set `enabled: false` to opt out without uninstalling.
+	 *
+	 * - `todo` (@juicesharp/rpiv-todo): registers the `todo` task-list tool.
+	 *   TUI overlay/shortcuts activate only in CLI mode (ctx.hasUI).
+	 * - `webAccess` (pi-web-access): registers `fetch_content` +
+	 *   `get_search_content` (URL/GitHub/PDF/YouTube extraction). Its own
+	 *   `web_search`/`source_check` tools stay disabled via the managed
+	 *   `<configDir>/web-search.json` default so the built-in Tavily
+	 *   `web_search` remains the single search tool.
+	 */
+	plugins?: {
+		todo?: { enabled?: boolean };
+		webAccess?: { enabled?: boolean };
 	};
 }
 
@@ -284,6 +365,94 @@ export function normalizeSimpleModeConfig(simpleMode: Partial<InnoSimpleModeConf
 	// Simple Mode defaults OFF; only an explicit `true` enables it.
 	return {
 		enabled: simpleMode?.enabled === true,
+	};
+}
+
+/** Normalize one extension: lowercase, strip whitespace, ensure a leading dot. */
+export function normalizeSmartInputExtension(raw: string): string | null {
+	const trimmed = raw.trim().toLowerCase();
+	if (!trimmed) return null;
+	const withDot = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+	// Must contain at least one letter beyond the dot to be a real extension.
+	if (!/^\.[a-z0-9][a-z0-9]*$/.test(withDot)) return null;
+	return withDot;
+}
+
+/**
+ * Normalize smart-input rules: trim keywords, drop empty/duplicate keywords
+ * (system presets win duplicate keywords), normalize/dedupe allowed and
+ * excluded extensions, backfill stable ids for rules saved without one, and
+ * restore any missing built-in rules. A rule with no allowed extensions is
+ * valid but matches nothing until the user either adds one or enables
+ * all-formats mode.
+ */
+export function normalizeSmartInputConfig(
+	smartInput: Partial<InnoSmartInputConfig> | undefined,
+): InnoSmartInputConfig {
+	const seenKeywords = new Set<string>();
+	const seenIds = new Set<string>();
+	const normalizeExtensions = (values: unknown): string[] => Array.from(new Set(
+		(Array.isArray(values) ? values : [])
+			.map((ext) => normalizeSmartInputExtension(String(ext)))
+			.filter((ext): ext is string => ext !== null),
+	));
+	const configuredRules = Array.isArray(smartInput?.rules);
+	const isPresetCandidate = (rule: InnoSmartInputRule): boolean =>
+		rule.isPreset === true || (typeof rule.id === "string" && DEFAULT_SMART_INPUT_RULE_IDS.has(rule.id));
+	// A user-created rule may have the same keyword as a built-in rule in an
+	// older or hand-edited config. Process presets first so the built-in rule
+	// survives normalization and remains the preferred bubble keyword.
+	const rawRules = configuredRules
+		? [...(smartInput?.rules ?? [])].sort((a, b) => Number(isPresetCandidate(b)) - Number(isPresetCandidate(a)))
+		: [];
+	const rules: InnoSmartInputRule[] = [];
+	for (const rule of rawRules) {
+		const keyword = (rule.keyword ?? "").trim();
+		if (!keyword || seenKeywords.has(keyword)) continue;
+		const extensions = normalizeExtensions(rule.extensions);
+		const excludeExtensions = normalizeExtensions(rule.excludeExtensions);
+		let id = typeof rule.id === "string" && rule.id.trim() ? rule.id.trim() : "";
+		if (!id || seenIds.has(id)) id = `smart-rule-${keyword}`;
+		if (seenIds.has(id)) id = `smart-rule-${keyword}-${rules.length}`;
+		// Older configs do not carry isPreset. Recognize the stable built-in
+		// ids during migration, while treating other rules as user-created.
+		const isPreset = rule.isPreset === true || DEFAULT_SMART_INPUT_RULE_IDS.has(id);
+		seenKeywords.add(keyword);
+		seenIds.add(id);
+		rules.push({
+			id,
+			isPreset,
+			keyword,
+			extensions,
+			allExtensions: rule.allExtensions === true,
+			excludeExtensions,
+			enabled: rule.enabled !== false,
+		});
+	}
+	const configuredPresets = new Map(
+		rules
+			.filter((rule) => DEFAULT_SMART_INPUT_RULE_IDS.has(rule.id))
+			.map((rule) => [rule.id, rule] as const),
+	);
+	const presetRules = DEFAULT_SMART_INPUT_RULES.map((preset) => {
+		const configured = configuredPresets.get(preset.id);
+		return configured ?? {
+			...preset,
+			extensions: [...preset.extensions],
+			excludeExtensions: [...preset.excludeExtensions],
+		};
+	});
+	const presetIds = new Set(presetRules.map((rule) => rule.id));
+	const presetKeywords = new Set(presetRules.map((rule) => rule.keyword));
+	const customRules = rules.filter((rule) =>
+		!presetIds.has(rule.id) && !presetKeywords.has(rule.keyword));
+
+	return {
+		// Default ON; only an explicit false opts out.
+		enabled: smartInput?.enabled !== false,
+		allowDrag: smartInput?.allowDrag !== false,
+		allowRightClick: smartInput?.allowRightClick !== false,
+		rules: [...presetRules, ...customRules],
 	};
 }
 
@@ -371,11 +540,13 @@ export function normalizeConfig(config: LegacyInnoConfig): InnoConfig {
 		subagents: config.subagents,
 		memory: normalizeMemoryConfig(config.memory),
 		simpleMode: normalizeSimpleModeConfig(config.simpleMode),
+		smartInput: normalizeSmartInputConfig(config.smartInput),
 		mcp: normalizeMcpConfig(config.mcp),
 		ui: normalizeUiConfig(config.ui),
 		scheduler: normalizeSchedulerConfig(config.scheduler),
 		ocrApi: config.ocrApi,
 		tavily: config.tavily,
+		plugins: config.plugins,
 	} as InnoConfig;
 }
 

@@ -22,6 +22,12 @@ import { logger } from "../../logger.js";
 import type { RuntimePaths } from "../../runtime.js";
 import { resolveContainedPath } from "../../utils/path-safety.js";
 import type { WorkspaceRegistry } from "../../workspace/workspace-registry.js";
+import {
+	buildAttachmentContext,
+	parseChatAttachments,
+	validateChatAttachments,
+} from "../attachments.js";
+import { recordSessionAttachments } from "../attachments-store.js";
 import { WORKSPACE_IGNORES } from "../file-helpers.js";
 import { json, matchRoute, readBody } from "../http-helpers.js";
 import type {
@@ -362,18 +368,32 @@ export async function handleChatRoutes(
 		// model or provider rejection); vision turns get the raw prompt so
 		// they aren't steered toward ocr_image.
 		const imageFallbackPrompt = prependImagePathsHint(prompt, imagePaths);
+		// Structured attachments: validate every referenced path against the
+		// target workspace and prepare the model-visible context block. The
+		// persisted prompt text stays untouched (pi-runner appends the block
+		// via transformContext only).
+		const parsedAttachments = parseChatAttachments(body.attachments);
+		const attachments = parsedAttachments ? validateChatAttachments(parsedAttachments, imageWorkspaceRoot) : null;
+		const attachmentContext = attachments ? buildAttachmentContext(attachments) : "";
+		if (attachments) {
+			recordSessionAttachments(dataDir, imageSessionId, {
+				promptContent: prompt,
+				attachments,
+				timestamp: Date.now(),
+			});
+		}
 		// Use atomic switch+prompt when a specific session is requested.
 		let output: string;
 		try {
 			if (requestedSessionId) {
 				const sessionPath = sessionFileFromId(join(dataDir, "sessions"), requestedSessionId);
 				if (sessionPath && existsSync(sessionPath)) {
-					output = await runPromptInSession(sessionPath, prompt, images.length ? images : undefined, imageFallbackPrompt);
+					output = await runPromptInSession(sessionPath, prompt, images.length ? images : undefined, imageFallbackPrompt, attachmentContext || undefined);
 				} else {
-					output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt);
+					output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt, attachmentContext || undefined);
 				}
 			} else {
-				output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt);
+				output = await runPromptSerialized(prompt, images.length ? images : undefined, imageFallbackPrompt, attachmentContext || undefined);
 			}
 		} catch (err) {
 			logger.error({ err, sessionId: requestedSessionId }, "Non-streaming chat LLM call failed");
@@ -544,6 +564,14 @@ export async function handleChatRoutes(
 		// they aren't steered toward ocr_image.
 		const imageFallbackPrompt = prependImagePathsHint(prompt, imagePaths);
 		const imageArgs = images.length ? images : undefined;
+		// Structured attachments (bubble bindings + loose files): validated
+		// against the session workspace; the model sees them as a context block
+		// appended via transformContext while the persisted prompt stays raw.
+		const parsedStreamAttachments = parseChatAttachments(body.attachments);
+		const streamAttachments = parsedStreamAttachments
+			? validateChatAttachments(parsedStreamAttachments, streamWorkspaceRoot)
+			: null;
+		const attachmentContext = streamAttachments ? buildAttachmentContext(streamAttachments) : "";
 		const baseline = readSessionBaseline(parseSessionFile, sessionRevision, targetSessionPath);
 		let state: SessionStreamState;
 		try {
@@ -556,6 +584,7 @@ export async function handleChatRoutes(
 					prompt,
 					submittedAt: new Date().toISOString(),
 					images: imagePaths.map((workspacePath, index) => ({ mimeType: images[index]?.mimeType ?? "image/png", workspacePath })),
+					attachments: streamAttachments ?? undefined,
 				},
 				baselineMessageCount: baseline.messageCount,
 				baselineSessionRevision: baseline.revision,
@@ -563,6 +592,15 @@ export async function handleChatRoutes(
 		} catch {
 			json(res, 409, { error: "Session already has an active chat turn" });
 			return true;
+		}
+		// Accepted — record sidecar metadata for the session-detail merge. Even
+		// if this turn later fails, an unmatched entry is inert.
+		if (streamAttachments) {
+			recordSessionAttachments(dataDir, requestedSessionId, {
+				promptContent: prompt,
+				attachments: streamAttachments,
+				timestamp: Date.now(),
+			});
 		}
 		streamRegistry.publishStreamEvent(state, { type: "stream_state", status: "queued" });
 
@@ -751,7 +789,7 @@ export async function handleChatRoutes(
 						}
 					}
 				},
-			}, streamWorkspaceRoot, imageFallbackPrompt);
+			}, streamWorkspaceRoot, imageFallbackPrompt, attachmentContext || undefined);
 		} catch (err) {
 			logger.error({ err, sessionId: state.sessionId, turnId: state.turnId }, "SSE chat turn failed");
 		} finally {

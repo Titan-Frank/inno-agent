@@ -11,14 +11,20 @@ import {
 	deleteModel,
 	deleteProvider,
 	normalizeContentHubConfig,
+	normalizeSmartInputConfig,
 	saveConfig,
 	setDefaultModel,
 	upsertProvider,
 	type InnoConfig,
 	type InnoModelConfig,
 	type InnoProviderConfig,
+	type InnoSmartInputConfig,
 } from "../../config.js";
 import { logger } from "../../logger.js";
+import {
+	getWebAccessSettingsView,
+	updateWebAccessSettings,
+} from "../../agent/web-access-config.js";
 import {
 	deleteManagedServer,
 	getMcpOverview,
@@ -423,6 +429,21 @@ export async function handleSettingsRoutes(
 		return true;
 	}
 
+	// --- Smart Input (便捷输入): composer keyword bubbles + file bindings.
+	// Accepts the full settings object; rules are normalized (trimmed keywords,
+	// deduped, allowed/excluded extensions lowercased with a leading dot) before
+	// persisting so a partial or hand-edited payload can never produce a broken
+	// rule set. ---
+	if (method === "PUT" && url === "/api/settings/smart-input") {
+		const body = (await readBody(req)) as Record<string, unknown>;
+		const next = normalizeSmartInputConfig(body as Partial<InnoSmartInputConfig>);
+		config.smartInput = next;
+		save(saveConfig(paths.configPath, config));
+		syncConfig(config);
+		json(res, 200, buildSafeSettings(config));
+		return true;
+	}
+
 	// --- MCP master switch. Takes effect on the next process start: the
 	// extension set is fixed at boot, so toggling loads/unloads the
 	// pi-mcp-adapter extension only after a restart. The UI compares
@@ -554,6 +575,30 @@ export async function handleSettingsRoutes(
 		save(saveConfig(paths.configPath, config));
 		syncConfig(config);
 		json(res, 200, buildSafeSettings(config));
+		return true;
+	}
+
+	// --- Web research settings (pi-web-access providers: web_research / source_check / fetch_content) ---
+	if (method === "GET" && url === "/api/settings/web-access") {
+		json(res, 200, getWebAccessSettingsView(paths.configDir));
+		return true;
+	}
+
+	if (method === "PUT" && url === "/api/settings/web-access") {
+		const body = (await readBody(req)) as Record<string, unknown>;
+		if (body.provider !== undefined && typeof body.provider !== "string") {
+			json(res, 400, { error: "provider must be a string" });
+			return true;
+		}
+		if (body.values !== undefined && (typeof body.values !== "object" || body.values === null || Array.isArray(body.values))) {
+			json(res, 400, { error: "values must be an object keyed by provider id" });
+			return true;
+		}
+		const view = updateWebAccessSettings(paths.configDir, {
+			provider: body.provider as string | undefined,
+			values: body.values as Record<string, string> | undefined,
+		});
+		json(res, 200, view);
 		return true;
 	}
 

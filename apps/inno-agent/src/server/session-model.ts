@@ -1,4 +1,5 @@
 import type { PersistedQuestion } from "../agent/question-bridge.js";
+import type { ChatAttachments } from "./attachments.js";
 
 /**
  * Session summary/metadata types shared between server.ts and the sessions
@@ -20,6 +21,9 @@ export interface SessionMessageSummary {
 	}>;
 	channel?: SessionChannel;
 	images?: Array<{ previewUrl: string; mimeType: string }>;
+	/** Structured chat attachments (bubble bindings + loose files) merged in
+	 * from the attachments sidecar; not stored in the session JSONL itself. */
+	attachments?: ChatAttachments;
 }
 
 export type SessionChannel = "cli" | "web" | "feishu" | "qq" | "wechat" | "scheduler" | "unknown";

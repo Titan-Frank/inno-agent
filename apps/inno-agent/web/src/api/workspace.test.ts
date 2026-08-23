@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { inlineWorkspaceHtml } from "./workspace.js";
+import { inlineWorkspaceHtml, normalizeWorkspaceRelativePath, workspaceFileUrl } from "./workspace.js";
 
 describe("inlineWorkspaceHtml", () => {
 	afterEach(() => {
@@ -108,5 +108,18 @@ describe("inlineWorkspaceHtml", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("path=reports%2Fassets%2Fsite.css");
 		expect(result).toContain("<style>body{}</style>");
+	});
+});
+
+describe("workspace file paths", () => {
+	it("removes presentation prefixes before building file URLs", () => {
+		expect(normalizeWorkspaceRelativePath(" .\\docs\\paper.pdf ")).toBe("docs/paper.pdf");
+		expect(workspaceFileUrl("./docs\\paper.pdf", "course 1")).toBe(
+			"/api/workspace/raw?path=docs%2Fpaper.pdf&workspaceId=course+1",
+		);
+	});
+
+	it("keeps absolute paths visible to the server boundary", () => {
+		expect(normalizeWorkspaceRelativePath("/etc/passwd")).toBe("/etc/passwd");
 	});
 });

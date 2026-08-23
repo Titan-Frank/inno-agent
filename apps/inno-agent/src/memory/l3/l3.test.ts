@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,12 +9,26 @@ import { openL3Store, segmentForFts, type L3Store } from "./sqlite-store.js";
 
 /**
  * L3 tests. `segmentForFts` is a pure function and always runs. The store /
- * indexer / recall suites need node:sqlite (Node >= 22.5); on older runtimes
- * the whole point is that L3 degrades to disabled, so they skip conditionally.
+ * indexer / recall suites need node:sqlite with FTS5 enabled. Some Node builds
+ * expose node:sqlite without compiling the FTS5 module; L3 intentionally
+ * degrades to disabled in either case, so the integration suite must probe the
+ * feature rather than infer it from the Node version.
  */
-function nodeSqliteAvailable(): boolean {
-	const [major, minor] = process.versions.node.split(".").map((v) => Number.parseInt(v, 10));
-	return major > 22 || (major === 22 && minor >= 5);
+function nodeSqliteFts5Available(): boolean {
+	let db: { exec(sql: string): void; close(): void } | undefined;
+	try {
+		const require = createRequire(import.meta.url);
+		const { DatabaseSync } = require("node:sqlite") as {
+			DatabaseSync: new (path: string) => { exec(sql: string): void; close(): void };
+		};
+		db = new DatabaseSync(":memory:");
+		db.exec("CREATE VIRTUAL TABLE fts5_probe USING fts5(content)");
+		return true;
+	} catch {
+		return false;
+	} finally {
+		db?.close();
+	}
 }
 
 describe("segmentForFts (pure)", () => {
@@ -34,7 +49,7 @@ describe("segmentForFts (pure)", () => {
 	});
 });
 
-describe.skipIf(!nodeSqliteAvailable())("L3 store + recall (node:sqlite)", () => {
+describe.skipIf(!nodeSqliteFts5Available())("L3 store + recall (node:sqlite + FTS5)", () => {
 	let l3Dir: string;
 	let sessionDir: string;
 	let store: L3Store | null;

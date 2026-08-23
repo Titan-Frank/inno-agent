@@ -1,10 +1,15 @@
 import { EventEmitter } from "./event-emitter.js";
 import { streamChat, abortChat, getChatStatus, streamSessionEvents, submitChatQuestion, formatQuestionnaireAsPrompt } from "../api/chat.js";
 import type { InlineImage } from "../api/chat.js";
-import type { ChatMessage, ChatStreamEvent, ChatToolRecord, PendingQuestion, QuestionnaireResult, StreamEventEnvelope, StreamSnapshot, WorkspaceFileChange } from "../types/chat.js";
+import type { ChatAttachments, ChatMessage, ChatStreamEvent, ChatToolRecord, PendingQuestion, QuestionnaireResult, StreamEventEnvelope, StreamSnapshot, WorkspaceFileChange } from "../types/chat.js";
 import { notebookStore } from "./notebook-store.js";
 import { appStore } from "./app-store.js";
 import { workspaceStore, type StreamingWorkspacePreview } from "./workspace-store.js";
+import { ensureWindowForPanel } from "./window-expansion.js";
+
+function hasAttachmentFiles(attachments?: ChatAttachments): boolean {
+	return Boolean(attachments && (attachments.bindings.some((binding) => binding.files.length > 0) || attachments.loose.length > 0));
+}
 
 type StreamingTarget = "chat" | "workspace";
 
@@ -68,8 +73,6 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 	 *  would resurrect a resolved question. */
 	private optimisticQuestionToolIds = new Set<string>();
 	canReconnect = false;
-	private abortController: AbortController | null = null;
-	private detachMode = false;
 	private wikiInvalidated = false;
 	private streamChangeTimer: ReturnType<typeof setTimeout> | null = null;
 	private workspacePreviewId: string | null = null;
@@ -81,19 +84,18 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 	private activeOwner: ActiveStreamOwner | null = null;
 	private ownerGeneration = 0;
 	private currentSessionContext: string | null = null;
-	private retryInputBySession = new Map<string, { prompt: string; images?: InlineImage[] }>();
+	private retryInputBySession = new Map<string, { prompt: string; images?: InlineImage[]; attachments?: ChatAttachments }>();
 
-	async send(prompt: string, images?: InlineImage[], sessionIdOverride?: string | null): Promise<void> {
-		if ((!prompt.trim() && !images?.length) || this.isSending) return;
+	async send(prompt: string, images?: InlineImage[], sessionIdOverride?: string | null, attachments?: ChatAttachments): Promise<void> {
+		if ((!prompt.trim() && !images?.length && !hasAttachmentFiles(attachments)) || this.isSending) return;
 		const { sessionsStore } = await import("./sessions-store.js");
 		const targetSessionId = sessionIdOverride === undefined
 			? sessionsStore.currentSessionId
 			: sessionIdOverride;
 		if (!targetSessionId || this.isSending) return;
 
-		this.detachMode = false;
 		this.currentSessionContext = targetSessionId;
-		this.retryInputBySession.set(targetSessionId, { prompt, images });
+		this.retryInputBySession.set(targetSessionId, { prompt, images, attachments });
 		this.lastUserPrompt = prompt;
 		this.lastImages = images;
 		this.messages = [...this.messages, {
@@ -104,6 +106,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				previewUrl: `data:${mimeType};base64,${data}`,
 				mimeType,
 			})),
+			attachments,
 			transient: true,
 			complete: false,
 		}];
@@ -112,7 +115,6 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.setStreamingActivity("正在分析请求");
 		this.wikiInvalidated = false;
 		const controller = new AbortController();
-		this.abortController = controller;
 		const owner: ActiveStreamOwner = {
 			sessionId: targetSessionId,
 			clientRequestId: crypto.randomUUID(),
@@ -127,7 +129,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.emit("change", undefined);
 
 		try {
-			for await (const envelope of streamChat(prompt, targetSessionId, owner.clientRequestId, controller.signal, images)) {
+			for await (const envelope of streamChat(prompt, targetSessionId, owner.clientRequestId, controller.signal, images, attachments)) {
 				await this._handleStreamEnvelope(owner, envelope);
 			}
 			if (this.owns(owner) && !owner.terminalEvent) {
@@ -167,11 +169,9 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 	 * Used when the user navigates to a different session.
 	 */
 	detach(): void {
-		this.detachMode = true;
 		this.activeOwner?.controller.abort();
 		this.activeOwner = null;
 		this.ownerGeneration++;
-		this.abortController = null;
 		this.isSending = false;
 		this.canReconnect = false;
 		this.currentSessionContext = null;
@@ -216,9 +216,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.resetTransientStreamState();
 		this.isSending = true;
 		this.streamingActivity = "正在恢复生成";
-		this.detachMode = false;
 		const controller = new AbortController();
-		this.abortController = controller;
 		const owner: ActiveStreamOwner = {
 			sessionId,
 			clientRequestId: stream.clientRequestId,
@@ -239,6 +237,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				images: stream.inputSnapshot.images
 					.filter((image) => image.previewUrl)
 					.map((image) => ({ previewUrl: image.previewUrl!, mimeType: image.mimeType })),
+				attachments: stream.inputSnapshot.attachments,
 				turnId: stream.turnId,
 				transient: true,
 				complete: false,
@@ -265,7 +264,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		if (this.isSending || !this.currentSessionContext) return;
 		const input = this.retryInputBySession.get(this.currentSessionContext);
 		if (!input) return;
-		await this.send(input.prompt, input.images);
+		await this.send(input.prompt, input.images, undefined, input.attachments);
 	}
 
 	/** Retry a failed event reconnect or final-history confirmation. */
@@ -320,7 +319,6 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				}
 				const reconnectController = new AbortController();
 				owner.controller = reconnectController;
-				this.abortController = reconnectController;
 				for await (const envelope of streamSessionEvents(owner.sessionId, owner.turnId, owner.lastAppliedEventId, reconnectController.signal)) {
 					await this._handleStreamEnvelope(owner, envelope);
 				}
@@ -408,10 +406,8 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		if (!this.owns(owner)) return;
 		this.flushStreamChange();
 		this.activeOwner = null;
-		this.abortController = null;
 		this.isSending = false;
 		this.canReconnect = false;
-		this.detachMode = false;
 		this.resetTransientStreamState();
 		const shouldRefreshWiki = this.wikiInvalidated;
 		this.wikiInvalidated = false;
@@ -613,7 +609,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 			});
 		} else {
 			this.flushPreviewChange();
-			revealWorkspacePreview();
+			void revealWorkspacePreview();
 			workspaceStore.startStreamingPreview({
 				id,
 				title,
@@ -828,7 +824,19 @@ const FILE_EXTENSIONS = [
 ].join("|");
 const FILE_PATH_RE = new RegExp(`(?:^|[\\s"'\\\`“”‘’（(])((?:[\\w.-]+\\/)*[\\w.-]+\\.(${FILE_EXTENSIONS}))(?:$|[\\s"'\\\`“”‘’）),，。:：])`, "i");
 
-function revealWorkspacePreview(): void {
+async function revealWorkspacePreview(): Promise<void> {
+	const currentMode = appStore.workspaceMode;
+	const opensSplitPanel = currentMode !== "full";
+	const targetMode = currentMode === "collapsed" || currentMode === "quarter" ? "half" : currentMode;
+	const targetWidth = appStore.workspaceWidth < 560 ? 640 : appStore.workspaceWidth;
+
+	if (opensSplitPanel) {
+		// Desktop: grow the native window first. Browser users have no desktop
+		// bridge, so ensureWindowForPanel returns "unavailable" and the local
+		// fitPanelLayout fallback below still opens the panel safely.
+		await ensureWindowForPanel("right", targetWidth, targetMode);
+	}
+
 	appStore.setRightPanelTab("preview");
 	if (appStore.workspaceWidth < 560) appStore.setWorkspaceWidth(640);
 	if (appStore.workspaceMode === "collapsed" || appStore.workspaceMode === "quarter") {
@@ -1028,7 +1036,7 @@ function pickOpenableWorkspaceChange(changes: WorkspaceFileChange[]): WorkspaceF
 async function openChangedWorkspacePath(filePath?: string, previewId?: string, isCurrent: () => boolean = () => true): Promise<void> {
 	try {
 		if (!isCurrent()) return;
-		revealWorkspacePreview();
+		await revealWorkspacePreview();
 		if (previewId) workspaceStore.clearStreamingPreview(previewId);
 		await workspaceStore.loadTree(isCurrent);
 		if (!isCurrent()) return;

@@ -176,6 +176,23 @@ updated: YYYY-MM-DD
 ---
 \`\`\`
 
+Concept pages may additionally declare a stable concept id and directional teaching dependencies:
+
+\`\`\`yaml
+concept_id: physics.inclined_plane_acceleration
+prerequisites:
+  - concept_id: physics.force_decomposition
+    relation: required
+    required_level: 0.65
+    importance: 0.9
+    source: teacher
+    source_confidence: 0.9
+    rationale: The learner must resolve forces along the incline.
+    scope: high-school-physics-standard-problem
+\`\`\`
+
+An ordinary \`[[wikilink]]\` means only that two pages are related. It must not be treated as a prerequisite unless the directional relationship is declared above.
+
 ## Index Format
 
 \`wiki/index.md\` lists all pages grouped by type. Each entry:

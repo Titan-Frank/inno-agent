@@ -3,6 +3,8 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 	getAgentDir,
+	ModelRegistry,
+	type ModelRuntime,
 	SessionManager,
 	SettingsManager,
 	type AgentSession,
@@ -12,10 +14,11 @@ import {
 	type ExtensionFactory,
 	type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { complete, type AssistantMessage, type ImageContent, type Model, type UserMessage } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, ImageContent, Model, UserMessage } from "@earendil-works/pi-ai";
 import { basename, join, resolve } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createInnoExtension, type ConfigHolder, type InnoExtensionDeps } from "./inno-extension.js";
+import { createInnoExtension, expandInnoSlashCommand, INNO_SLASH_COMMAND_NAMES, type ConfigHolder, type InnoExtensionDeps } from "./inno-extension.js";
 import { createMcpStatusExtension, loadMcpAdapterExtension } from "./mcp-extension.js";
 import { createObservabilityExtension, createPromptObserver, obsLogger } from "./observability-extension.js";
 import type { InnoConfig } from "../config.js";
@@ -33,6 +36,16 @@ let _cwdResolver: ((sessionPath: string) => string | null) | null = null;
 let _activePromptToken: string | null = null;
 /** Provider IDs registered into the active model registry by Inno's config. */
 const _registeredProviderIds = new Set<string>();
+
+/**
+ * pi >= 0.80.8 removed `modelRegistry` from AgentSession/AgentSessionServices
+ * in favour of the async `modelRuntime`. `ModelRegistry` remains as the
+ * synchronous facade the SDK itself exposes to extensions, so we wrap the
+ * runtime on demand — it is a stateless delegate, cheap to construct.
+ */
+function registryOf(source: { modelRuntime: ModelRuntime }): ModelRegistry {
+	return new ModelRegistry(source.modelRuntime);
+}
 
 export type RuntimeChannelHint = "web" | "feishu" | "wechat" | "qq" | "scheduler" | "cli" | "unknown";
 
@@ -241,8 +254,9 @@ export async function initSession(
 		// reference goes stale once server.ts reassigns its own `config` variable
 		// via saveConfig, which returns a new normalised object).
 		const currentConfig = configHolder.current;
+		const registry = registryOf(services);
 		for (const [providerId, providerConfig] of Object.entries(currentConfig.providers)) {
-			services.modelRegistry.registerProvider(providerId, {
+			registry.registerProvider(providerId, {
 				baseUrl: providerConfig.baseUrl,
 				apiKey: providerConfig.apiKey || "local",
 				api: providerConfig.api ?? "openai-completions",
@@ -252,8 +266,10 @@ export async function initSession(
 			});
 			_registeredProviderIds.add(providerId);
 		}
-		services.modelRegistry.refresh();
-		const defaultModel = services.modelRegistry.find(currentConfig.defaultProvider, currentConfig.defaultModel);
+		// refresh() became async in pi 0.80.8 — must await so find() below sees
+		// the freshly loaded models.json.
+		await registry.refresh();
+		const defaultModel = registry.find(currentConfig.defaultProvider, currentConfig.defaultModel);
 		const created = await createAgentSessionFromServices({
 			services,
 			sessionManager,
@@ -350,9 +366,10 @@ export async function refreshConfiguredProviders(config: InnoConfig): Promise<vo
 	// surviving provider is handled by re-registering below — but a fully removed
 	// provider must be explicitly unregistered or its models linger in the
 	// registry (and keep showing up in getAvailableModels / the settings UI).
+	const registry = registryOf(_runtime.session);
 	for (const providerId of _registeredProviderIds) {
 		if (!config.providers[providerId]) {
-			_runtime.session.modelRegistry.unregisterProvider(providerId);
+			registry.unregisterProvider(providerId);
 			_registeredProviderIds.delete(providerId);
 		}
 	}
@@ -360,7 +377,7 @@ export async function refreshConfiguredProviders(config: InnoConfig): Promise<vo
 	const providerIds: string[] = [];
 	let modelCount = 0;
 	for (const [providerId, providerConfig] of Object.entries(config.providers)) {
-		_runtime.session.modelRegistry.registerProvider(providerId, {
+		registry.registerProvider(providerId, {
 			baseUrl: providerConfig.baseUrl,
 			apiKey: providerConfig.apiKey || "local",
 			api: providerConfig.api ?? "openai-completions",
@@ -372,7 +389,7 @@ export async function refreshConfiguredProviders(config: InnoConfig): Promise<vo
 		providerIds.push(providerId);
 		modelCount += providerConfig.models.length;
 	}
-	_runtime.session.modelRegistry.refresh();
+	await registry.refresh();
 	logger.info({ providerIds, modelCount }, "Providers refreshed");
 }
 
@@ -386,6 +403,62 @@ export function syncConfig(config: InnoConfig): void {
 export function getSession(): AgentSession {
 	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
 	return _runtime.session;
+}
+
+export interface SlashCommandItem {
+	/** Command name without the leading slash. Skills use the `skill:<name>` form. */
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill";
+	/**
+	 * Extension commands safe to offer in the web composer. Inno's own
+	 * commands (registered in inno-extension.ts, matched by
+	 * INNO_SLASH_COMMAND_NAMES) expand into a normal turn via
+	 * ctx.sendUserMessage; bundled plugins' commands are TUI overlays
+	 * gated on ctx.hasUI and would no-op server-side.
+	 */
+	webSafe?: boolean;
+}
+
+/**
+ * List the slash commands the current runtime session would actually dispatch
+ * or expand in `session.prompt()`: extension commands (pi.registerCommand),
+ * prompt templates, and skills (invoked as `/skill:<name>`). PI's builtin
+ * commands (/model, /new, ...) are TUI-only and intentionally excluded — the
+ * web UI re-implements those as app-level actions. Returns [] before the
+ * session is initialized. All reads are in-memory and safe during streaming.
+ */
+export function listSlashCommands(): SlashCommandItem[] {
+	let session: AgentSession;
+	try {
+		session = getSession();
+	} catch {
+		return [];
+	}
+	const items: SlashCommandItem[] = [];
+	try {
+		for (const command of session.extensionRunner.getRegisteredCommands()) {
+			items.push({
+				name: command.invocationName,
+				description: command.description,
+				source: "extension",
+				webSafe: INNO_SLASH_COMMAND_NAMES.has(command.invocationName),
+			});
+		}
+	} catch {
+		// A mid-reload runner may throw; commands are best-effort listing.
+	}
+	for (const template of session.promptTemplates ?? []) {
+		items.push({ name: template.name, description: template.description, source: "prompt" });
+	}
+	try {
+		for (const skill of session.resourceLoader.getSkills().skills) {
+			items.push({ name: `skill:${skill.name}`, description: skill.description, source: "skill" });
+		}
+	} catch {
+		// Skills listing should never break the endpoint.
+	}
+	return items;
 }
 
 function nativeImagesForSession(
@@ -527,6 +600,63 @@ async function promptWithoutNativeImages(
 	};
 	try {
 		await session.prompt(prompt);
+	} finally {
+		session.agent.transformContext = originalTransform;
+	}
+}
+
+/**
+ * Append a text block to the last user message of the outgoing model context.
+ * Used for structured chat attachments: the persisted session keeps the user's
+ * original prompt verbatim while the model-visible copy carries the validated
+ * file-binding context. Copy-on-write — the source message list is untouched,
+ * so retries that re-run the transform never accumulate the block.
+ */
+function appendToLastUserMessage(messages: AgentMessages, extra: string): AgentMessages {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as { role?: string; content?: unknown };
+		if (message.role !== "user") continue;
+		const copy = [...messages];
+		if (typeof message.content === "string") {
+			copy[i] = { ...messages[i], content: `${message.content}\n\n${extra}` } as AgentMessages[number];
+		} else if (Array.isArray(message.content)) {
+			copy[i] = {
+				...messages[i],
+				content: [...message.content, { type: "text" as const, text: extra }],
+			} as AgentMessages[number];
+		} else {
+			continue;
+		}
+		return copy;
+	}
+	return messages;
+}
+
+/**
+ * Run `run` with a temporary transformContext that appends the attachment
+ * context block to the last user message just before it reaches the model.
+ * Composes with the image-fallback transform (which may wrap the same hook):
+ * whichever wrapper is installed first becomes the other's "original", so
+ * both effects apply and both are restored in order.
+ */
+async function withAttachmentContext(
+	session: AgentSession,
+	attachmentContext: string | undefined,
+	run: () => Promise<void>,
+): Promise<void> {
+	if (!attachmentContext) {
+		await run();
+		return;
+	}
+	const originalTransform = session.agent.transformContext;
+	session.agent.transformContext = async (messages, signal) => {
+		const transformed = originalTransform
+			? await originalTransform(messages, signal)
+			: messages;
+		return appendToLastUserMessage(transformed, attachmentContext);
+	};
+	try {
+		await run();
 	} finally {
 		session.agent.transformContext = originalTransform;
 	}
@@ -759,8 +889,12 @@ export function getCurrentSessionId(): string {
  */
 export function getAvailableModels(): Model<any>[] {
 	if (!_runtime) return [];
-	_runtime.session.modelRegistry.refresh();
-	return _runtime.session.modelRegistry.getAvailable();
+	const registry = registryOf(_runtime.session);
+	// Fire-and-forget: refresh() is async since pi 0.80.8; getAvailable()
+	// returns the current snapshot synchronously, refreshed list lands on the
+	// next read.
+	void registry.refresh();
+	return registry.getAvailable();
 }
 
 /**
@@ -770,8 +904,9 @@ export function getAvailableModels(): Model<any>[] {
  */
 export async function switchModel(provider: string, modelId: string): Promise<void> {
 	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
-	_runtime.session.modelRegistry.refresh();
-	const model = _runtime.session.modelRegistry.find(provider, modelId);
+	const registry = registryOf(_runtime.session);
+	await registry.refresh();
+	const model = registry.find(provider, modelId);
 	if (!model) {
 		logger.error({ provider, modelId }, "Model not found in registry");
 		throw new Error(`Model ${provider}/${modelId} not found`);
@@ -1002,7 +1137,18 @@ export function getLoadedSkills() {
  * `imageFallbackPrompt` is sent instead of `prompt` when the images cannot go
  * to the model natively (text-only model or provider rejection).
  */
-export async function runPrompt(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
+export async function runPrompt(
+	prompt: string,
+	images?: ImageContent[],
+	imageFallbackPrompt?: string,
+	attachmentContext?: string,
+): Promise<string> {
+	// See expandInnoSlashCommand for why Inno commands can't ride
+	// session.prompt()'s extension-command dispatch. The fallback twin must
+	// be expanded too: text-only models run fallbackPrompt ?? prompt, and the
+	// routes always build it from the raw (unexpanded) text.
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	const session = getSession();
 
 	let output = "";
@@ -1058,10 +1204,11 @@ export async function runPrompt(prompt: string, images?: ImageContent[], imageFa
 			output = "";
 			streamError = undefined;
 		};
-		await promptWithNativeImageFallback(session, prompt, nativeImages, {
-			onRetry: resetAttempt,
-			onFallback: resetAttempt,
-		}, imageFallbackPrompt);
+		await withAttachmentContext(session, attachmentContext, () =>
+			promptWithNativeImageFallback(session, prompt, nativeImages, {
+				onRetry: resetAttempt,
+				onFallback: resetAttempt,
+			}, imageFallbackPrompt));
 	} finally {
 		unsubscribe();
 		obsUnsub();
@@ -1082,8 +1229,13 @@ export async function runPrompt(prompt: string, images?: ImageContent[], imageFa
  * Run a prompt with serialized access (only one prompt at a time).
  * All concurrent calls are queued and executed sequentially.
  */
-export function runPromptSerialized(prompt: string, images?: ImageContent[], imageFallbackPrompt?: string): Promise<string> {
-	return enqueue(() => runPrompt(prompt, images, imageFallbackPrompt));
+export function runPromptSerialized(
+	prompt: string,
+	images?: ImageContent[],
+	imageFallbackPrompt?: string,
+	attachmentContext?: string,
+): Promise<string> {
+	return enqueue(() => runPrompt(prompt, images, imageFallbackPrompt, attachmentContext));
 }
 
 /**
@@ -1096,10 +1248,11 @@ export function runPromptInSession(
 	prompt: string,
 	images?: ImageContent[],
 	imageFallbackPrompt?: string,
+	attachmentContext?: string,
 ): Promise<string> {
 	return enqueue(async () => {
 		await switchToSession(sessionPath);
-		return runPrompt(prompt, images, imageFallbackPrompt);
+		return runPrompt(prompt, images, imageFallbackPrompt, attachmentContext);
 	});
 }
 
@@ -1120,7 +1273,7 @@ export async function completePromptOnce(prompt: string, maxTokens = 64, timeout
 	const model = session.model;
 	if (!model) return "";
 
-	const auth = await session.modelRegistry.getApiKeyAndHeaders(model);
+	const auth = await registryOf(session).getApiKeyAndHeaders(model);
 	if (!auth.ok || !auth.apiKey) return "";
 
 	const controller = new AbortController();
@@ -1180,6 +1333,8 @@ export function runPromptStreaming(
 	images?: ImageContent[],
 	imageFallbackPrompt?: string,
 ): Promise<string> {
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	return enqueue(async () => {
 		const session = getSession();
 		let output = "";
@@ -1286,7 +1441,10 @@ export function runPromptStreamingInSession(
 	lifecycle?: PromptRunLifecycle,
 	cwdOverride?: string,
 	imageFallbackPrompt?: string,
+	attachmentContext?: string,
 ): Promise<string> {
+	prompt = expandInnoSlashCommand(prompt) ?? prompt;
+	if (imageFallbackPrompt) imageFallbackPrompt = expandInnoSlashCommand(imageFallbackPrompt) ?? imageFallbackPrompt;
 	return enqueue(async () => {
 		let output = "";
 		let streamError: string | undefined;
@@ -1331,18 +1489,19 @@ export function runPromptStreamingInSession(
 					}
 				});
 				try {
-					await promptWithNativeImageFallback(session, prompt, nativeImages, {
-						onRetry: () => {
-							nativeAttemptRejected = false;
-							output = "";
-							streamError = undefined;
-						},
-						onFallback: () => {
-							retryingWithoutNativeImages = true;
-							output = "";
-							streamError = undefined;
-						},
-					}, imageFallbackPrompt);
+					await withAttachmentContext(session, attachmentContext, () =>
+						promptWithNativeImageFallback(session, prompt, nativeImages, {
+							onRetry: () => {
+								nativeAttemptRejected = false;
+								output = "";
+								streamError = undefined;
+							},
+							onFallback: () => {
+								retryingWithoutNativeImages = true;
+								output = "";
+								streamError = undefined;
+							},
+						}, imageFallbackPrompt));
 				} finally {
 					unsubscribe();
 					obsUnsub();

@@ -245,7 +245,6 @@ function ensureKnowledgeState(profile: LearnerProfile, conceptId: string): Knowl
  */
 export const MASTERY_DELTAS: Partial<Record<LearningEvent["event_type"], number>> = {
 	exercise_attempt: 0.03,
-	concept_explained: 0.02,
 	milestone_reached: 0.02,
 	self_assessed: 0.01,
 };
@@ -254,10 +253,15 @@ function updateKnowledgeFromEvent(profile: LearnerProfile, event: LearningEvent)
 	const conceptIds = event.context.concept_ids ?? [];
 	if (conceptIds.length === 0) return false;
 
+	// Being shown an explanation is exposure, not evidence that the learner can
+	// retrieve or apply the concept. Keep accepting mastery_delta on legacy
+	// events for compatibility, but never let concept_explained promote mastery.
 	const delta =
-		typeof event.derived_signals?.mastery_delta === "number"
-			? event.derived_signals.mastery_delta
-			: (MASTERY_DELTAS[event.event_type] ?? 0);
+		event.event_type === "concept_explained"
+			? 0
+			: typeof event.derived_signals?.mastery_delta === "number"
+				? event.derived_signals.mastery_delta
+				: (MASTERY_DELTAS[event.event_type] ?? 0);
 
 	let changed = false;
 	for (const conceptId of conceptIds) {

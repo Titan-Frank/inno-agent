@@ -125,6 +125,18 @@ export class L2Memory {
 			logger.warn({ err }, `[L2] remove ${wikiPath} failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
+
+	/**
+	 * Close the index store and reset the lazy-init flags so the holder can be
+	 * reused. Mainly needed by tests: on Windows an open sqlite handle keeps
+	 * index.db locked and temp-dir cleanup fails with EBUSY.
+	 */
+	close(): void {
+		this.store?.close();
+		this.store = null;
+		this.opened = false;
+		this.backfilled = false;
+	}
 }
 
 const registry = new Map<string, L2Memory>();
@@ -137,4 +149,16 @@ export function getL2Memory(l2DataDir: string): L2Memory {
 		registry.set(l2DataDir, mem);
 	}
 	return mem;
+}
+
+/**
+ * Close and drop the per-dir singleton. Tests must call this before deleting
+ * their temp data dir, otherwise the open sqlite handle keeps index.db locked
+ * on Windows and cleanup fails with EBUSY.
+ */
+export function closeL2Memory(l2DataDir: string): void {
+	const mem = registry.get(l2DataDir);
+	if (!mem) return;
+	mem.close();
+	registry.delete(l2DataDir);
 }

@@ -401,6 +401,9 @@ describe("server smoke", () => {
 			writeFileSync(join(root, "hello.txt"), "hello");
 			const ok = await api("/api/workspace/file?path=hello.txt");
 			expect(ok.status).toBe(200);
+			const prefixed = await api("/api/workspace/file?path=.%2Fhello.txt");
+			expect(prefixed.status).toBe(200);
+			expect((await prefixed.json() as { path: string }).path).toBe("hello.txt");
 		} finally {
 			for (const name of planted) {
 				rmSync(join(root, name), { recursive: true, force: true });
@@ -416,6 +419,12 @@ describe("server smoke", () => {
 
 	it("unknown /api/ route returns a JSON 404 (not the SPA index.html)", async () => {
 		const res = await api("/api/definitely-not-a-route");
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).toContain("application/json");
+	});
+
+	it("missing hashed frontend assets return 404 instead of the SPA index", async () => {
+		const res = await api("/assets/WorkspaceBrowser-definitely-missing.js");
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).toContain("application/json");
 	});

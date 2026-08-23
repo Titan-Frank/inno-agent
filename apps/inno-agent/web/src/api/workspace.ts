@@ -14,7 +14,7 @@ export async function getWorkspaceTree(workspaceId?: string): Promise<WorkspaceT
 }
 
 export async function getWorkspaceFile(path: string, workspaceId?: string, forceText = false): Promise<WorkspaceFileDetail> {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	if (forceText) params.set("forceText", "1");
 	return apiFetch<WorkspaceFileDetail>(`/api/workspace/file?${params.toString()}`);
@@ -62,6 +62,39 @@ export async function uploadWorkspaceFiles(files: Array<{ path: string; dataBase
 	});
 }
 
+/**
+ * Upload a single file via XHR so the browser can report real byte-level
+ * upload progress (fetch has no upload progress events). Used by the composer
+ * attachment flow where each file renders its own progress ring.
+ */
+export function uploadWorkspaceFileWithProgress(
+	file: { path: string; dataBase64: string },
+	workspaceId: string | undefined,
+	onProgress?: (loaded: number, total: number) => void,
+): Promise<WorkspaceTreeNode> {
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open("POST", "/api/workspace/upload");
+		xhr.responseType = "json";
+		xhr.setRequestHeader("Content-Type", "application/json");
+		xhr.upload.addEventListener("progress", (event) => {
+			if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+		});
+		xhr.addEventListener("load", () => {
+			const body = xhr.response as { uploaded?: WorkspaceTreeNode[]; error?: string } | null;
+			if (xhr.status >= 200 && xhr.status < 300 && body?.uploaded?.[0]) {
+				onProgress?.(1, 1);
+				resolve(body.uploaded[0]);
+			} else {
+				reject(new Error(body?.error ?? `Upload failed (${xhr.status})`));
+			}
+		});
+		xhr.addEventListener("error", () => reject(new Error("Upload failed: network error")));
+		xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")));
+		xhr.send(JSON.stringify(withWorkspace({ files: [file] }, workspaceId)));
+	});
+}
+
 /** Install a skill package (.zip / .md) into the workspace's private `.skills` dir. */
 export async function uploadWorkspaceSkill(fileName: string, dataBase64: string, workspaceId?: string): Promise<WorkspaceTreeNode> {
 	return apiFetch<WorkspaceTreeNode>("/api/workspace/skills/upload", {
@@ -72,7 +105,7 @@ export async function uploadWorkspaceSkill(fileName: string, dataBase64: string,
 
 /** Build the raw URL for a workspace file, optionally forcing a download. */
 export function workspaceFileUrl(path: string, workspaceId?: string, download = false): string {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	if (download) params.set("download", "1");
 	return `/api/workspace/raw?${params.toString()}`;
@@ -89,9 +122,18 @@ export function workspaceFolderZipUrl(path: string, workspaceId?: string): strin
 
 /** Fetch a pptx rendered to per-slide SVG. */
 export async function getPptxPreview(path: string, workspaceId?: string): Promise<PptxPreviewResult> {
-	const params = new URLSearchParams({ path });
+	const params = new URLSearchParams({ path: normalizeWorkspaceRelativePath(path) });
 	if (workspaceId) params.set("workspaceId", workspaceId);
 	return apiFetch<PptxPreviewResult>(`/api/workspace/pptx-preview?${params.toString()}`);
+}
+
+/**
+ * Keep workspace paths canonical at the browser/API boundary. `./` and
+ * Windows separators are harmless input noise; a leading `/` is preserved so
+ * the server can reject an absolute path instead of silently rebasing it.
+ */
+export function normalizeWorkspaceRelativePath(path: string): string {
+	return path.trim().replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
 }
 
 // ---- HTML resource inlining for srcdoc previews ----

@@ -15,13 +15,14 @@ import { createSchedulerTools } from "../scheduler/scheduler-tools.js";
 import { createChannelTools } from "../channels/channel-tools.js";
 import { createL2Tools } from "../memory/l2/l2-tools.js";
 import { getL2Memory } from "../memory/l2/l2-memory.js";
-import { L3Memory, createL3Tools, formatRecallForPrompt } from "../memory/l3/l3-tools.js";
+import { createL3Tools, formatRecallForPrompt, getL3Memory } from "../memory/l3/l3-tools.js";
 import { createPracticeTools } from "./practice-tools.js";
 import { createDocumentTools } from "./document-tools.js";
 import { createOcrTools } from "./ocr-tools.js";
 import { createTavilyTools } from "./tavily-tools.js";
+import { ensureWebAccessConfig, resolvePiAiJitiAliases } from "./web-access-config.js";
 import { checkWorkspaceMutationPath } from "./workspace-path-guard.js";
-import { INNO_SYSTEM_PROMPT, ONBOARDING_GUIDE } from "./system-prompt.js";
+import { INNO_SYSTEM_PROMPT, ONBOARDING_GUIDE, WEB_ACCESS_PROMPT_HINT } from "./system-prompt.js";
 import { syncProvidersForSubagents } from "./provider-sync.js";
 import { questionBridge } from "./question-bridge.js";
 import { logger } from "../logger.js";
@@ -144,6 +145,71 @@ function isOpenLaunchCommand(command: string): boolean {
 	return OPEN_LAUNCH_CMD_RE.test(command);
 }
 
+/**
+ * Inno's own slash commands. Each expands into a user message that steers the
+ * agent to the right memory tool — no TUI overlay needed, so they work
+ * identically from the web composer palette and the CLI. The name set is
+ * exported so pi-runner.listSlashCommands() can mark them webSafe (inline
+ * extension factories receive a synthetic "<inline:N>" sourceInfo, making the
+ * command's origin path unusable for this).
+ */
+interface InnoSlashCommand {
+	name: string;
+	description: string;
+	buildMessage: (args: string) => string;
+}
+
+const INNO_SLASH_COMMANDS: InnoSlashCommand[] = [
+	{
+		name: "recall",
+		description: "回忆过去的对话（L3 跨会话记忆）。用法: /recall <问题>",
+		buildMessage: (query) =>
+			query
+				? `请使用 l3_recall 工具检索我们过去的对话，并结合检索结果回答：${query}`
+				: "请使用 l3_recall 工具回顾我们之前的对话，总结一下最近学过的重点。",
+	},
+	{
+		name: "remember",
+		description: "把关于你的事实写入学习者画像（L1）。用法: /remember <事实>",
+		buildMessage: (fact) =>
+			fact
+				? `请将以下关于我的信息记录到学习者画像（L1），并简短确认你记住了什么：${fact}`
+				: "我想让你记住一些关于我学习情况的信息（学习者画像 L1）。请问我需要告诉你什么？",
+	},
+	{
+		name: "wiki",
+		description: "检索 L2 Wiki 知识库并回答问题。用法: /wiki <问题>",
+		buildMessage: (query) =>
+			query
+				? `请使用 l2_query 工具检索 Wiki 知识库，并结合检索结果回答：${query}`
+				: "请使用 l2_query 工具查看 Wiki 知识库的索引概览，告诉我里面都归档了哪些内容。",
+	},
+];
+
+export const INNO_SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set(INNO_SLASH_COMMANDS.map((command) => command.name));
+
+/**
+ * Expand an Inno slash command ("/recall <q>") into its user-message form.
+ * Returns null when the text is not an Inno command. pi-runner applies this
+ * before session.prompt(): the registerCommand handler routes through
+ * pi.sendUserMessage, which the SDK binds fire-and-forget, so a command
+ * dispatched inside prompt() returns immediately while the turn it triggers
+ * is still running — and per-prompt event subscriptions (runPromptStreaming,
+ * used by web and channels) would close before the reply streams. Expanding
+ * up front makes the turn an ordinary prompt. The CLI uses the
+ * registerCommand path instead, where the TUI's long-lived subscription is
+ * unaffected.
+ */
+export function expandInnoSlashCommand(text: string): string | null {
+	if (!text.startsWith("/")) return null;
+	const spaceIndex = text.indexOf(" ");
+	const name = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	const command = INNO_SLASH_COMMANDS.find((entry) => entry.name === name);
+	if (!command) return null;
+	const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+	return command.buildMessage(args);
+}
+
 export function createInnoExtension(
 	configHolder: ConfigHolder,
 	paths: RuntimePaths,
@@ -197,9 +263,30 @@ export function createInnoExtension(
 		const isL2Enabled = () => !isSimpleMode() && configHolder.current.memory?.l2Enabled !== false;
 
 		// 2. Register L1 learner tools (gated on config.memory.l1Enabled)
-		const learnerTools = createLearnerTools(paths.learnerDataDir, "default", isL1Enabled);
+		const learnerTools = createLearnerTools(
+			paths.learnerDataDir,
+			"default",
+			isL1Enabled,
+			paths.l2DataDir,
+			isL2Enabled,
+		);
 		for (const tool of learnerTools) {
 			pi.registerTool(tool);
+		}
+
+		// 2b. Inno slash commands (web + CLI). Unlike the bundled plugins' TUI
+		// overlay commands, these run headless: the handler expands into a normal
+		// user message that steers the agent to the right memory tool, so the
+		// result streams back as an ordinary turn. listSlashCommands() marks
+		// them webSafe via INNO_SLASH_COMMAND_NAMES (inline extension factories
+		// get a synthetic "<inline:N>" sourceInfo, so the path is not usable).
+		for (const command of INNO_SLASH_COMMANDS) {
+			pi.registerCommand(command.name, {
+				description: command.description,
+				handler: async (args) => {
+					pi.sendUserMessage(command.buildMessage(args.trim()));
+				},
+			});
 		}
 
 		// 3. Register scheduler tools
@@ -244,7 +331,7 @@ export function createInnoExtension(
 		// Recall (auto-inject + the l3_recall tool) is gated at runtime on
 		// config.memory.l3Enabled (default on); indexing always runs so the
 		// switch can be flipped back on without a backfill gap.
-		const l3Memory = new L3Memory(paths.l3DataDir, paths.sessionDir);
+		const l3Memory = getL3Memory(paths.l3DataDir, paths.sessionDir);
 		const isL3Enabled = () => !isSimpleMode() && configHolder.current.memory?.l3Enabled !== false;
 		const l3Tools = createL3Tools(l3Memory, deps?.getCurrentSessionId, isL3Enabled);
 		for (const tool of l3Tools) {
@@ -374,6 +461,12 @@ export function createInnoExtension(
 				const workspaceDir = resolveActiveWorkspaceDir(paths, deps);
 				sections.push(formatWorkspaceFileInstructions(workspaceDir));
 				sections.push(...buildWorkspaceContextSections(workspaceDir));
+
+				// Mention the pi-web-access fetch tools only when the plugin is
+				// actually loaded (mirrors the registration gate in section 10).
+				if (configHolder.current.plugins?.webAccess?.enabled !== false) {
+					sections.push(WEB_ACCESS_PROMPT_HINT);
+				}
 
 				// Inject threshold-gated cross-conversation recall (L3). Only
 				// injects when past snippets clear the relevance threshold, so
@@ -567,6 +660,49 @@ export function createInnoExtension(
 			} as Parameters<typeof pi.registerTool>[0]);
 		} catch (err) {
 			logger.warn({ err }, "Failed to register ask_user_question tool");
+		}
+
+		// 10. Register bundled third-party PI extensions. Both ship TS-only
+		// sources, so they load through jiti like pi-subagents above. All UI
+		// surface (TUI overlays, shortcuts, slash commands, browser curator) is
+		// inert in server mode — the plugins guard on ctx.hasUI.
+		// Default ON; only an explicit `plugins.<name>.enabled: false` opts out.
+		if (configHolder.current.plugins?.todo?.enabled !== false) {
+			try {
+				const { createJiti: createJitiTodo } = await import("jiti/static");
+				const jitiTodo = createJitiTodo(import.meta.url, { moduleCache: false });
+				// Package has no exports map; import index.ts by subpath.
+				const mod = (await jitiTodo.import("@juicesharp/rpiv-todo/index.ts", { default: true })) as unknown;
+				if (typeof mod === "function") {
+					(mod as (pi: ExtensionAPI) => void)(pi);
+				}
+			} catch (err) {
+				logger.warn({ err }, "Failed to load rpiv-todo extension");
+			}
+		}
+
+		if (configHolder.current.plugins?.webAccess?.enabled !== false) {
+			try {
+				// Must run before the import: pi-web-access reads web-search.json
+				// (from $PI_CODING_AGENT_DIR = paths.configDir) at extension init to
+				// decide which tools to register. The managed default disables its
+				// web_search/source_check so they can't shadow inno's Tavily tool.
+				ensureWebAccessConfig(paths.configDir);
+				const { createJiti: createJitiWeb } = await import("jiti/static");
+				const jitiWeb = createJitiWeb(import.meta.url, {
+					moduleCache: false,
+					// Root node_modules hoists pi-ai 0.75.x (pi-web-ui's pin), which
+					// lacks the ./compat export pi-web-access imports. Pin pi-ai to
+					// the backend's own 0.84.x copy.
+					alias: resolvePiAiJitiAliases(import.meta.url),
+				});
+				const mod = (await jitiWeb.import("pi-web-access/index.ts", { default: true })) as unknown;
+				if (typeof mod === "function") {
+					(mod as (pi: ExtensionAPI) => void)(pi);
+				}
+			} catch (err) {
+				logger.warn({ err }, "Failed to load pi-web-access extension");
+			}
 		}
 	};
 }

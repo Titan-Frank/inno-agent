@@ -37,8 +37,13 @@ export function saveProfile(dataDir: string, profile: LearnerProfile): void {
  * EVENTS_MAX_BYTES; `loadEvents` (and therefore `rebuildProfileFromEvents`)
  * only replays the current segment — older segments stay on disk as archives.
  */
-export function recordEvent(dataDir: string, event: LearningEvent): void {
+export function recordEvent(dataDir: string, event: LearningEvent): boolean {
+	if (event.dedupe_key) {
+		const existing = readJsonl<LearningEvent>(join(dataDir, EVENTS_FILE));
+		if (existing.some((item) => item.dedupe_key === event.dedupe_key)) return false;
+	}
 	appendJsonl(join(dataDir, EVENTS_FILE), event, { maxBytes: EVENTS_MAX_BYTES });
+	return true;
 }
 
 /**
@@ -47,8 +52,9 @@ export function recordEvent(dataDir: string, event: LearningEvent): void {
  * record an event and skips a separate profile update call.
  */
 export function recordEventAndUpdateProfile(dataDir: string, event: LearningEvent): LearnerProfile {
-	recordEvent(dataDir, event);
+	const recorded = recordEvent(dataDir, event);
 	const profile = loadProfile(dataDir);
+	if (!recorded) return profile;
 	if (applyLearningEventToProfile(profile, event)) {
 		saveProfile(dataDir, profile);
 	}

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadEvents, loadRecentEvents, recordEvent } from "./profile-store.js";
+import { createLearningEvidenceEvent } from "./evidence.js";
+import { loadEvents, loadRecentEvents, recordEvent, recordEventAndUpdateProfile } from "./profile-store.js";
 import { createLearningEvent, type LearningEvent } from "./types.js";
 
 let dir: string;
@@ -56,5 +57,34 @@ describe("loadRecentEvents", () => {
 	it("loadEvents still replays the full log for rebuilds", () => {
 		const events = recordEvents(10, 200);
 		expect(loadEvents(dir).map((e) => e.event_id)).toEqual(events.map((e) => e.event_id));
+	});
+});
+
+describe("learning evidence ledger", () => {
+	it("deduplicates retry-safe evidence writes", () => {
+		const event = createLearningEvidenceEvent("student", {
+			concept_id: "physics.force_decomposition",
+			kind: "application",
+			result: "correct",
+			evaluator: "teacher",
+			evaluator_confidence: 1,
+			dedupe_key: "session-1:question-1:answer-1",
+		});
+
+		recordEventAndUpdateProfile(dir, event);
+		recordEventAndUpdateProfile(dir, event);
+		expect(loadEvents(dir)).toHaveLength(1);
+	});
+
+	it("does not increase mastery merely because the assistant explained a concept", () => {
+		const event = createLearningEvent(
+			"student",
+			"concept_explained",
+			{ concept_ids: ["physics.force_decomposition"] },
+			{ topic: "力的分解" },
+		);
+		const profile = recordEventAndUpdateProfile(dir, event);
+		expect(profile.knowledge_states[0].mastery).toBe(0.05);
+		expect(profile.knowledge_states[0].stability).toBe(0.1);
 	});
 });

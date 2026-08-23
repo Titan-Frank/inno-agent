@@ -1,11 +1,17 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	type ChangeEvent,
+	type ClipboardEvent,
+	type KeyboardEvent,
+	type PointerEvent as ReactPointerEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
-import { Paperclip, X, SendHorizonal, Square, RotateCcw, Image, AlertTriangle, Search, Sparkles } from "lucide-react";
-import { Spinner } from "./ui/Spinner.js";
-import type { ChatMessage, ChatToolRecord } from "../types/chat.js";
-import type { InlineImage } from "../api/chat.js";
+import type { InnoModelInfo, SmartInputSettings } from "../types/settings.js";
 import { chatStore } from "../stores/chat-store.js";
 import { sessionsStore } from "../stores/sessions-store.js";
 import { workspacesStore } from "../stores/workspaces-store.js";
@@ -13,309 +19,66 @@ import { workspaceStore } from "../stores/workspace-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { appStore } from "../stores/app-store.js";
 import type { CreateSessionInput } from "../api/sessions.js";
-import { listRemotePresets } from "../api/presets.js";
+import { bindSessionWorkspace } from "../api/workspaces.js";
+import { ApiError } from "../api/client.js";
 import type { PresetMeta } from "../types/presets.js";
 import { arrayBufferToBase64 } from "../api/uploads.js";
-import { uploadWorkspaceFiles } from "../api/workspace.js";
-import { normalizeMarkdownMath } from "../utils/markdown-math.js";
-import { splitStreamingMarkdown } from "../utils/markdown-blocks.js";
-import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
-import { answeredQuestionnaireFromTool, buildAnsweredQuestionnaireTimeline } from "../utils/questionnaire.js";
-import type { AnsweredQuestionnaireView } from "../utils/questionnaire.js";
+import { uploadWorkspaceFileWithProgress } from "../api/workspace.js";
+import type { AttachmentRef } from "../types/chat.js";
+import { fetchPresetList, readCachedPresets, removeCachedPreset } from "../utils/preset-cache.js";
 import { useStoreSnapshot } from "./hooks.js";
-import { QuestionDialog } from "./QuestionDialog.js";
-import { AnsweredQuestionCard } from "./chat/AnsweredQuestionCard.js";
-import { buildConversationTurns, ConversationMinimap } from "./ConversationMinimap.js";
-import { MarkdownArtifact } from "./MarkdownArtifact.js";
-import { ErrorBlock, MessageBubble, ToolRecordDetails } from "./chat/MessageBubble.js";
+import { ChatComposer } from "./chat/ChatComposer.js";
+import { ChatConversation } from "./chat/ChatConversation.js";
+import { BusyBlocker, QuestionHint } from "./chat/ChatStatusBanners.js";
+import { ChatUploadChips } from "./chat/ChatUploadChips.js";
+import { ChatWelcome } from "./chat/ChatWelcome.js";
+import { SmartInputControl } from "./chat/SmartInputControl.js";
+import { SlashCommandPalette } from "./chat/SlashCommandPalette.js";
+import {
+	buildSlashPaletteEntries,
+	slashQueryFromDraft,
+	type SlashPaletteAction,
+	type SlashPaletteEntry,
+} from "./chat/slash-palette-utils.js";
+import { fetchSlashCommands, type SlashCommandItem } from "../api/commands.js";
+import { WorkspaceContext } from "./chat/WorkspaceContext.js";
+import type { WorkspaceChoice } from "./WorkspaceSwitcher.js";
+import {
+	flattenWorkspaceFiles,
+	isLargeTextPaste,
+	localPendingUpload,
+	pendingUploadId,
+	prepareInlineImage,
+	resizeComposerTextarea,
+	workspacePendingUpload,
+	type PendingPasteBlock,
+	type PendingUpload,
+	type PreparedInlineImage,
+} from "./chat/composer-utils.js";
+import { kindFromName } from "./chat/smart-input/kinds.js";
+import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
+import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
+import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
 
-// Thresholds for collapsing a large paste into a placeholder chip. A paste
-// crossing EITHER threshold is collapsed. Tuned so normal multi-line typing
-// (a few paragraphs) stays inline, but dumping a whole file collapses.
-const PASTE_COLLAPSE_LINES = 20;
-const PASTE_COLLAPSE_CHARS = 2000;
+type PresetRefreshStatus = "success" | "error";
 
-// Inline chat images are sent to the provider as base64 inside the JSON body.
-// Full-resolution photos (3–10 MB, +33% once base64-encoded) blow past the
-// body-size limit of reverse proxies in front of providers (nginx defaults to
-// 1 MB) and come back as HTTP 413, silently demoting the turn to the OCR
-// fallback. Downscale/re-encode before sending so native vision turns
-// actually reach the model. The target is deliberately well under 1 MB:
-// base64 inflates ~4/3 and the body also carries the system prompt and
-// conversation history.
-const INLINE_IMAGE_MAX_DIMENSION = 1280;
-const INLINE_IMAGE_TARGET_BYTES = 380 * 1024;
-const INLINE_IMAGE_MAX_BYTES = 500 * 1024;
-
-type PreparedInlineImage = InlineImage & { name: string; previewUrl: string };
-
-function rawInlineImage(file: File, dataUrl: string): PreparedInlineImage {
-	const commaIdx = dataUrl.indexOf(",");
-	const header = dataUrl.slice(0, commaIdx);
-	return {
-		data: dataUrl.slice(commaIdx + 1),
-		mimeType: header.match(/:(.*?);/)?.[1] ?? file.type,
-		name: file.name || "image",
-		previewUrl: dataUrl,
-	};
-}
-
-/** Binary size estimate of a base64 data URL payload. */
-function dataUrlBytes(dataUrl: string): number {
-	return Math.floor((dataUrl.length - dataUrl.indexOf(",") - 1) * 3 / 4);
-}
-
-/**
- * Re-encode as JPEG, shrinking quality first and then dimensions until the
- * payload fits INLINE_IMAGE_TARGET_BYTES. Returns the smallest result even
- * when the target can't be reached.
- */
-function downscaleToFit(img: HTMLImageElement): string | undefined {
-	const canvas = document.createElement("canvas");
-	const ctx = canvas.getContext("2d");
-	if (!ctx) return undefined;
-	let scale = Math.min(1, INLINE_IMAGE_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
-	let quality = 0.8;
-	let best: string | undefined;
-	for (let attempt = 0; attempt < 5; attempt++) {
-		canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-		canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-		// Flatten alpha onto white — JPEG has no transparency.
-		ctx.fillStyle = "#ffffff";
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-		const outUrl = canvas.toDataURL("image/jpeg", quality);
-		if (!best || outUrl.length < best.length) best = outUrl;
-		if (dataUrlBytes(outUrl) <= INLINE_IMAGE_TARGET_BYTES) break;
-		if (quality > 0.5) {
-			quality -= 0.15;
-		} else {
-			scale *= 0.75;
-			quality = 0.7;
-		}
-	}
-	return best;
-}
-
-async function prepareInlineImage(file: File): Promise<PreparedInlineImage> {
-	const dataUrl = await new Promise<string>((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(reader.result as string);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-	const passthrough = () => rawInlineImage(file, dataUrl);
-	if (file.size <= INLINE_IMAGE_MAX_BYTES) return passthrough();
-	try {
-		const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-			// `Image` the DOM constructor is shadowed by the lucide icon import.
-			const el = document.createElement("img");
-			el.onload = () => resolve(el);
-			el.onerror = () => reject(new Error("image decode failed"));
-			el.src = dataUrl;
-		});
-		const outUrl = downscaleToFit(img);
-		// Keep the original if re-encoding failed or produced a larger payload.
-		if (!outUrl || outUrl.length >= dataUrl.length) return passthrough();
-		return {
-			data: outUrl.slice(outUrl.indexOf(",") + 1),
-			mimeType: "image/jpeg",
-			name: file.name || "image",
-			previewUrl: outUrl,
-		};
-	} catch {
-		return passthrough();
-	}
-}
-
-interface PendingUpload {
-	fileName: string;
-	path: string;
-	file: File;
-}
-
-/**
- * Memoized artifact for one closed block of a streaming reply. Closed blocks
- * never change, so they are parsed by marked/KaTeX exactly once and never
- * re-render — which also keeps the bubble's height monotonically growing
- * (no re-parse shrink that could yank the scroll position upwards).
- */
-const StableStreamingMarkdown = memo(function StableStreamingMarkdown({ content }: { content: string }) {
-	return <MarkdownArtifact content={content} />;
-});
-
-/**
- * Live-stream bubbles (thinking + reply text). Subscribes to the chat store
- * independently so the high-frequency text flushes re-render only this small
- * subtree, not the whole message list.
- */
-function CompletedToolRecords({ tools }: { tools: ChatToolRecord[] }) {
-	const views = tools.map((tool) => ({ tool, questionnaire: answeredQuestionnaireFromTool(tool) }));
-	const regularTools = views.filter((item) => item.questionnaire === null).map((item) => item.tool);
-
-	return regularTools.length ? (
-				<motion.div
-					className="flex justify-start"
-					initial={{ opacity: 0 }}
-					animate={{ opacity: 1 }}
-					transition={{ duration: 0.2 }}
-				>
-					<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
-						<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Completed tool calls · {regularTools.length}</summary>
-						<div className="mt-2 grid min-w-0 max-w-full gap-1.5">
-							{regularTools.map((tool) => (
-								<ToolRecordDetails key={tool.toolCallId} tool={tool} className="min-w-0 max-w-full overflow-hidden rounded border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1" />
-							))}
-						</div>
-					</details>
-				</motion.div>
-	) : null;
-}
-
-function StreamingBubbles() {
-	const { t } = useTranslation();
-	const stream = useStoreSnapshot(chatStore, () => ({
-		text: chatStore.streamingText,
-		thinking: chatStore.streamingThinking,
-		target: chatStore.streamingTarget,
-		// Low-frequency fields for the "waiting" dots — included here (rather
-		// than read off ChatCenter's snapshot) so the dots live in the same
-		// subtree that knows whether reply text has started.
-		isSending: chatStore.isSending,
-		hasError: chatStore.streamingError !== "",
-		hasPendingQuestion: chatStore.pendingQuestion !== null,
-		activeToolCount: chatStore.activeTools.length,
-		completedTools: chatStore.completedTools,
-	}));
-
-	const questionnaires = useMemo(() => stream.completedTools.flatMap((tool): AnsweredQuestionnaireView[] => {
-		const questionnaire = answeredQuestionnaireFromTool(tool);
-		return questionnaire ? [{ tool, questionnaire }] : [];
-	}), [stream.completedTools]);
-	const timeline = useMemo(
-		() => buildAnsweredQuestionnaireTimeline(stream.text, questionnaires),
-		[stream.text, questionnaires],
-	);
-	const normalized = useMemo(() => normalizeMarkdownMath(timeline.tail), [timeline.tail]);
-	const { blocks, tail } = useMemo(() => splitStreamingMarkdown(normalized), [normalized]);
-
-	// Shrink guard: while a reply streams, the tail <markdown-artifact> re-parses
-	// on every flush — code fences open and close as characters arrive, tables
-	// snap into being when their separator row lands — and its height briefly
-	// shrinks before settling taller. The stick-to-bottom pin faithfully
-	// amplifies each transient shrink into a visible yank. Hold the bubble at
-	// the tallest height seen so far (via min-height) so re-parse shrinks are
-	// absorbed as blank space inside the bubble instead of moving the layout.
-	// The callback ref re-arms per bubble mount, so each turn starts fresh.
-	const heightWatermarkRef = useRef(0);
-	const bubbleObserverRef = useRef<ResizeObserver | null>(null);
-	const streamingBubbleRef = useCallback((el: HTMLDivElement | null) => {
-		bubbleObserverRef.current?.disconnect();
-		bubbleObserverRef.current = null;
-		if (!el) return;
-		heightWatermarkRef.current = 0;
-		el.style.minHeight = "";
-		const observer = new ResizeObserver(() => {
-			const height = el.offsetHeight;
-			if (height > heightWatermarkRef.current) heightWatermarkRef.current = height;
-			const minHeight = `${heightWatermarkRef.current}px`;
-			if (el.style.minHeight !== minHeight) el.style.minHeight = minHeight;
-		});
-		observer.observe(el);
-		bubbleObserverRef.current = observer;
-	}, []);
-
-	return (
-		<>
-			{stream.thinking ? (
-				<motion.div
-					className="flex justify-start"
-					initial={{ opacity: 0, y: 8 }}
-					animate={{ opacity: 1, y: 0 }}
-					transition={{ duration: 0.2, ease: "easeOut" }}
-				>
-					<details className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-xs text-[var(--inno-text-muted)]">
-						<summary className="cursor-pointer break-words [overflow-wrap:anywhere]">Thinking...</summary>
-						<pre className="mt-1 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{stream.thinking}</pre>
-					</details>
-				</motion.div>
-			) : null}
-
-			{stream.text && stream.target === "workspace" ? (
-				<motion.div
-					key="workspace-streaming-status"
-					className="flex justify-start"
-					initial={{ opacity: 0, y: 8 }}
-					animate={{ opacity: 1, y: 0 }}
-					transition={{ duration: 0.2, ease: "easeOut" }}
-				>
-					<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-[13px] text-[var(--inno-text-muted)]">
-						<div className="flex min-w-0 items-center gap-2">
-							<span className="inno-stream-status-dot is-streaming shrink-0" />
-							<span className="min-w-0 break-words [overflow-wrap:anywhere]">{t("chat.streamingInWorkspace", "长内容正在右侧文件区生成")}</span>
-						</div>
-					</div>
-				</motion.div>
-			) : stream.text || questionnaires.length ? (
-				<motion.div
-					key="chat-streaming-bubble"
-					className="flex justify-start"
-					initial={{ opacity: 0, y: 8 }}
-					animate={{ opacity: 1, y: 0 }}
-					transition={{ duration: 0.2, ease: "easeOut" }}
-				>
-					<div ref={streamingBubbleRef} className={`inno-message inno-streaming-blocks ${questionnaires.length > 0 ? "w-full max-w-[76%]" : "max-w-[78%]"} rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
-						{timeline.entries.map(({ tool, questionnaire, before }) => (
-							<Fragment key={tool.toolCallId}>
-								{before.trim() ? <StableStreamingMarkdown content={normalizeMarkdownMath(before.trim())} /> : null}
-								<div className="my-2">
-									<AnsweredQuestionCard questionnaire={questionnaire} />
-								</div>
-							</Fragment>
-						))}
-						{blocks.map((block, index) => (
-							<StableStreamingMarkdown key={index} content={block} />
-						))}
-						{/* Always mounted while text streams (even when the tail is
-						    momentarily empty) so the DOM node — and the height below the
-						    stable blocks — never churns mid-stream. */}
-						<MarkdownArtifact content={tail} />
-					</div>
-				</motion.div>
-			) : null}
-
-			{stream.isSending && !stream.hasPendingQuestion && !stream.text && questionnaires.length === 0 && !stream.hasError && stream.activeToolCount === 0 ? (
-				<motion.div
-					className="flex justify-start"
-					initial={{ opacity: 0 }}
-					animate={{ opacity: 1 }}
-					transition={{ duration: 0.15 }}
-				>
-					<div className="inno-message max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3 py-2 text-sm text-[var(--inno-text-muted)]">
-						<span className="inline-flex gap-1">
-							<span className="animate-bounce">·</span>
-							<span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
-							<span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
-						</span>
-					</div>
-				</motion.div>
-			) : null}
-		</>
-	);
-}
 
 type WsMode = "temp" | "new" | "existing";
 
 // Remember the user's last workspace choice for a new chat so the bottom
-// "新建对话" button doesn't always reset to temp (P3). Persisted to localStorage
-// rather than the backend — it's a per-device UI preference, not agent state.
+// "新建对话" button doesn't always reset to temp.
 const LAST_WS_MODE_KEY = "inno.lastWorkspaceMode";
 const LAST_WS_ID_KEY = "inno.lastWorkspaceId";
 
+interface ChatCenterProps {
+	onOpenPresetPanels: () => void | Promise<void>;
+	onPreviewFile: (minimumWidth: number) => void | Promise<void>;
+}
+
 function readLastWsMode(): WsMode {
 	if (typeof window === "undefined") return "temp";
-	const v = window.localStorage.getItem(LAST_WS_MODE_KEY);
-	return v === "new" || v === "existing" ? v : "temp";
+	const value = window.localStorage.getItem(LAST_WS_MODE_KEY);
+	return value === "new" || value === "existing" ? value : "temp";
 }
 
 function readLastWsId(): string {
@@ -325,191 +88,128 @@ function readLastWsId(): string {
 
 function rememberWsChoice(mode: WsMode, existingId: string): void {
 	if (typeof window === "undefined") return;
-	// Only "existing" is worth resuming verbatim; temp/new are fresh each time.
 	window.localStorage.setItem(LAST_WS_MODE_KEY, mode === "existing" ? "existing" : "temp");
-	if (mode === "existing" && existingId) {
-		window.localStorage.setItem(LAST_WS_ID_KEY, existingId);
-	}
+	if (mode === "existing" && existingId) window.localStorage.setItem(LAST_WS_ID_KEY, existingId);
 }
 
-function ModeChip({ selected, onClick, disabled, children }: { selected: boolean; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			className={`rounded-full border px-1.5 py-px text-[10px] leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-				selected
-					? "border-[var(--inno-accent)] bg-[var(--inno-accent-soft)] text-[var(--inno-accent)]"
-					: "border-[var(--inno-border)] bg-[var(--inno-surface)] text-[var(--inno-text-muted)] hover:bg-[var(--inno-surface-muted)]"
-			}`}
-		>
-			{children}
-		</button>
-	);
-}
+const SMART_FILE_PREVIEW_WIDTH = 560;
+const SMART_HOVER_OPEN_MS = 250;
 
-/**
- * Simple Mode preset grid: searchable, grouped by `category`, vertically
- * bounded so a long preset list doesn't push the composer off-screen.
- * The search input only appears when there are enough presets to make it
- * useful (≥ 4); the scroll container caps height at ~50vh.
- */
-function PresetPicker({
-	presets,
-	openingPresetId,
-	onOpen,
-	query,
-	onQueryChange,
-	t,
-}: {
-	presets: PresetMeta[];
-	openingPresetId: string | null;
-	onOpen: (id: string) => void;
-	query: string;
-	onQueryChange: (v: string) => void;
-	t: TFunction;
-}) {
-	const uncategorizedLabel = t("presets.uncategorized");
-	const groups = useMemo(
-		() => groupByCategory(presets.filter((p) => matchesQuery(p, query, p.category ? t(`categories.${p.category}`, p.category) : undefined)), uncategorizedLabel),
-		[presets, query, uncategorizedLabel, t],
-	);
-	const totalMatched = useMemo(() => groups.reduce((sum, [, items]) => sum + items.length, 0), [groups]);
-	const showSearch = presets.length >= 4;
-
-	return (
-		<div className="mt-5">
-			<div className="mb-2 flex items-center gap-2">
-				<div className="text-xs font-medium text-[var(--inno-text-muted)]">{t("presets.simpleModeHeader")}</div>
-				<span className="text-[10px] text-[var(--inno-text-subtle)]">· {presets.length}</span>
-			</div>
-
-			{showSearch ? (
-				<div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-1.5">
-					<Search size={14} className="shrink-0 text-[var(--inno-text-subtle)]" />
-					<input
-						type="text"
-						value={query}
-						onChange={(e) => onQueryChange(e.target.value)}
-						placeholder={t("presets.searchPlaceholder")}
-						className="min-w-0 flex-1 bg-transparent text-xs text-[var(--inno-text)] placeholder:text-[var(--inno-text-subtle)] focus:outline-none"
-					/>
-					{query ? (
-						<button
-							type="button"
-							className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--inno-text-subtle)] hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)]"
-							onClick={() => onQueryChange("")}
-						>
-							<X size={12} />
-						</button>
-					) : null}
-				</div>
-			) : null}
-
-			<div className="max-h-[50vh] overflow-y-auto rounded-md">
-				{totalMatched === 0 ? (
-					<div className="py-6 text-center text-xs text-[var(--inno-text-muted)]">{t("presets.noResults")}</div>
-				) : (
-					groups.map(([category, items]) => (
-						<div key={category} className="mb-3 last:mb-0">
-							{/* Only show the group header when at least one categorized group exists
-							    AND there is more than one group — keeps the single-bucket flat layout
-							    when nothing has been categorized yet. */}
-							{groups.length > 1 ? (
-								<div className="mb-1.5 px-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--inno-text-subtle)]">
-									{t(`categories.${category}`, category)} <span className="ml-1 text-[var(--inno-text-subtle)]">· {items.length}</span>
-								</div>
-							) : null}
-							<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-								{items.map((preset) => (
-									<button
-										key={preset.id}
-										type="button"
-										disabled={openingPresetId !== null}
-										onClick={() => onOpen(preset.id)}
-										title={preset.description}
-										className="group flex flex-col items-start rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2.5 text-left transition-colors hover:border-[var(--inno-accent)] hover:bg-[var(--inno-surface-muted)] disabled:opacity-50"
-									>
-										<span className="text-sm font-medium text-[var(--inno-text)] group-hover:text-[var(--inno-accent)]">
-											{preset.name}
-										</span>
-										{preset.description ? (
-											<span className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--inno-text-muted)]">
-												{preset.description}
-											</span>
-										) : null}
-										{openingPresetId === preset.id ? (
-											<span className="mt-1 text-[10px] text-[var(--inno-accent)]">{t("presets.opening")}</span>
-										) : null}
-									</button>
-								))}
-							</div>
-						</div>
-					))
-				)}
-			</div>
-		</div>
-	);
-}
-
-export function ChatCenter() {
+export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProps) {
 	const { t } = useTranslation();
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	const welcomeLayoutRef = useRef<HTMLDivElement | null>(null);
+	const resizeFrameRef = useRef<number | null>(null);
 	const draftRef = useRef("");
+	const [draftValue, setDraftValue] = useState(draftRef.current);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const shouldStickToBottomRef = useRef(true);
+	const userScrollGestureRef = useRef(false);
+	const pasteBlockIdRef = useRef(0);
 	const [uploads, setUploads] = useState<PendingUpload[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
-	const [inlineImages, setInlineImages] = useState<(InlineImage & { name: string; previewUrl: string })[]>([]);
-	// When the user pastes a large block of text (many lines / chars), we
-	// insert a short placeholder token (e.g. «已粘贴 N 行») into the textarea
-	// at the caret position and hold the real text here. The user can keep
-	// typing before/after the token. On send, the token is replaced by the
-	// real text.
-	const [pasteBlock, setPasteBlock] = useState<{ text: string; lineCount: number } | null>(null);
+	const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+	const [smartToast, setSmartToast] = useState<{ message: string; error?: boolean } | null>(null);
+	const [smartHasSlots, setSmartHasSlots] = useState(false);
+	const [smartPanel, setSmartPanel] = useState<SmartPanelState | null>(null);
+	const smartPanelRef = useRef<SmartPanelState | null>(null);
+	const [smartPanelRefresh, setSmartPanelRefresh] = useState(0);
+	const smartBoundFileCountRef = useRef(0);
+	const smartToastTimer = useRef<number | null>(null);
+	const smartHoverTimer = useRef<number | null>(null);
+	const smartHoverCloseTimer = useRef<number | null>(null);
+	const mirrorRef = useRef<HTMLDivElement | null>(null);
+	const hitRef = useRef<HTMLDivElement | null>(null);
+	const uploadsRef = useRef<PendingUpload[]>([]);
+	uploadsRef.current = uploads;
+	smartPanelRef.current = smartPanel;
+	const [inlineImages, setInlineImages] = useState<PreparedInlineImage[]>([]);
+	const [draftHasContent, setDraftHasContent] = useState(() => Boolean(draftRef.current.trim()));
+	const [modelPickerOpen, setModelPickerOpen] = useState(false);
+	const [pasteBlocks, setPasteBlocks] = useState<PendingPasteBlock[]>([]);
 
-	// Inline workspace chooser state (welcome screen only). Seeded from the
-	// user's last choice (P3) so a new chat resumes the workspace they were in
-	// rather than always resetting to temp.
+	// Slash-command palette (Codex-style): opens while the draft is a bare
+	// "/query". App actions (new chat, model picker) run locally; agent
+	// commands come from GET /api/commands and are inserted into the composer —
+	// the backend session expands/dispatches them in session.prompt().
+	const [slashCommands, setSlashCommands] = useState<SlashCommandItem[]>([]);
+	const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+	const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		fetchSlashCommands()
+			.then((items) => { if (!cancelled) setSlashCommands(items); })
+			.catch(() => { /* palette simply stays limited to app actions */ });
+		return () => { cancelled = true; };
+	}, []);
+
+	// New-chat workspace selection is draft state until the first message creates
+	// a session. The active session path is bound in handleWorkspaceChange.
 	const [wsMode, setWsMode] = useState<WsMode>(() => readLastWsMode());
 	const [wsName, setWsName] = useState("");
 	const [wsExistingId, setWsExistingId] = useState(() => readLastWsId());
 	const [wsError, setWsError] = useState("");
+	const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
 
-	// Simple Mode surfaces preset workspaces for one-click start.
 	const simpleMode = useStoreSnapshot(settingsStore, () => settingsStore.settings?.simpleMode?.enabled === true);
-	// Whether the selected Provider accepts native image message blocks.
-	// Attachments remain available either way: text-only models receive the
-	// persisted workspace path and can use the OCR tool instead.
-	const currentModelSupportsNativeImages = useStoreSnapshot(settingsStore, () => {
-		const s = settingsStore.settings;
-		if (!s) return true;
-		const list = s.availableModels ?? s.configuredModels ?? [];
-		const m = list.find((x) => x.provider === s.defaultProvider && x.id === s.defaultModel);
-		return m ? m.input.includes("image") : true;
+	const modelState = useStoreSnapshot(settingsStore, () => {
+		const settings = settingsStore.settings;
+		const models = settings?.availableModels ?? settings?.configuredModels ?? [];
+		const current = models.find((model) => model.provider === settings?.defaultProvider && model.id === settings?.defaultModel);
+		return {
+			models,
+			defaultProvider: settings?.defaultProvider ?? "",
+			defaultModel: settings?.defaultModel ?? "",
+			currentModelSupportsNativeImages: current?.input.includes("image") ?? true,
+			isSavingModel: settingsStore.isSavingModel,
+		};
 	});
-	const [presets, setPresets] = useState<PresetMeta[]>([]);
+	const modelOptions = useMemo(() => {
+		const seen = new Set<string>();
+		return modelState.models.filter((model) => {
+			const key = `${model.provider}:${model.id}`;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	}, [modelState.models]);
+	const currentModel = modelOptions.find((model) => model.provider === modelState.defaultProvider && model.id === modelState.defaultModel);
+
+	const [presets, setPresets] = useState<PresetMeta[]>(() => readCachedPresets() ?? []);
+	const [presetsLoaded, setPresetsLoaded] = useState(() => readCachedPresets() !== null);
+	const [isLoadingPresets, setIsLoadingPresets] = useState(() => readCachedPresets() === null);
+	const [isRefreshingPresets, setIsRefreshingPresets] = useState(false);
+	const [presetsRefreshError, setPresetsRefreshError] = useState<string | null>(null);
+	const [presetRefreshStatus, setPresetRefreshStatus] = useState<PresetRefreshStatus | null>(null);
+	const presetRefreshStatusTimerRef = useRef<number | null>(null);
+	const presetAutoRefreshStartedRef = useRef(false);
 	const [openingPresetId, setOpeningPresetId] = useState<string | null>(null);
 	const [togglingMode, setTogglingMode] = useState(false);
 	const [presetQuery, setPresetQuery] = useState("");
 
-	// Toggle between Simple and Normal mode from the welcome screen. The IA icon
-	// plays a flip animation keyed on the resulting mode.
-	const toggleMode = useCallback(() => {
-		if (togglingMode) return;
-		const next = !(settingsStore.settings?.simpleMode?.enabled === true);
-		setTogglingMode(true);
-		void settingsStore.saveSimpleMode(next).finally(() => setTogglingMode(false));
-	}, [togglingMode]);
+	const cancelPresetRefreshStatusTimer = useCallback(() => {
+		if (presetRefreshStatusTimerRef.current === null) return;
+		window.clearTimeout(presetRefreshStatusTimerRef.current);
+		presetRefreshStatusTimerRef.current = null;
+	}, []);
 
-	// NOTE: high-frequency streaming fields (streamingText / streamingThinking
-	// / streamingTarget) are deliberately excluded — they flush every 40ms and
-	// are subscribed to by StreamingBubbles instead, so token growth re-renders
-	// only that subtree. Combined with the shallow-equal guard in
-	// useStoreSnapshot, streaming emits no longer re-render ChatCenter at all.
+	const showPresetRefreshStatus = useCallback((status: PresetRefreshStatus) => {
+		cancelPresetRefreshStatusTimer();
+		setPresetRefreshStatus(status);
+		// Keep the failure marker visible until the next refresh attempt. A
+		// successful refresh remains a transient confirmation for five seconds.
+		if (status !== "success") return;
+		presetRefreshStatusTimerRef.current = window.setTimeout(() => {
+			setPresetRefreshStatus(null);
+			presetRefreshStatusTimerRef.current = null;
+		}, 5_000);
+	}, [cancelPresetRefreshStatusTimer]);
+
+	useEffect(() => () => cancelPresetRefreshStatusTimer(), [cancelPresetRefreshStatusTimer]);
+
 	const chat = useStoreSnapshot(chatStore, () => ({
 		messages: chatStore.messages,
 		isSending: chatStore.isSending,
@@ -527,75 +227,153 @@ export function ChatCenter() {
 		currentSessionId: sessionsStore.currentSessionId,
 		preselectedWorkspaceId: sessionsStore.preselectedWorkspaceId,
 		busyBlocker: sessionsStore.busyBlocker,
-		// Single source of truth for the welcome-vs-session view (see store).
-		// Depends on chatStore too, but ChatCenter subscribes to chatStore via
-		// the `chat` snapshot above, so this re-evaluates on chat changes.
 		isWelcome: sessionsStore.isWelcomeView,
 	}));
 	const workspaces = useStoreSnapshot(workspacesStore, () => ({
 		list: workspacesStore.workspaces,
 	}));
+	const loadedPresetIds = useMemo(
+		() => new Set(
+			workspaces.list
+				.filter((workspace) => workspace.id.startsWith("preset-"))
+				.map((workspace) => workspace.id.slice("preset-".length)),
+		),
+		[workspaces.list],
+	);
 	// Active workspace for the current session — drives upload target + button
 	// availability. Synced by sessionsStore on openSession/createSession, and
 	// pre-seeded by the useEffect below when the welcome screen's "existing"
 	// workspace picker selects one.
 	const activeWorkspaceId = useStoreSnapshot(workspaceStore, () => workspaceStore.activeWorkspaceId);
+	const workspaceTree = useStoreSnapshot(workspaceStore, () => workspaceStore.tree);
+	const workspaceTreeLoading = useStoreSnapshot(workspaceStore, () => workspaceStore.isLoadingTree);
+	const workspaceTreeError = useStoreSnapshot(workspaceStore, () => workspaceStore.error);
+	const workspaceFiles = useMemo(() => workspaceTree ? flattenWorkspaceFiles(workspaceTree) : [], [workspaceTree]);
+	const isWelcome = sessions.isWelcome;
+	// Sidebar/workspace layout shifts (e.g. after desktop window expansion) move
+	// the composer by translation without resizing it, so neither window resize
+	// nor ResizeObserver fires. Track the layout values that shift the chat
+	// column and use them to nudge the floating panel to re-anchor.
+	const appLayout = useStoreSnapshot(appStore, () => ({
+		sidebarCollapsed: appStore.sidebarCollapsed,
+		workspaceMode: appStore.workspaceMode,
+		workspaceWidth: appStore.workspaceWidth,
+	}));
+	useEffect(() => {
+		setSmartPanelRefresh((value) => value + 1);
+	}, [appLayout]);
 
-	// Workspace preselected from the sidebar ("+ 新建对话" on a group), if any.
-	const preselectedWs = useMemo(
-		() => sessions.preselectedWorkspaceId
-			? workspaces.list.find((w) => w.id === sessions.preselectedWorkspaceId) ?? null
-			: null,
-		[sessions.preselectedWorkspaceId, workspaces.list],
-	);
-
-	// User project workspaces the user can pick for a new chat — excludes the
-	// shared temp workspace and the channel-native workspaces (feishu/wechat/cli),
-	// matching the sidebar's grouping. Lets the bottom "新建对话" button reach an
-	// existing workspace instead of being forced into temp/new.
 	const selectableWorkspaces = useMemo(
-		() => workspaces.list.filter((w) => !w.isTemp && !w.id.startsWith("channel-")),
+		() => workspaces.list.filter((workspace) => !workspace.isTemp && !workspace.id.startsWith("channel-")),
 		[workspaces.list],
 	);
 
-	// Welcome state: derived once in the sessions store (single source of truth).
-	const isWelcome = sessions.isWelcome;
-	// Workspace that will receive pending attachments when Send is clicked.
-	// File selection itself never writes to this workspace, so attachments may
-	// safely follow the composer across session switches.
+	const toggleMode = useCallback(() => {
+		if (togglingMode) return;
+		const next = !(settingsStore.settings?.simpleMode?.enabled === true);
+		setTogglingMode(true);
+		void settingsStore.saveSimpleMode(next).finally(() => setTogglingMode(false));
+	}, [togglingMode]);
+
+	const closeModelPicker = useCallback(() => setModelPickerOpen(false), []);
+	const toggleModelPicker = useCallback(() => setModelPickerOpen((open) => !open), []);
+	const handleModelSelect = useCallback((model: InnoModelInfo) => {
+		setModelPickerOpen(false);
+		if (model.provider === modelState.defaultProvider && model.id === modelState.defaultModel) return;
+		void settingsStore.switchModel(model.provider, model.id);
+	}, [modelState.defaultModel, modelState.defaultProvider]);
+	const openModelSettings = useCallback(() => {
+		setModelPickerOpen(false);
+		appStore.openSettings("models");
+	}, []);
+
+	const handleWorkspaceChange = useCallback(async (choice: WorkspaceChoice) => {
+		setWsError("");
+		if (isWelcome) {
+			if (choice.kind === "temp") {
+				setWsMode("temp");
+				setWsName("");
+				setWsExistingId("");
+				// The welcome-page choice is draft state, but the workspace panel
+				// should still preview the same workspace before a session exists.
+				// Without this, switching back to temp leaves the last session's
+				// workspace visible in the file area.
+				const tempWorkspace = workspaces.list.find((workspace) => workspace.isTemp);
+				void workspaceStore.setActiveWorkspace(tempWorkspace?.id ?? null);
+			} else if (choice.kind === "workspace") {
+				setWsMode("existing");
+				setWsExistingId(choice.workspaceId);
+				setWsName("");
+			} else {
+				setWsMode("new");
+				setWsName(choice.name);
+				setWsExistingId("");
+			}
+			return;
+		}
+
+		const sessionId = sessions.currentSessionId;
+		if (!sessionId) return;
+		if (chat.isSending || isUploading) {
+			setWsError(t("chat.workspaceBusy"));
+			return;
+		}
+
+		setIsSwitchingWorkspace(true);
+		try {
+			let workspaceId: string;
+			if (choice.kind === "workspace") {
+				workspaceId = choice.workspaceId;
+			} else if (choice.kind === "new") {
+				workspaceId = (await workspacesStore.create({ name: choice.name, isTemp: false })).id;
+			} else {
+				const tempWorkspace = workspaces.list.find((workspace) => workspace.isTemp);
+				if (!tempWorkspace) throw new Error(t("chat.workspaceUnavailable"));
+				workspaceId = tempWorkspace.id;
+			}
+
+			if (workspaceId !== activeWorkspaceId) {
+				await bindSessionWorkspace(sessionId, workspaceId);
+				await workspaceStore.setActiveWorkspace(workspaceId);
+			}
+			await workspacesStore.load();
+		} catch (error) {
+			setWsError(error instanceof Error ? error.message : t("chat.workspaceSwitchFailed"));
+		} finally {
+			setIsSwitchingWorkspace(false);
+		}
+	}, [activeWorkspaceId, chat.isSending, isUploading, isWelcome, sessions.currentSessionId, t, workspaces.list]);
+
+	const tempWorkspaceId = workspaces.list.find((workspace) => workspace.isTemp)?.id;
 	const uploadWorkspaceId: string | undefined | null = isWelcome
 		? (simpleMode || wsMode === "temp"
-			? undefined
+			? tempWorkspaceId
 			: wsMode === "existing" && wsExistingId
 				? wsExistingId
 				: null)
 		: activeWorkspaceId;
-	const turnIndexByStartMessage = useMemo(
-		() => new Map(buildConversationTurns(chat.messages).map((turn) => [turn.startMessageIndex, turn.index])),
-		[chat.messages],
+
+	const hasSendableContent = Boolean(
+		draftHasContent
+			|| pasteBlocks.some((block) => block.text.trim())
+			|| uploads.some((upload) => upload.status !== "failed")
+			|| inlineImages.length > 0
+			|| smartHasSlots,
 	);
 
 	useEffect(() => {
-		if (isWelcome && workspaces.list.length === 0) {
-			void workspacesStore.load();
-		}
+		if (isWelcome && workspaces.list.length === 0) void workspacesStore.load();
 	}, [isWelcome, workspaces.list.length]);
 
-	// A remembered "existing" workspace id may point at a since-deleted
-	// workspace. Once the list loads, fall back to temp if it's gone so the
-	// chooser never sticks on an invalid selection (P3).
 	useEffect(() => {
 		if (wsMode === "existing" && wsExistingId && workspaces.list.length > 0) {
-			const stillExists = selectableWorkspaces.some((w) => w.id === wsExistingId);
-			if (!stillExists) {
+			if (!selectableWorkspaces.some((workspace) => workspace.id === wsExistingId)) {
 				setWsMode("temp");
 				setWsExistingId("");
 			}
 		}
 	}, [wsMode, wsExistingId, workspaces.list.length, selectableWorkspaces]);
 
-	// A workspace preselected from the sidebar drives the chooser to "existing"
-	// mode bound to that workspace (and previews it in quarter mode).
 	useEffect(() => {
 		if (sessions.preselectedWorkspaceId) {
 			setWsMode("existing");
@@ -603,45 +381,23 @@ export function ChatCenter() {
 		}
 	}, [sessions.preselectedWorkspaceId]);
 
-	// When a workspace is preselected for a new chat, preview it immediately
-	// (before the first message) in quarter mode so the file tree shows.
 	useEffect(() => {
 		if (isWelcome && wsMode === "existing" && wsExistingId) {
 			void workspaceStore.setActiveWorkspace(wsExistingId);
 			appStore.setRightPanelTab("preview");
-			if (
-				appStore.workspaceMode === "collapsed"
-				&& sessions.preselectedWorkspaceId === wsExistingId
-			) {
+			if (appStore.workspaceMode === "collapsed" && sessions.preselectedWorkspaceId === wsExistingId) {
 				appStore.setWorkspaceWidth(300);
 				appStore.setWorkspaceMode("quarter");
 			}
 		}
 	}, [isWelcome, wsMode, wsExistingId, sessions.preselectedWorkspaceId]);
 
-	// Stick-to-bottom scrolling, driven by a ResizeObserver on the content
-	// column: any height change — streaming flushes, Lit's async markdown
-	// renders, KaTeX, code highlighting, images — re-pins the scroll position
-	// in the same frame the growth happens. (The previous effect-based rAF
-	// scroll only fired when specific React state changed, so async renders
-	// between flushes left the view behind; combined with transient height
-	// shrink during re-parses, the pinned scrollTop got clamped and the view
-	// jumped back up towards the question.)
-	//
-	// The sticky flag is updated ONLY in response to genuine user gestures
-	// (wheel / touch / scrollbar drag / keyboard). Scroll-position changes also
-	// come from our own pins, from browser clamping after transient content
-	// shrink, and from CSS scroll anchoring during markdown re-renders — all of
-	// which fire scroll events whose distance-from-bottom says nothing about
-	// user intent. Treating those as "user scrolled away" wrongly disengaged
-	// sticking, and the view ended up back near the question at turn end.
 	useEffect(() => {
 		const el = scrollRef.current;
 		const content = el?.querySelector<HTMLElement>("[data-conversation-content]");
 		if (!el || !content) return;
 		const observer = new ResizeObserver(() => {
-			if (!shouldStickToBottomRef.current) return;
-			el.scrollTop = el.scrollHeight;
+			if (shouldStickToBottomRef.current) el.scrollTop = el.scrollHeight;
 		});
 		observer.observe(content);
 		return () => observer.disconnect();
@@ -651,61 +407,304 @@ export function ChatCenter() {
 		shouldStickToBottomRef.current = true;
 	}, [sessions.currentSessionId]);
 
-	const userScrollGestureRef = useRef(false);
 	const markUserScrollGesture = useCallback(() => {
 		userScrollGestureRef.current = true;
 	}, []);
-	// Only presses on the scrollbar track (right edge) count as scroll gestures —
-	// plain content clicks (text selection, links, buttons) must not, or the next
-	// programmatic/anchoring scroll event would be mistaken for user intent.
-	const handleScrollerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+	const handleScrollerPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
 		const el = scrollRef.current;
-		if (!el) return;
-		if (event.clientX >= el.getBoundingClientRect().right - 24) markUserScrollGesture();
+		if (el && event.clientX >= el.getBoundingClientRect().right - 24) markUserScrollGesture();
 	}, [markUserScrollGesture]);
-
 	const handleChatScroll = useCallback(() => {
 		const el = scrollRef.current;
 		if (!el) return;
 		const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-		// Reaching the bottom always re-engages sticking, no matter how the
-		// scroll was initiated (user gesture, smooth-scroll button, or a pin).
 		if (distanceFromBottom < 96) {
 			shouldStickToBottomRef.current = true;
 			userScrollGestureRef.current = false;
 			return;
 		}
-		// Away from the bottom: only a real user gesture may disengage sticking.
-		// Echoes of programmatic pins, clamping, and scroll-anchoring shifts are
-		// ignored — see the comment above the observer.
 		if (!userScrollGestureRef.current) return;
 		userScrollGestureRef.current = false;
 		shouldStickToBottomRef.current = false;
 	}, []);
-
 	const pauseAutoScroll = useCallback(() => {
 		shouldStickToBottomRef.current = false;
 	}, []);
+
+	const resizeInput = useCallback(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		const minHeight = resizeComposerTextarea(el);
+		const welcomeLayout = welcomeLayoutRef.current;
+		if (!welcomeLayout) return;
+		const composer = el.closest<HTMLElement>(".inno-composer");
+		if (!composer) return;
+		const textareaHeight = el.getBoundingClientRect().height;
+		const composerHeight = composer.getBoundingClientRect().height;
+		// The attachment row is an independent, variable-height block above the
+		// textarea. Exclude it from the baseline so adding/removing a file cannot
+		// leave a stale welcome-page offset behind when a bubble is rebuilt.
+		const attachmentRow = composer.querySelector<HTMLElement>(".inno-composer-attachments");
+		const attachmentHeight = attachmentRow
+			? attachmentRow.getBoundingClientRect().height
+				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginTop || "0")
+				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginBottom || "0")
+			: 0;
+		const baseComposerHeight = composerHeight - textareaHeight - attachmentHeight + minHeight;
+		const composerGrowth = Math.max(0, composerHeight - baseComposerHeight);
+		welcomeLayout.style.setProperty("--inno-welcome-composer-half-growth", `${composerGrowth / 2}px`);
+	}, []);
+
+	// Coalesce layout reads/writes while the user types or deletes rapidly.
+	// The textarea value and caret stay native and immediate; only the visual
+	// height adjustment waits until the next frame.
+	const scheduleResizeInput = useCallback(() => {
+		if (resizeFrameRef.current !== null) return;
+		if (typeof requestAnimationFrame !== "function") {
+			resizeInput();
+			return;
+		}
+		resizeFrameRef.current = requestAnimationFrame(() => {
+			resizeFrameRef.current = null;
+			resizeInput();
+		});
+	}, [resizeInput]);
+
+	useEffect(() => () => {
+		if (resizeFrameRef.current === null) return;
+		cancelAnimationFrame(resizeFrameRef.current);
+		resizeFrameRef.current = null;
+	}, []);
+
+	useEffect(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		resizeInput();
+		const composer = el.closest<HTMLElement>(".inno-composer");
+		if (!composer) return;
+		if (typeof ResizeObserver === "undefined") return;
+		// Observe the whole composer: attachment rows and smart bubbles can
+		// change its height without changing the textarea width.
+		const observer = new ResizeObserver(() => resizeInput());
+		observer.observe(composer);
+		return () => observer.disconnect();
+	}, [isWelcome, resizeInput]);
+
+	useEffect(() => {
+		if (isWelcome) resizeInput();
+	}, [isWelcome, inlineImages, pasteBlocks, resizeInput]);
+
+	const isComposingRef = useRef(false);
 
 	const handleInput = useCallback(() => {
 		const el = inputRef.current;
 		if (!el) return;
 		draftRef.current = el.value;
-		const maxHeight = 200;
-		el.style.height = "auto";
-		const h = Math.min(el.scrollHeight, maxHeight);
-		el.style.height = `${h}px`;
-		// Only show a vertical scrollbar once content overflows the max height;
-		// never show a horizontal scrollbar (long lines wrap).
-		el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
-		el.style.overflowX = "hidden";
+		setDraftValue(el.value);
+		setDraftHasContent(el.value.trim().length > 0);
+		// Safari drops in-progress IME composition (e.g. Chinese/Japanese input)
+		// when the textarea's height/overflow/selection is mutated mid-composition,
+		// which is what resizeInput does. Defer the resize until compositionend.
+		if (isComposingRef.current) return;
+		scheduleResizeInput();
+	}, [scheduleResizeInput]);
+
+	const handleCompositionStart = useCallback(() => {
+		isComposingRef.current = true;
 	}, []);
 
+	const handleCompositionEnd = useCallback(() => {
+		isComposingRef.current = false;
+		scheduleResizeInput();
+	}, [scheduleResizeInput]);
+
+	// ── Smart input engine (便捷输入) ─────────────────────────────────────
+	const smartInputState = useStoreSnapshot(settingsStore, () => ({
+		smartInput: settingsStore.settings?.smartInput,
+		isSavingSmartInput: settingsStore.isSavingSmartInput,
+	}));
+	const smartSettings = smartInputState.smartInput;
+	const smartInputEnabled = smartSettings?.enabled === true;
+
+	const openSmartInputSettings = useCallback(() => {
+		appStore.openSettings("lab");
+	}, []);
+
+	const showSmartToast = useCallback((message: string, error?: boolean) => {
+		setSmartToast({ message, error });
+		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
+		smartToastTimer.current = window.setTimeout(() => setSmartToast(null), 2200);
+	}, []);
+	const saveSmartInput = useCallback((next: SmartInputSettings) => {
+		void settingsStore.saveSmartInput(next).catch(() => {
+			showSmartToast(t("settings.smartInput.saveFailed", "便捷输入设置保存失败"), true);
+		});
+	}, [showSmartToast, t]);
+	const toggleSmartInput = useCallback(() => {
+		if (!smartSettings || settingsStore.isSavingSmartInput) return;
+		saveSmartInput({ ...smartSettings, enabled: !smartSettings.enabled });
+	}, [saveSmartInput, smartSettings]);
+	const toggleSmartInputRule = useCallback((ruleId: string) => {
+		if (!smartSettings || settingsStore.isSavingSmartInput) return;
+		const rule = smartSettings.rules.find((entry) => entry.id === ruleId);
+		if (!rule) return;
+		const rules = smartSettings.rules.map((entry) =>
+			entry.id === ruleId ? { ...entry, enabled: !entry.enabled } : entry,
+		);
+		saveSmartInput({ ...smartSettings, rules });
+	}, [saveSmartInput, smartSettings]);
+	useEffect(() => () => {
+		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
+	}, []);
+
+	const takeAttachment = useCallback((path: string): EngineAttachmentItem | undefined => {
+		const item = uploadsRef.current.find((entry) => entry.path === path || entry.fileName === path);
+		if (!item) return undefined;
+		setUploads((current) => current.filter((entry) => entry !== item));
+		return { name: item.fileName, path: item.path, source: item.source, file: item.file };
+	}, []);
+
+	const returnAttachment = useCallback((item: EngineAttachmentItem) => {
+		setUploads((current) => {
+			if (current.some((entry) => entry.path === item.path && entry.source === item.source)) return current;
+			return [...current, item.source === "workspace"
+				? workspacePendingUpload(item.path)
+				: { id: pendingUploadId(), fileName: item.name, path: item.path, source: "local", status: "ready", pct: 0, file: item.file }];
+		});
+	}, []);
+
+	const handleSmartChange = useCallback(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		draftRef.current = el.value;
+		setDraftValue(el.value);
+		setDraftHasContent(el.value.trim().length > 0);
+		scheduleResizeInput();
+	}, [scheduleResizeInput]);
+
+	const rectOfChip = (chip: HTMLElement): SmartPanelState["anchor"] => {
+		const rect = chip.getBoundingClientRect();
+		return { left: rect.left, bottom: rect.bottom };
+	};
+
+	const updateSmartPanel = useCallback((next: SmartPanelState | null) => {
+		smartPanelRef.current = next;
+		setSmartPanel(next);
+	}, []);
+
+	const openSmartPanel = useCallback((kind: SmartPanelState["kind"], slot: { id: number }, chip: HTMLElement) => {
+		// A delayed chip click/hover callback must not replace an already-open
+		// context menu. Menu actions switch panels through updateSmartPanel
+		// explicitly, so this guard only blocks stale source-bubble callbacks.
+		if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
+		// The workspace browser is not mounted on a cold welcome screen, so its
+		// first tree request may not have started yet. Opening the fill menu is a
+		// valid request for the same data; kick it off here instead of treating the
+		// initial null tree as a real empty workspace.
+		if (kind === "fill" && workspaceStore.tree === null && !workspaceStore.isLoadingTree) void workspaceStore.loadTree();
+		updateSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
+	}, [updateSmartPanel]);
+
+	const cancelSmartHoverTimers = useCallback(() => {
+		if (smartHoverTimer.current !== null) {
+			window.clearTimeout(smartHoverTimer.current);
+			smartHoverTimer.current = null;
+		}
+		if (smartHoverCloseTimer.current !== null) {
+			window.clearTimeout(smartHoverCloseTimer.current);
+			smartHoverCloseTimer.current = null;
+		}
+	}, []);
+
+	const handleChipHover = useCallback((slot: { id: number; files: unknown[] }, chip: HTMLElement, entering: boolean) => {
+		cancelSmartHoverTimers();
+		if (entering) {
+			smartHoverTimer.current = window.setTimeout(() => {
+				smartHoverTimer.current = null;
+				// A context menu is an explicit interaction. It must win over a
+				// hover callback that was already queued before the right-click.
+				if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
+				// The engine rebuilds hit-layer chips on sync; the captured chip
+				// element may be detached by now. Re-query the live chip so the
+				// anchor rect is not (0, 0).
+				const liveChip = document.querySelector<HTMLElement>(`.inno-smart-chip[data-slot-id="${slot.id}"]`) ?? chip;
+				openSmartPanel("status", slot, liveChip);
+			}, SMART_HOVER_OPEN_MS);
+			return;
+		}
+		// Left the chip: if the status panel for this slot is open but the
+		// pointer did not move onto it, close it shortly (panel parity).
+		smartHoverCloseTimer.current = window.setTimeout(() => {
+			smartHoverCloseTimer.current = null;
+			const currentPanel = smartPanelRef.current;
+			// Do not let a chip mouseleave timer dismiss a context menu. Checking
+			// the menu state/DOM is more reliable than `:hover` while the portal is
+			// being mounted or while the pointer is still over the source chip.
+			if (currentPanel?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
+			if (currentPanel?.slotId !== slot.id) return;
+			const overPanel = document.querySelector(".inno-smart-panel:hover");
+			const overChip = document.querySelector(".inno-smart-chip:hover");
+			if (!overPanel && !overChip) updateSmartPanel(null);
+		}, 260);
+	}, [cancelSmartHoverTimers, openSmartPanel, updateSmartPanel]);
+
+	const highlightWorkspace = useCallback((paths: string[] | null) => {
+		window.dispatchEvent(new CustomEvent("inno-smart-highlight", { detail: paths }));
+	}, []);
+	const openSmartFilePreview = useCallback((path: string) => {
+		appStore.setRightPanelTab("preview");
+		workspaceStore.clearStreamingPreview();
+		void workspaceStore.selectFile(path);
+		void onPreviewFile(SMART_FILE_PREVIEW_WIDTH);
+	}, [onPreviewFile]);
+	const openChatAttachmentPreview = useCallback((file: AttachmentRef) => {
+		openSmartFilePreview(file.path);
+	}, [openSmartFilePreview]);
+
+	const engineRef = useSmartInput({
+		enabled: smartInputEnabled,
+		remountKey: isWelcome ? "welcome" : "session",
+		textareaRef: inputRef,
+		mirrorRef,
+		hitRef,
+		getSettings: () => smartSettings,
+		takeAttachment,
+		returnAttachment,
+		onChange: handleSmartChange,
+		onSnapshot: (snapshot) => {
+			setSmartHasSlots(snapshot.slotCount > 0);
+			if (smartBoundFileCountRef.current !== snapshot.boundFileCount) {
+				smartBoundFileCountRef.current = snapshot.boundFileCount;
+				setSmartPanelRefresh((value) => value + 1);
+			}
+		},
+		onOpenStatusPanel: (slot, chip) => openSmartPanel("status", slot, chip),
+		onOpenFillMenu: (slot, chip) => openSmartPanel("fill", slot, chip),
+		 onBubbleContextMenu: (event, slot, chip) => {
+			// Right-clicking a filled bubble can race with the hover open/close
+			// timers. A context menu is an explicit interaction and must not be
+			// replaced by the hover status panel or dismissed by its timer.
+			cancelSmartHoverTimers();
+			const rect = chip.getBoundingClientRect();
+			updateSmartPanel({ kind: "menu", slotId: slot.id, anchor: { left: rect.left, bottom: rect.bottom }, x: event.clientX, y: event.clientY });
+		},
+		onBubbleClose: (slot) => {
+			cancelSmartHoverTimers();
+			if (smartPanelRef.current?.slotId === slot.id) updateSmartPanel(null);
+		},
+		onChipHover: handleChipHover,
+		onWorkspaceHighlight: highlightWorkspace,
+	});
+
+	// Rule toggles are persisted without remounting the composer. Refresh the
+	// mirror immediately so a keyword already present in the draft reflects the
+	// new rule state as soon as the save response arrives.
+	useEffect(() => {
+		engineRef.current?.syncNow();
+	}, [smartSettings]);
+
 	const buildSessionInput = useCallback((): CreateSessionInput | { __error: string } => {
-		// Simple Mode: no workspace chooser. Direct chat always goes to a temp
-		// workspace; presets are opened via openPreset into their own workspace.
-		if (simpleMode) return { newWorkspace: { isTemp: true } };
-		if (wsMode === "temp") return { newWorkspace: { isTemp: true } };
+		if (simpleMode || wsMode === "temp") return { newWorkspace: { isTemp: true } };
 		if (wsMode === "new") {
 			const trimmed = wsName.trim();
 			if (!trimmed) return { __error: t("chat.errWsName") };
@@ -715,45 +714,87 @@ export function ChatCenter() {
 		return { workspaceId: wsExistingId };
 	}, [simpleMode, wsMode, wsName, wsExistingId, t]);
 
-	// Load presets from the remote content hub once when the welcome screen is
-	// shown in Simple Mode. Falls back to an empty list on failure (offline /
-	// hub unreachable) so the composer still works.
-	useEffect(() => {
-		if (isWelcome && simpleMode && presets.length === 0) {
-			void listRemotePresets().then(setPresets).catch(() => setPresets([]));
+	const loadPresets = useCallback(async (forceRefresh = false) => {
+		setPresetsRefreshError(null);
+		if (forceRefresh) {
+			cancelPresetRefreshStatusTimer();
+			setPresetRefreshStatus(null);
 		}
-	}, [isWelcome, simpleMode, presets.length]);
+		if (!forceRefresh) {
+			const cached = readCachedPresets();
+			if (cached !== null) {
+				setPresets(cached);
+				setPresetsLoaded(true);
+				setIsLoadingPresets(false);
+				return;
+			}
+		}
+		if (forceRefresh) {
+			setIsRefreshingPresets(true);
+		} else {
+			setIsLoadingPresets(true);
+		}
+		try {
+			const next = await fetchPresetList(forceRefresh);
+			setPresets(next);
+			setPresetsLoaded(true);
+			if (forceRefresh) {
+				showPresetRefreshStatus("success");
+			}
+		} catch {
+			// Keep the last successful list visible and avoid leaking transport
+			// details such as the English "fetch failed" into the localized UI.
+			setPresetsRefreshError(t("presets.refreshFailed"));
+			showPresetRefreshStatus("error");
+		} finally {
+			setIsLoadingPresets(false);
+			setIsRefreshingPresets(false);
+		}
+	}, [cancelPresetRefreshStatusTimer, showPresetRefreshStatus, t]);
 
-	// One-click open: instantiate the preset into a fresh workspace + session and
-	// reveal it in the right panel.
+	// Refresh the preset catalog once when the app first opens in Simple Mode.
+	// ChatCenter stays mounted across session changes, so this also works when
+	// the app restores an existing session instead of showing the welcome view.
+	// Cached cards render immediately; the forced request updates them in the
+	// background and reuses the same success/error indicator as manual refresh.
+	useEffect(() => {
+		if (!simpleMode || presetAutoRefreshStartedRef.current) return;
+		presetAutoRefreshStartedRef.current = true;
+		void loadPresets(true);
+	}, [simpleMode, loadPresets]);
+
 	const openPreset = useCallback((presetId: string) => {
 		setWsError("");
 		setOpeningPresetId(presetId);
 		void (async () => {
 			try {
-				await sessionsStore.createSessionWith({ presetId });
-				appStore.setRightPanelTab("preview");
-				appStore.setWorkspaceWidth(560);
-				appStore.setWorkspaceMode("half");
+				await Promise.all([
+					sessionsStore.createSessionWith({ presetId }),
+					onOpenPresetPanels(),
+				]);
 			} catch (err) {
-				setWsError(err instanceof Error ? err.message : t("chat.errOpenPreset"));
+				const unavailable = err instanceof ApiError
+					&& err.status === 404
+					&& err.data?.code === "PRESET_UNAVAILABLE";
+				if (unavailable) {
+					setPresets((current) => current.filter((preset) => preset.id !== presetId));
+					removeCachedPreset(presetId);
+				} else {
+					setWsError(err instanceof Error ? err.message : t("chat.errOpenPreset"));
+				}
 			} finally {
 				setOpeningPresetId(null);
 			}
 		})();
-	}, [t]);
+	}, [onOpenPresetPanels, t]);
 
 	const handleSend = useCallback(() => {
-		const rawValue = inputRef.current?.value ?? "";
-		// Replace any paste-placeholder tokens (e.g. «已粘贴 N 行» / «Pasted N lines»)
-		// with the real pasted text before sending.
-		const expandPaste = (s: string) => {
-			if (!pasteBlock) return s;
-			// Token format from common.pasteCollapsed: «已粘贴 N 行» (zh) or
-			// «Pasted N lines» (en). Replace every occurrence with the real text.
-			return s.replace(/«[^»]*»/g, pasteBlock.text);
-		};
-		const input = expandPaste(rawValue).trim();
+		const engine = engineRef.current;
+		const outgoing = engine ? engine.buildOutgoing() : null;
+		// Smart input active → the visible text already has tokens restored to
+		// their plain words; word indices were computed against exactly this text.
+		const rawValue = outgoing ? outgoing.visibleText : inputRef.current?.value ?? draftRef.current;
+		const input = [rawValue.trim(), ...pasteBlocks.map((block) => block.text.trim())].filter(Boolean).join("\n\n");
 		if ((!input && uploads.length === 0 && inlineImages.length === 0) || chat.isSending || isUploading) return;
 		shouldStickToBottomRef.current = true;
 		const pendingUploads = [...uploads];
@@ -761,12 +802,13 @@ export function ChatCenter() {
 
 		const resetComposer = () => {
 			draftRef.current = "";
+			setDraftValue("");
+			setDraftHasContent(false);
 			if (inputRef.current) {
 				inputRef.current.value = "";
-				inputRef.current.style.height = "auto";
-				inputRef.current.style.overflowY = "hidden";
+				resizeInput();
 			}
-			setPasteBlock(null);
+			setPasteBlocks([]);
 		};
 
 		void (async () => {
@@ -780,84 +822,251 @@ export function ChatCenter() {
 						return;
 					}
 					setWsError("");
-					// Remember the workspace choice so the next new chat resumes it (P3).
 					if (!simpleMode) rememberWsChoice(wsMode, wsExistingId);
 					await sessionsStore.createSessionWith(wsInput);
 					targetSessionId = sessionsStore.currentSessionId;
 				}
 
-				const targetWorkspaceId = workspaceStore.activeWorkspaceId
-					?? (isWelcome ? undefined : uploadWorkspaceId ?? undefined);
-				if (pendingUploads.length > 0 && targetWorkspaceId === undefined) {
-					throw new Error(t("chat.uploadHint"));
-				}
+				const targetWorkspaceId = workspaceStore.activeWorkspaceId ?? uploadWorkspaceId ?? undefined;
+				const toUpload = pendingUploads.filter((item) => item.source === "local" && item.status !== "failed" && item.file);
+				const enginePending = outgoing?.pendingFiles ?? [];
+				if ((toUpload.length > 0 || enginePending.length > 0) && targetWorkspaceId === undefined) throw new Error(t("chat.uploadHint"));
 
-				let uploadedFiles: Array<{ fileName: string; path: string }> = [];
-				if (pendingUploads.length > 0) {
-					const uploadItems = await Promise.all(
-						pendingUploads.map(async ({ path, file }) => ({
-							path,
-							dataBase64: arrayBufferToBase64(await file.arrayBuffer()),
-						})),
-					);
-					const result = await uploadWorkspaceFiles(
-						uploadItems,
-						targetWorkspaceId,
-					);
-					uploadedFiles = (result.uploaded ?? []).map((node) => ({
-						fileName: node.name,
-						path: node.path,
-					}));
-					appStore.setRightPanelTab("preview");
-					if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
-					if (workspaceStore.activeWorkspaceId !== targetWorkspaceId) {
-						await workspaceStore.setActiveWorkspace(targetWorkspaceId ?? null);
-					} else {
-						await workspaceStore.loadTree();
+				// Local files upload one-by-one only after send; failures stay in the
+				// attachment row as retryable instead of blocking the message.
+				// Workspace files are already on the server — no upload.
+				const loose: AttachmentRef[] = [];
+				const failedNames: string[] = [];
+				for (const item of pendingUploads) {
+					if (item.source === "workspace") {
+						loose.push({ path: item.path, kind: kindFromName(item.path), source: "workspace" });
+						continue;
+					}
+					if (!item.file || item.status === "failed") {
+						if (item.status === "failed") failedNames.push(item.fileName);
+						continue;
+					}
+					const key = item.path;
+					const patch = (patchItem: Partial<PendingUpload>) => setUploads((current) =>
+						current.map((entry) => entry.path === key && entry.source === "local" ? { ...entry, ...patchItem } : entry));
+					patch({ status: "uploading", pct: 0 });
+					try {
+						const dataBase64 = arrayBufferToBase64(await item.file.arrayBuffer());
+						const node = await uploadWorkspaceFileWithProgress(
+							{ path: item.path, dataBase64 },
+							targetWorkspaceId,
+							(loaded, total) => patch({ pct: total > 0 ? Math.min(100, (loaded / total) * 100) : 0 }),
+						);
+						loose.push({ path: node.path, kind: kindFromName(node.path), source: "upload" });
+						patch({ status: "ready", pct: 100, path: node.path });
+					} catch {
+						patch({ status: "failed", pct: 0 });
+						failedNames.push(item.fileName);
 					}
 				}
 
-				const uploadNote = uploadedFiles.length > 0
-					? `\n\n${t("chat.uploadedToWorkspace")}\n${uploadedFiles.map((file) => `- ${file.fileName}: ${file.path}`).join("\n")}`
-					: "";
-				const messageContent = `${input}${uploadNote}` || (pendingImages.length > 0 ? t("chat.describeImage") : "");
-				const imagesToSend = pendingImages.length > 0
-					? pendingImages.map(({ data, mimeType }) => ({ data, mimeType }))
-					: undefined;
+				// Local files bound to keyword bubbles upload through the same
+				// per-file pipeline; successes fold back into their bindings,
+				// failures stay retryable and skip this message.
+				const uploadedForBindings: Array<{ word: string; wordIndex: number; uid: number; path: string }> = [];
+				let engineSkipped = 0;
+				if (engine && outgoing) {
+					for (const pending of outgoing.pendingFiles) {
+						const uid = pending.file.uid;
+						engine.setUploadProgress(uid, 0);
+						try {
+							const dataBase64 = arrayBufferToBase64(await pending.file.file.arrayBuffer());
+							const node = await uploadWorkspaceFileWithProgress(
+								{ path: pending.file.path, dataBase64 },
+								targetWorkspaceId,
+								(loaded, total) => engine.setUploadProgress(uid, total > 0 ? Math.min(100, (loaded / total) * 100) : 0),
+							);
+							engine.completeUpload(uid, node.path);
+							uploadedForBindings.push({ word: pending.word, wordIndex: pending.wordIndex, uid, path: node.path });
+						} catch {
+							engine.failUpload(uid);
+							engineSkipped++;
+						}
+					}
+				}
+
+				if (loose.length > 0 || pendingUploads.some((item) => item.source === "workspace") || uploadedForBindings.length > 0) {
+					appStore.setRightPanelTab("preview");
+					if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
+					if (workspaceStore.activeWorkspaceId !== targetWorkspaceId) await workspaceStore.setActiveWorkspace(targetWorkspaceId ?? null);
+					else await workspaceStore.loadTree();
+				}
+
+				const imagesToSend = pendingImages.length > 0 ? pendingImages.map(({ data, mimeType }) => ({ data, mimeType })) : undefined;
+				const bindings = engine && outgoing
+					? engine.finalizeBindings(outgoing.readyBindings, uploadedForBindings)
+					: [];
+				const attachments = bindings.length > 0 || loose.length > 0 ? { bindings, loose } : undefined;
+				const hasAttachments = Boolean(
+					attachments && (
+						attachments.loose.length > 0
+						|| attachments.bindings.some((binding) => binding.files.length > 0)
+					),
+				);
+				const messageContent = input || (
+					pendingImages.length > 0
+						? t("chat.describeImage")
+						: hasAttachments
+							? t("chat.describeAttachment")
+							: ""
+				);
 
 				resetComposer();
-				setUploads([]);
+				engine?.postSendCleanup();
+				setUploads((current) => current.filter((entry) => entry.status === "failed"));
 				setInlineImages([]);
 				setWsError("");
-				void chatStore.send(messageContent, imagesToSend, targetSessionId);
-			} catch (err) {
-				setWsError(err instanceof Error ? err.message : t("chat.errCreateSession"));
+				const skippedTotal = failedNames.length + engineSkipped;
+				if (skippedTotal > 0) {
+					showSmartToast(t("chat.smartInput.uploadSkippedCount", "有 {{count}} 个文件未上传成功，未随消息发送，已回到附件栏可重试", { count: skippedTotal }), true);
+				}
+				void chatStore.send(messageContent, imagesToSend, targetSessionId, attachments);
+			} catch (error) {
+				setWsError(error instanceof Error ? error.message : t("chat.errCreateSession"));
 			} finally {
 				setIsUploading(false);
 			}
 		})();
-	}, [isWelcome, buildSessionInput, uploads, inlineImages, chat.isSending, isUploading, simpleMode, wsMode, wsExistingId, uploadWorkspaceId, pasteBlock, sessions.currentSessionId, t]);
+	}, [
+		buildSessionInput,
+		chat.isSending,
+		inlineImages,
+		isUploading,
+		isWelcome,
+		pasteBlocks,
+		resizeInput,
+		sessions.currentSessionId,
+		showSmartToast,
+		simpleMode,
+		t,
+		uploadWorkspaceId,
+		uploads,
+		wsExistingId,
+		wsMode,
+	]);
 
-	const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-		// Don't fire Send while the user is composing with an IME (e.g. picking
-		// a Chinese / Japanese candidate). The Enter that selects a candidate
-		// reports keyCode 229 and / or `isComposing = true` and must not be
-		// treated as "submit".
+	const setComposerText = useCallback((text: string) => {
+		draftRef.current = text;
+		setDraftValue(text);
+		const el = inputRef.current;
+		if (el) {
+			el.value = text;
+			el.focus();
+			resizeInput();
+		}
+	}, [resizeInput]);
+
+	const slashQuery = slashQueryFromDraft(draftValue);
+	const slashPaletteOpen = slashQuery !== null && slashDismissedFor !== draftValue && !chat.isSending;
+
+	const slashAppActions = useMemo(() => {
+		const actions: Array<{ action: SlashPaletteAction; name: string; description: string }> = [];
+		// On the welcome screen the composer is already a fresh session draft,
+		// so "new chat" would be a no-op.
+		if (!isWelcome) actions.push({ action: "new-chat", name: "new", description: t("chat.slashPalette.newChatDesc") });
+		actions.push({ action: "model", name: "model", description: t("chat.slashPalette.modelDesc") });
+		// Simple Mode hides the Notebook/Profile surfaces, so don't offer them.
+		if (!simpleMode) {
+			actions.push({ action: "profile", name: "profile", description: t("chat.slashPalette.profileDesc") });
+		}
+		actions.push({ action: "jobs", name: "jobs", description: t("chat.slashPalette.jobsDesc") });
+		actions.push({ action: "skills", name: "skills", description: t("chat.slashPalette.skillsDesc") });
+		actions.push({ action: "settings", name: "settings", description: t("chat.slashPalette.settingsDesc") });
+		return actions;
+	}, [isWelcome, simpleMode, t]);
+
+	const slashEntries = useMemo(() => {
+		if (slashQuery === null) return [];
+		// Bundled plugins' extension commands (rpiv-todo, pi-web-access, MCP
+		// adapter) are TUI overlays gated on ctx.hasUI — they no-op server-side,
+		// so only Inno's own webSafe commands are offered alongside skills and
+		// prompt templates (both expand into a normal turn).
+		const agentCommands = slashCommands.filter((command) => command.source !== "extension" || command.webSafe === true);
+		return buildSlashPaletteEntries(slashAppActions, agentCommands, slashQuery);
+	}, [slashAppActions, slashCommands, slashQuery]);
+
+	// Restart keyboard navigation from the top whenever the query changes.
+	useEffect(() => {
+		setSlashActiveIndex(0);
+	}, [slashQuery]);
+
+	const handleSlashSelect = useCallback((entry: SlashPaletteEntry) => {
+		if (entry.group === "app") {
+			setComposerText("");
+			const openRightPanelTab = (tab: "notebook" | "profile" | "skills" | "jobs") => {
+				appStore.setRightPanelTab(tab);
+				if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
+			};
+			switch (entry.action) {
+				case "new-chat": {
+					const workspaceId = workspaceStore.activeWorkspaceId;
+					if (workspaceId) sessionsStore.beginNewSessionIn(workspaceId);
+					else sessionsStore.beginNewSession();
+					break;
+				}
+				case "model":
+					setModelPickerOpen(true);
+					break;
+				case "profile":
+					openRightPanelTab("profile");
+					break;
+				case "jobs":
+					openRightPanelTab("jobs");
+					break;
+				case "skills":
+					openRightPanelTab("skills");
+					break;
+				case "settings":
+					appStore.openSettings();
+					break;
+			}
+			return;
+		}
+		// Agent command: stage "/name " in the composer so the user can add
+		// arguments; sending goes through the normal chat path, where the
+		// backend session expands skills/templates or runs extension commands.
+		setComposerText(`/${entry.name} `);
+	}, [setComposerText]);
+
+	const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		if (slashPaletteOpen) {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setSlashDismissedFor(draftValue);
+				return;
+			}
+			if (slashEntries.length > 0) {
+				if (event.key === "ArrowDown") {
+					event.preventDefault();
+					setSlashActiveIndex((index) => (index + 1) % slashEntries.length);
+					return;
+				}
+				if (event.key === "ArrowUp") {
+					event.preventDefault();
+					setSlashActiveIndex((index) => (index - 1 + slashEntries.length) % slashEntries.length);
+					return;
+				}
+				if (event.key === "Enter" || event.key === "Tab") {
+					event.preventDefault();
+					handleSlashSelect(slashEntries[Math.min(slashActiveIndex, slashEntries.length - 1)]);
+					return;
+				}
+			}
+		}
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
 			handleSend();
 		}
-	}, [handleSend]);
+	}, [handleSend, slashPaletteOpen, slashEntries, slashActiveIndex, draftValue, handleSlashSelect]);
 
-	const handleStop = useCallback(() => {
-		chatStore.cancel();
-	}, []);
-
-	const handleReconnect = useCallback(() => {
-		void chatStore.reconnect();
-	}, []);
-
+	const handleStop = useCallback(() => chatStore.cancel(), []);
+	const handleReconnect = useCallback(() => void chatStore.reconnect(), []);
 	const handleRetry = useCallback(() => {
 		shouldStickToBottomRef.current = true;
 		void chatStore.retry();
@@ -865,459 +1074,291 @@ export function ChatCenter() {
 
 	const addImageFiles = useCallback((files: File[]) => {
 		files.forEach((file) => {
-			void prepareInlineImage(file).then((prepared) => {
-				setInlineImages((prev) => [...prev, prepared]);
-			});
+			void prepareInlineImage(file).then((prepared) => setInlineImages((prev) => [...prev, prepared]));
 		});
 	}, []);
 
-	const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-		// Image paste: keep existing behavior.
-		const imageItems = Array.from(e.clipboardData.items).filter((item) => item.type.startsWith("image/"));
+	const addLocalFiles = useCallback((files: File[]) => {
+		if (files.length === 0) return;
+		setWsError("");
+		setUploads((current) => [...current, ...files.map(localPendingUpload)]);
+	}, []);
+
+	const showPasteInTextField = useCallback((blockId: number) => {
+		const el = inputRef.current;
+		const block = pasteBlocks.find((item) => item.id === blockId);
+		if (!block || !el) return;
+		const start = Math.min(el.selectionStart, el.value.length);
+		const end = Math.min(el.selectionEnd, el.value.length);
+		el.focus();
+		el.setRangeText(block.text, start, end, "end");
+		draftRef.current = el.value;
+		setDraftValue(el.value);
+		setDraftHasContent(el.value.trim().length > 0);
+		setPasteBlocks((prev) => prev.filter((item) => item.id !== blockId));
+		resizeInput();
+		// setRangeText is a programmatic edit, so do not wait for the normal
+		// typing debounce before refreshing the transparent smart-input mirror.
+		engineRef.current?.syncNow();
+		// setRangeText can update scrollTop without emitting a native scroll
+		// event; keep the smart-input mirror aligned with the textarea viewport.
+		el.dispatchEvent(new Event("scroll"));
+	}, [pasteBlocks, resizeInput]);
+
+	const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+		// SmartInputEngine handles its private clipboard format before React's
+		// delegated paste listener. Do not also create a plain-text paste block.
+		if (event.defaultPrevented) return;
+		// Files copied from Finder/the desktop arrive through the clipboard as
+		// DataTransfer files. Treat them exactly like files dropped onto the
+		// composer: stage them in the attachment row above the textarea instead
+		// of letting smart input turn a copied path into an inline bubble.
+		const clipboardFiles = Array.from(event.clipboardData.files ?? []);
+		if (clipboardFiles.length === 0) {
+			for (const item of Array.from(event.clipboardData.items)) {
+				if (item.kind !== "file") continue;
+				const file = item.getAsFile();
+				if (file) clipboardFiles.push(file);
+			}
+		}
+		if (clipboardFiles.length > 0) {
+			event.preventDefault();
+			addLocalFiles(clipboardFiles);
+			return;
+		}
+		const imageItems = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/"));
 		if (imageItems.length > 0) {
-			e.preventDefault();
-			const files = imageItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null);
+			event.preventDefault();
+			const files = imageItems.map((item) => item.getAsFile()).filter((file): file is File => file !== null);
 			addImageFiles(files);
 			return;
 		}
-		// Large text paste: insert a placeholder token at the caret and hold
-		// the real text in `pasteBlock`. The user can keep typing before/after
-		// the token. On send the token is replaced with the real text.
-		const text = e.clipboardData.getData("text/plain");
-		if (text) {
-			const lineCount = text.split(/\r\n|\r|\n/).length;
-			const charCount = text.length;
-			if (lineCount > PASTE_COLLAPSE_LINES || charCount > PASTE_COLLAPSE_CHARS) {
-				e.preventDefault();
-				const token = t("common.pasteCollapsed", { count: lineCount });
-				const el = inputRef.current;
-				if (el) {
-					const start = el.selectionStart;
-					const end = el.selectionEnd;
-					const before = el.value.slice(0, start);
-					const after = el.value.slice(end);
-					el.value = `${before}${token}${after}`;
-					// Place caret right after the inserted token.
-					const caret = start + token.length;
-					el.setSelectionRange(caret, caret);
-					el.dispatchEvent(new Event("input", { bubbles: true }));
-				}
-				// Merge into any existing paste block (rare: second large paste
-				// before sending the first). Keep total text + recompute lines.
-				setPasteBlock((prev) => {
-					if (!prev) return { text, lineCount };
-					const merged = `${prev.text}\n${text}`;
-					return { text: merged, lineCount: merged.split(/\r\n|\r|\n/).length };
-				});
-			}
+		const text = event.clipboardData.getData("text/plain");
+		if (text && isLargeTextPaste(text)) {
+			event.preventDefault();
+			const id = pasteBlockIdRef.current++;
+			setPasteBlocks((prev) => [...prev, { id, text }]);
 		}
-	}, [addImageFiles, t]);
+	}, [addImageFiles, addLocalFiles]);
 
-	const handleImageFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-		const files = Array.from(event.target.files ?? []).filter((f) => f.type.startsWith("image/"));
+	const handleImageFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+		const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/"));
 		if (files.length === 0) return;
 		addImageFiles(files);
-		if (event.target) event.target.value = "";
+		event.target.value = "";
 	}, [addImageFiles]);
-
 	const removeInlineImage = useCallback((index: number) => {
-		setInlineImages((prev) => prev.filter((_, i) => i !== index));
+		setInlineImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
 	}, []);
 
-	const handleFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+	const handleFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(event.target.files ?? []);
 		if (files.length === 0) return;
+		addLocalFiles(files);
+		event.target.value = "";
+	}, [addLocalFiles]);
+
+	const pickWorkspaceFiles = useCallback((paths: string[]) => {
+		const uniquePaths = [...new Set(paths.filter(Boolean))];
+		if (uniquePaths.length === 0) return;
 		setWsError("");
-		const items = files.map((file) => ({
-			fileName: file.name,
-			path: file.name.replace(/[\\/?%*:|"<>]/g, "_").trim() || `upload-${Date.now()}`,
-			file,
-		}));
-		setUploads((current) => [...current, ...items]);
-		if (event.target) event.target.value = "";
+		setUploads((current) => {
+			const existing = new Set(current.filter((item) => item.source === "workspace").map((item) => item.path));
+			const additions = uniquePaths
+				.filter((path) => !existing.has(path))
+				.map((path) => workspacePendingUpload(path));
+			return additions.length > 0 ? [...current, ...additions] : current;
+		});
+	}, []);
+
+	const retryUpload = useCallback((index: number) => {
+		setUploads((current) => current.map((item, currentIndex) =>
+			currentIndex === index && item.status === "failed" ? { ...item, status: "ready", pct: 0 } : item));
 	}, []);
 
 	const removeUpload = useCallback((index: number) => {
-		setUploads((current) => current.filter((_, i: number) => i !== index));
+		setUploads((current) => current.filter((_, currentIndex) => currentIndex !== index));
 	}, []);
 
-	const renderUploadChips = () => (
-		uploads.length > 0 ? (
-			<div className="mb-2 flex flex-wrap gap-1.5">
-				{uploads.map((file, index: number) => (
-					<span key={`${file.path}-${index}`} className="inline-flex items-center gap-1 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1 text-xs shadow-sm">
-						<span className="max-w-[220px] truncate">{file.fileName}</span>
-						<span className="text-[var(--inno-text-muted)]">{file.path}</span>
-						<button className="text-[var(--inno-text-muted)] hover:text-[var(--inno-text)]" title={t("chat.removeUpload")} onClick={() => removeUpload(index)}>
-							<X size={14} />
-						</button>
-					</span>
-				))}
-			</div>
-		) : null
-	);
-
-	const renderInlineImagePreviews = () => (
-		inlineImages.length > 0 ? (
-			<div className="mb-2 flex flex-wrap gap-1.5">
-				{inlineImages.map((img, index) => (
-					<span key={`${img.name}-${index}`} className="relative inline-flex items-center gap-1 rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] p-1 shadow-sm">
-						<img src={img.previewUrl} alt={img.name} className="h-12 w-12 rounded object-cover" />
-						<button
-							className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] text-[var(--inno-text-muted)] shadow-sm hover:bg-[var(--inno-accent-soft)] hover:text-[var(--inno-accent)]"
-							title={t("chat.removeImage")}
-							onClick={() => removeInlineImage(index)}
-						>
-							<X size={12} />
-						</button>
-					</span>
-				))}
-			</div>
-		) : null
-	);
-
-	const renderQuestionHint = () => (
-		chat.pendingQuestion ? (
-			<div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--inno-border)] bg-[var(--inno-accent-soft)] px-3 py-1.5 text-xs text-[var(--inno-text-muted)]">
-				<AlertTriangle size={14} className="shrink-0 text-[var(--inno-warning)]" />
-				<span>{t("common.questionPending")}</span>
-				<button
-					className="ml-auto shrink-0 rounded px-2 py-0.5 font-medium text-[var(--inno-warning)] hover:bg-[var(--inno-surface-muted)]"
-					onClick={() => {
-						const el = scrollRef.current;
-						if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-					}}
-				>
-					{t("common.questionPendingJump")}
-				</button>
-			</div>
-		) : null
-	);
-
-	const renderBusyBlocker = () => (
-		sessions.busyBlocker ? (
-			<div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--inno-border)] bg-[var(--inno-accent-soft)] px-3 py-1.5 text-xs text-[var(--inno-text-muted)]">
-				<AlertTriangle size={14} className="shrink-0 text-[var(--inno-warning)]" />
-				<span>{t(sessions.busyBlocker.questionPending ? "common.sessionBusyQuestion" : "common.sessionBusy")}</span>
-				<button
-					className="ml-auto shrink-0 rounded px-2 py-0.5 font-medium text-[var(--inno-warning)] hover:bg-[var(--inno-surface-muted)]"
-					onClick={() => void sessionsStore.stopBusyBlockerAndRetry()}
-				>
-					{t("common.sessionBusyStop")}
-				</button>
-				<button
-					className="shrink-0 rounded px-2 py-0.5 text-[var(--inno-text-subtle)] hover:bg-[var(--inno-surface-muted)]"
-					onClick={() => sessionsStore.dismissBusyBlocker()}
-				>
-					{t("common.sessionBusyDismiss")}
-				</button>
-			</div>
-		) : null
-	);
-
-	const renderComposer = (placeholder: string) => (
-		<div className="inno-composer flex items-end gap-2 rounded-lg p-2">
-			<input ref={fileInputRef} id="file-input" type="file" className="hidden" multiple onChange={handleFiles} />
-			<input ref={imageInputRef} id="image-input" type="file" className="hidden" multiple accept="image/*" onChange={handleImageFiles} />
-			<button className="inno-icon-button flex h-9 w-9 shrink-0 rounded-md disabled:opacity-50" title={t("chat.uploadFiles")} disabled={chat.isSending || isUploading} onClick={() => fileInputRef.current?.click()}>
-				{isUploading ? <Spinner size={16} /> : <Paperclip size={16} />}
-			</button>
-			<button className="inno-icon-button flex h-9 w-9 shrink-0 rounded-md disabled:opacity-50" title={currentModelSupportsNativeImages ? t("chat.attachImage") : t("chat.attachImageViaOcr")} disabled={chat.isSending || isUploading} onClick={() => imageInputRef.current?.click()}>
-				<Image size={16} />
-			</button>
-			<textarea
-				ref={inputRef}
-				id="chat-input"
-				defaultValue={draftRef.current}
-				className="min-h-[36px] max-h-[200px] flex-1 resize-none overflow-hidden rounded-md border-0 bg-transparent px-2 py-2 text-sm leading-5 text-[var(--inno-text)] outline-none placeholder:text-[var(--inno-text-subtle)] disabled:opacity-60"
-				placeholder={placeholder}
-				rows={1}
-				onKeyDown={handleKeyDown}
-				onInput={handleInput}
-				onPaste={handlePaste}
-				disabled={chat.isSending || isUploading || !!chat.pendingQuestion}
+	const renderComposer = (placeholder: string) => {
+		// ChatUploadChips renders null on an empty list.
+		const uploadChips = (
+			<ChatUploadChips
+				uploads={uploads}
+				onRemove={removeUpload}
+				onRetry={retryUpload}
+				onInsertAsBubble={smartInputEnabled && smartSettings?.allowRightClick !== false
+					? (path) => {
+						const item = takeAttachment(path);
+							if (item) engineRef.current?.insertAttachmentAsBubble(item);
+						}
+						: undefined}
+				rules={smartSettings?.rules}
+				workspaceId={activeWorkspaceId ?? uploadWorkspaceId ?? undefined}
+				onOpenWorkspaceFile={openSmartFilePreview}
 			/>
-			{chat.isSending ? (
-				<>
-					{chat.canReconnect ? (
-						<button
-							className="inno-icon-button flex h-9 w-9 shrink-0 rounded-md"
-							title={t("chat.reconnect", "重新连接")}
-							onClick={handleReconnect}
-						>
-							<RotateCcw size={16} />
-						</button>
-					) : null}
-					<button
-						className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--inno-danger)] text-white transition-opacity hover:opacity-90 active:scale-[0.97]"
-						title={t("chat.stopGeneration")}
-						onClick={handleStop}
-					>
-						<Square size={16} />
-					</button>
-				</>
-			) : (
-				<>
-					{chat.lastUserPrompt ? (
-						<button
-							className="inno-icon-button flex h-9 w-9 shrink-0 rounded-md disabled:opacity-50"
-							title={t("chat.retryLast")}
-							disabled={isUploading}
-							onClick={handleRetry}
-						>
-							<RotateCcw size={16} />
-						</button>
-					) : null}
-					<button
-						className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md transition-colors ${isUploading ? "cursor-not-allowed bg-[var(--inno-surface-muted)] text-[var(--inno-text-muted)]" : "inno-primary-button"}`}
-						title={t("chat.send")}
-						disabled={isUploading}
-						onClick={handleSend}
-					>
-						<SendHorizonal size={16} />
-					</button>
-				</>
-			)}
-		</div>
-	);
+		);
+		return (
+			<ChatComposer
+			inputRef={inputRef}
+			fileInputRef={fileInputRef}
+			imageInputRef={imageInputRef}
+			placeholder={placeholder}
+			defaultValue={draftRef.current}
+			inlineImages={inlineImages}
+			pasteBlocks={pasteBlocks}
+			uploadChips={uploadChips}
+			modelState={modelState}
+			modelOptions={modelOptions}
+			currentModel={currentModel}
+			smartInputControl={!isWelcome && !simpleMode ? (
+				<SmartInputControl
+					smartInputSettings={smartSettings}
+					onToggleSmartInput={toggleSmartInput}
+					onToggleSmartInputRule={toggleSmartInputRule}
+					smartInputSaving={smartInputState.isSavingSmartInput}
+					onOpenSmartInputSettings={openSmartInputSettings}
+					compact
+				/>
+			) : null}
+			modelPickerOpen={modelPickerOpen}
+			attachMenuOpen={attachMenuOpen}
+			workspaceFiles={workspaceFiles}
+			smartInputEnabled={smartInputEnabled}
+			mirrorRef={mirrorRef}
+			hitRef={hitRef}
+			chatIsSending={chat.isSending}
+			canReconnect={chat.canReconnect}
+			lastUserPrompt={chat.lastUserPrompt}
+			isUploading={isUploading}
+			hasSendableContent={hasSendableContent}
+			hasPendingQuestion={Boolean(chat.pendingQuestion)}
+			onInput={handleInput}
+			onCompositionStart={handleCompositionStart}
+			onCompositionEnd={handleCompositionEnd}
+			onKeyDown={handleKeyDown}
+			onPaste={handlePaste}
+			onFiles={handleFiles}
+			onImageFiles={handleImageFiles}
+			onRemoveInlineImage={removeInlineImage}
+			onShowPasteInTextField={showPasteInTextField}
+			onRemovePasteBlock={(blockId) => setPasteBlocks((prev) => prev.filter((block) => block.id !== blockId))}
+			onToggleModelPicker={toggleModelPicker}
+			onCloseModelPicker={closeModelPicker}
+			onModelSelect={handleModelSelect}
+			onOpenModelSettings={openModelSettings}
+			onToggleAttachMenu={() => setAttachMenuOpen((open) => !open)}
+			onCloseAttachMenu={() => setAttachMenuOpen(false)}
+			onPickWorkspaceFiles={pickWorkspaceFiles}
+			onDropFiles={addLocalFiles}
+			onSend={handleSend}
+			onStop={handleStop}
+			onReconnect={handleReconnect}
+			onRetry={handleRetry}
+			slashPalette={slashPaletteOpen ? (
+				<SlashCommandPalette
+					entries={slashEntries}
+					activeIndex={slashActiveIndex}
+					query={slashQuery ?? ""}
+					onSelect={handleSlashSelect}
+					onActiveChange={setSlashActiveIndex}
+				/>
+			) : undefined}
+			/>
+		);
+	};
 
-	/* ── Welcome layout: centered composer + inline workspace chooser ── */
+	const selectedWorkspaceId = wsMode === "existing" ? wsExistingId : null;
+	const selectedKind: "workspace" | "temp" | "new" = wsMode === "existing" ? "workspace" : wsMode;
+	const workspaceContext = !simpleMode ? (
+			<WorkspaceContext
+				workspaces={workspaces.list}
+				selectedWorkspaceId={selectedWorkspaceId}
+				selectedKind={selectedKind}
+				newWorkspaceName={wsMode === "new" ? wsName : ""}
+				busy={isSwitchingWorkspace}
+				disabled={isUploading || Boolean(chat.pendingQuestion)}
+				onChange={handleWorkspaceChange}
+				smartInputSettings={smartSettings}
+				onToggleSmartInput={toggleSmartInput}
+				onToggleSmartInputRule={toggleSmartInputRule}
+				smartInputSaving={smartInputState.isSavingSmartInput}
+				onOpenSmartInputSettings={openSmartInputSettings}
+			/>
+	) : null;
+
+	const questionHint = chat.pendingQuestion ? <QuestionHint scrollRef={scrollRef} /> : null;
+	const busyBlocker = <BusyBlocker busyBlocker={sessions.busyBlocker} />;
+	const smartToastNode = smartToast && typeof document !== "undefined" ? createPortal(
+		<div className={`inno-smart-toast ${smartToast.error ? "is-error" : ""}`} role="status">{smartToast.message}</div>,
+		document.body,
+	) : null;
+	const smartOverlayNode = smartInputEnabled ? (
+		<SmartInputOverlay
+				engine={engineRef.current}
+				panel={smartPanel}
+				onClose={() => updateSmartPanel(null)}
+				onOpenPanel={updateSmartPanel}
+				workspaceFiles={workspaceFiles}
+				workspaceFilesLoading={workspaceTreeLoading || (workspaceTree === null && !workspaceTreeError)}
+				attachments={uploads}
+				takeAttachment={takeAttachment}
+				onWorkspaceHighlight={highlightWorkspace}
+				refreshKey={smartPanelRefresh}
+				onOpenFilePreview={openSmartFilePreview}
+			/>
+	) : null;
+
 	if (isWelcome) {
 		return (
-			<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
-				<div className="inno-chat-grid flex flex-1 min-h-0 justify-center overflow-y-auto px-4">
-					<div className="w-full max-w-2xl pt-[18vh] pb-12">
-						<div className="mb-6 flex flex-col items-center text-center">
-							<button
-								type="button"
-								onClick={toggleMode}
-								disabled={togglingMode}
-								title={simpleMode ? t("mode.currentSimpleClickNormal") : t("mode.currentNormalClickSimple")}
-								aria-label={simpleMode ? t("mode.switchToNormal") : t("mode.switchToSimple")}
-								className="flip-card-scene mb-3 rounded-xl outline-none focus-visible:shadow-[var(--inno-ring)] disabled:cursor-wait"
-							>
-								<motion.div
-									animate={{ rotateY: simpleMode ? 180 : 0 }}
-									transition={{ type: "spring", stiffness: 320, damping: 22 }}
-									className="flip-card flex h-12 w-12 items-center justify-center"
-								>
-									{/* Front — Normal mode */}
-									<span
-										className="flip-card-face absolute inset-0 flex items-center justify-center rounded-xl border border-[var(--inno-border)] bg-[var(--inno-surface)] text-base font-semibold text-[var(--inno-accent)] shadow-sm transition-colors hover:border-[var(--inno-accent)]"
-									>
-										IA
-									</span>
-									{/* Back — Simple mode */}
-									<span
-										className="flip-card-back absolute inset-0 flex items-center justify-center rounded-xl border border-[var(--inno-accent)] bg-[var(--inno-accent)] text-base font-semibold text-white shadow-sm"
-									>
-										IA
-									</span>
-								</motion.div>
-							</button>
-							<h2 className="text-lg font-medium text-[var(--inno-text)]">Inno Agent</h2>
-							{/* Explicit, labeled mode switch (P4): the flip logo above is a nice
-							    secondary affordance, but a worded pill makes the toggle
-							    discoverable instead of hidden behind an icon click. */}
-							<button
-								type="button"
-								onClick={toggleMode}
-								disabled={togglingMode}
-								className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2.5 py-1 text-[11px] text-[var(--inno-text-muted)] transition-colors hover:border-[var(--inno-accent)] hover:text-[var(--inno-accent)] disabled:cursor-wait disabled:opacity-60"
-							>
-								<span className={`h-1.5 w-1.5 rounded-full ${simpleMode ? "bg-[var(--inno-accent)]" : "bg-[var(--inno-border-strong)]"}`} />
-								{simpleMode ? t("mode.simpleShort") : t("mode.normalShort")}
-							</button>
-						</div>
-
-						{renderUploadChips()}
-						{renderInlineImagePreviews()}
-						{renderQuestionHint()}
-						{renderBusyBlocker()}
-						{renderComposer(t("chat.welcomePlaceholder"))}
-
-						{simpleMode && presets.length > 0 ? (
-							<PresetPicker
-								presets={presets}
-								openingPresetId={openingPresetId}
-								onOpen={openPreset}
-								query={presetQuery}
-								onQueryChange={setPresetQuery}
-								t={t}
-							/>
-						) : null}
-
-						{simpleMode ? null : preselectedWs ? (
-							<div className="mt-3 flex flex-wrap items-center gap-2">
-								<span className="text-xs text-[var(--inno-text-subtle)]">{t("workspace.title")}</span>
-								<span className="rounded-full bg-[var(--inno-accent-soft)] px-2.5 py-0.5 text-[11px] font-medium text-[var(--inno-accent)]">
-									{preselectedWs.name}
-								</span>
-								<span className="text-[10px] text-[var(--inno-text-subtle)]">{t("chat.newChatHere")}</span>
-							</div>
-						) : (
-							<div className="mt-3 flex flex-wrap items-center gap-2">
-								<span className="text-xs text-[var(--inno-text-subtle)]">{t("workspace.title")}</span>
-								<ModeChip selected={wsMode === "temp"} onClick={() => setWsMode("temp")}>{t("chat.wsTemp")}</ModeChip>
-								<ModeChip selected={wsMode === "new"} onClick={() => setWsMode("new")}>{t("chat.wsNew")}</ModeChip>
-								{selectableWorkspaces.length > 0 ? (
-									<ModeChip selected={wsMode === "existing"} onClick={() => setWsMode("existing")}>{t("chat.wsExisting")}</ModeChip>
-								) : null}
-								{wsMode === "new" ? (
-									<input
-										type="text"
-										placeholder={t("chat.wsNamePlaceholder")}
-										value={wsName}
-										onChange={(e) => setWsName(e.target.value)}
-										className="ml-1 w-[200px] rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-px text-[10px] leading-tight outline-none focus-visible:border-[var(--inno-focus-border)] focus-visible:outline-none focus-visible:shadow-[var(--inno-ring)]"
-									/>
-								) : null}
-								{wsMode === "existing" ? (
-									<select
-										value={wsExistingId}
-										onChange={(e) => setWsExistingId(e.target.value)}
-										className="ml-1 max-w-[220px] rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-px text-[10px] leading-tight outline-none focus-visible:border-[var(--inno-focus-border)] focus-visible:outline-none focus-visible:shadow-[var(--inno-ring)]"
-									>
-										<option value="">{t("chat.wsSelectPlaceholder")}</option>
-										{selectableWorkspaces.map((w) => (
-											<option key={w.id} value={w.id}>{w.name}</option>
-										))}
-									</select>
-								) : null}
-							</div>
-						)}
-
-						{wsError ? <p className="mt-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
-					</div>
-				</div>
-			</section>
+			<>
+			{smartToastNode}
+			{smartOverlayNode}
+			<ChatWelcome
+				welcomeLayoutRef={welcomeLayoutRef}
+				simpleMode={simpleMode}
+				togglingMode={togglingMode}
+				onToggleMode={toggleMode}
+				questionHint={questionHint}
+				busyBlocker={busyBlocker}
+				composer={renderComposer(t("chat.welcomePlaceholder"))}
+				workspaceContext={workspaceContext}
+				presets={presets}
+				presetsLoaded={presetsLoaded}
+				isLoadingPresets={isLoadingPresets}
+				isRefreshingPresets={isRefreshingPresets}
+				presetsRefreshError={presetsRefreshError}
+				presetRefreshStatus={presetRefreshStatus}
+				loadedPresetIds={loadedPresetIds}
+				onRefreshPresets={() => void loadPresets(true)}
+				openingPresetId={openingPresetId}
+				onOpenPreset={openPreset}
+				presetQuery={presetQuery}
+				onPresetQueryChange={setPresetQuery}
+				wsError={wsError}
+			/>
+			</>
 		);
 	}
 
-	/* ── Normal layout: scrollable messages + bottom composer ── */
 	return (
-		<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
-			<div className="conversation-stage relative flex-1 min-h-0">
-				<div
-					ref={scrollRef}
-					onScroll={handleChatScroll}
-					onWheel={markUserScrollGesture}
-					onTouchStart={markUserScrollGesture}
-					onPointerDown={handleScrollerPointerDown}
-					className="chat-scroll inno-chat-grid h-full min-h-0 overflow-y-auto px-4 py-4"
-				>
-					<div data-conversation-content className="mx-auto flex min-w-0 max-w-3xl flex-col gap-3">
-					{chat.isLoadingHistory && chat.messages.length === 0 ? (
-						<div className="flex h-full flex-col items-center justify-center pt-20 text-[var(--inno-text-muted)]">
-							<Spinner size={20} className="mb-3 text-[var(--inno-border-strong)]" />
-							<p className="text-sm">{t("chat.loadingSession")}</p>
-						</div>
-					) : null}
-
-					{!chat.isLoadingHistory && chat.messages.length === 0 && !chat.isSending ? (
-						<div className="flex flex-col items-center justify-center pt-20 text-center text-[var(--inno-text-muted)]">
-							<div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-[var(--inno-surface-muted)] text-[var(--inno-text-subtle)]">
-								<Sparkles size={18} />
-							</div>
-							<p className="text-sm font-medium text-[var(--inno-text)]">{t("chat.emptySessionTitle")}</p>
-							<p className="mt-1 text-xs">{t("chat.emptySessionHint")}</p>
-						</div>
-					) : null}
-
-					{(() => {
-						const channels = new Set(chat.messages.map((m) => m.channel).filter(Boolean));
-						const multiChannel = channels.size > 1;
-						return chat.messages.map((message, index) => {
-							const turnIndex = turnIndexByStartMessage.get(index);
-							return (
-								<div
-									key={`${message.timestamp}-${index}`}
-									data-conversation-turn={turnIndex}
-								>
-									<MessageBubble message={message} showChannel={multiChannel} />
-								</div>
-							);
-						});
-					})()}
-
-					{chat.isSending && chat.streamingActivity ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<div className="inno-message min-w-0 max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-[13px] text-[var(--inno-text-muted)] shadow-sm">
-								<div className="flex min-w-0 items-center gap-2">
-									<span className="inno-stream-status-dot is-streaming shrink-0" />
-									<Sparkles size={14} className="shrink-0 text-[var(--inno-accent)]" />
-									<span className="min-w-0 font-medium text-[var(--inno-text)]">{chat.streamingActivity}</span>
-									{chat.streamingActivityDetail ? (
-										<span className="min-w-0 truncate text-xs text-[var(--inno-text-subtle)]">{chat.streamingActivityDetail}</span>
-									) : null}
-								</div>
-							</div>
-						</motion.div>
-					) : null}
-
-					{chat.activeTools.length > 0 ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<div className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-accent-soft)] px-3 py-2 text-[13px]">
-								{chat.activeTools.map((tool) => (
-									<div key={tool.toolCallId} className="flex min-w-0 items-center gap-2 text-[var(--inno-text-muted)]">
-										<Spinner size={12} className="shrink-0" />
-										<span className="min-w-0 break-words font-mono text-xs [overflow-wrap:anywhere]">{tool.toolName}</span>
-									</div>
-								))}
-							</div>
-						</motion.div>
-					) : null}
-
-					{chat.completedTools.length > 0 ? <CompletedToolRecords tools={chat.completedTools} /> : null}
-
-					{/* Thinking + reply text bubbles — own store subscription, see above */}
-					<StreamingBubbles />
-
-					{chat.streamingError ? (
-						<motion.div
-							className="flex justify-start"
-							initial={{ opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.2, ease: "easeOut" }}
-						>
-							<div className="inno-message max-w-[78%]">
-								<ErrorBlock error={chat.streamingError} />
-							</div>
-						</motion.div>
-					) : null}
-
-					{chat.pendingQuestion ? (
-						<QuestionDialog pending={chat.pendingQuestion} />
-					) : null}
-					</div>
-				</div>
-				<ConversationMinimap
-					messages={chat.messages}
-					scrollContainerRef={scrollRef}
-					onNavigateStart={pauseAutoScroll}
-				/>
-			</div>
-
-			<div className="shrink-0 border-t border-[var(--inno-border)] bg-[var(--inno-surface)] p-3">
-				<div className="mx-auto max-w-3xl">
-					{renderUploadChips()}
-					{renderInlineImagePreviews()}
-					{renderQuestionHint()}
-					{renderBusyBlocker()}
-					{wsError ? <p className="mb-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
-					{renderComposer(t("chat.composerPlaceholder"))}
-				</div>
-			</div>
-		</section>
+		<>
+		{smartToastNode}
+		{smartOverlayNode}
+		<ChatConversation
+			chat={chat}
+			scrollRef={scrollRef}
+			onScroll={handleChatScroll}
+			onWheel={markUserScrollGesture}
+			onTouchStart={markUserScrollGesture}
+			onPointerDown={handleScrollerPointerDown}
+			onPauseAutoScroll={pauseAutoScroll}
+			questionHint={questionHint}
+			busyBlocker={busyBlocker}
+			composer={renderComposer(t("chat.composerPlaceholder"))}
+			onOpenAttachment={openChatAttachmentPreview}
+			wsError={wsError}
+		/>
+		</>
 	);
 }
