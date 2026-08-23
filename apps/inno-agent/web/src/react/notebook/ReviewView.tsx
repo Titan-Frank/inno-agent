@@ -32,7 +32,11 @@ export function ReviewView({ reviews, onOpenPage }: ReviewViewProps) {
 								<div className="text-sm font-medium text-[var(--inno-text)]">{review.title}</div>
 								<div className="mt-1 text-[11px] text-[var(--inno-text-muted)]">{review.type} · {review.sourcePath}</div>
 							</div>
-							<span className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-[var(--inno-accent)]">{review.options.map((option) => option.label).join(" / ")}</span>
+							{review.options?.length ? (
+								<span className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-[var(--inno-accent)]">
+									{review.options.map((option) => option.label).join(" / ")}
+								</span>
+							) : null}
 						</div>
 						<p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-[var(--inno-text-muted)]">{review.description}</p>
 						{review.pages?.length ? (

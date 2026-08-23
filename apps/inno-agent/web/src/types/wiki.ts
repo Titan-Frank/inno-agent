@@ -39,7 +39,7 @@ export interface WikiReview {
 	description: string;
 	pages?: string[];
 	search?: string[];
-	options: Array<{ label: string; action: string }>;
+	options?: Array<{ label: string; action: string }>;
 	createdAt: string;
 }
 
