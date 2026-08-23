@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { DragDropManager } from "dnd-core";
 import { Tree, type NodeRendererProps } from "react-arborist";
 import { RefreshCw, Upload, Trash2, ChevronLeft, File, FileText, FileType, Folder, FolderOpen, Globe, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Library, Download, Check, FileCode2, Search } from "lucide-react";
 import { skillsStore } from "../stores/skills-store.js";
@@ -213,7 +214,7 @@ function SkillFilePane({ skillName, onToggleSidebar, sidebarOpen }: { skillName:
 
 /* ---------- Skill Detail View ---------- */
 
-function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }) {
+function SkillDetail({ skill, onBack, dndManager }: { skill: SkillInfo; onBack: () => void; dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const treeContainerRef = useRef<HTMLDivElement>(null);
 	const [treeHeight, setTreeHeight] = useState(400);
@@ -228,7 +229,7 @@ function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }
 		const el = treeContainerRef.current;
 		if (!el) return;
 		const ro = new ResizeObserver(([entry]) => {
-			if (entry) setTreeHeight(Math.floor(entry.contentRect.height));
+			if (entry) setTreeHeight(Math.max(1, Math.floor(entry.contentRect.height)));
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
@@ -290,6 +291,7 @@ function SkillDetail({ skill, onBack }: { skill: SkillInfo; onBack: () => void }
 							data={arboristData}
 							width={240}
 							height={treeHeight}
+							dndManager={dndManager}
 							indent={16}
 							rowHeight={28}
 							openByDefault
@@ -459,7 +461,7 @@ function SkillLibraryModal({ onClose }: { onClose: () => void }) {
 
 /* ---------- Main SkillsPanel ---------- */
 
-export function SkillsPanel() {
+export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const uploadRef = useRef<HTMLInputElement | null>(null);
 	const state = useStoreSnapshot(skillsStore, () => ({
@@ -497,7 +499,7 @@ export function SkillsPanel() {
 		return (
 			<div className="flex h-full flex-col p-3">
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-					<SkillDetail skill={activeSkill} onBack={() => skillsStore.deselectSkill()} />
+					<SkillDetail skill={activeSkill} onBack={() => skillsStore.deselectSkill()} dndManager={dndManager} />
 				</div>
 			</div>
 		);

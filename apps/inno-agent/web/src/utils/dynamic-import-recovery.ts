@@ -7,6 +7,7 @@ const DYNAMIC_IMPORT_ERROR_PATTERNS = [
 	/ChunkLoadError/i,
 	/Loading chunk .* failed/i,
 	/Unable to preload CSS/i,
+	/Unexpected token ['"<]/i,
 ];
 
 function errorMessage(error: unknown): string {

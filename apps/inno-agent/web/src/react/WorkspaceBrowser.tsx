@@ -1,6 +1,7 @@
 import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import type { DragDropManager } from "dnd-core";
 import { Tree, type NodeRendererProps, type TreeApi, type CreateHandler, type RenameHandler, type DeleteHandler, type MoveHandler } from "react-arborist";
 import { RefreshCw, FileText, FileType, Globe, File, FolderOpen, Folder, Pencil, Save, X, PanelLeftClose, PanelLeftOpen, Sparkles, Download, FileCode2, Presentation, FileSpreadsheet, Copy, Check, ListChecks, Trash2 } from "lucide-react";
 import { workspaceStore, type StreamingWorkspacePreview } from "../stores/workspace-store.js";
@@ -852,7 +853,7 @@ function DeleteConfirm({ paths, onConfirm, onCancel }: { paths: string[]; onConf
 
 /* ---------- Main Component ---------- */
 
-export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFileHandler }) {
+export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?: PreviewFileHandler; dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const treeRef = useRef<TreeApi<ArboristNode>>(null);
 	const skillUploadRef = useRef<HTMLInputElement>(null);
@@ -903,7 +904,11 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 		if (!el) return;
 		const ro = new ResizeObserver(([entry]) => {
 			if (entry) {
-				setTreeHeight(Math.floor(entry.contentRect.height));
+				// The browser stays mounted while the outer panel is collapsed.
+				// ResizeObserver reports 0 for a display:none ancestor; keep
+				// react-arborist on a valid positive viewport until the panel is
+				// visible and the observer reports its real size.
+				setTreeHeight(Math.max(1, Math.floor(entry.contentRect.height)));
 				setTreeWidth(Math.max(180, Math.floor(entry.contentRect.width)));
 			}
 		});
@@ -1206,6 +1211,7 @@ export function WorkspaceBrowser({ onPreviewFile }: { onPreviewFile?: PreviewFil
 									data={arboristData}
 									width={treeWidth}
 									height={treeHeight}
+									dndManager={dndManager}
 									indent={16}
 									rowHeight={28}
 									openByDefault={false}

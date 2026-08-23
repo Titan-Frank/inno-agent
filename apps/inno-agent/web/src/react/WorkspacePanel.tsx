@@ -1,12 +1,15 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "motion/react";
+import { DndProvider, useDragDropManager } from "react-dnd";
+import { HTML5Backend } from "react-dnd-html5-backend";
+import type { DragDropManager } from "dnd-core";
 import { PanelRightOpen, PanelRightClose, Columns2, Maximize2, BookOpen, BriefcaseBusiness, FolderKanban, Settings, Sparkles, UserRound } from "lucide-react";
 import type { RightPanelTab, WorkspaceMode } from "../stores/app-store.js";
 import { appStore } from "../stores/app-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { useStoreSnapshot } from "./hooks.js";
-import { recoverFromDynamicImportError } from "../utils/dynamic-import-recovery.js";
+import { isDynamicImportError, recoverFromDynamicImportError } from "../utils/dynamic-import-recovery.js";
 
 const Notebook = lazy(() => import("./Notebook.js").then((mod) => ({ default: mod.Notebook })));
 const JobsPanel = lazy(() => import("./JobsPanel.js").then((mod) => ({ default: mod.JobsPanel })));
@@ -62,10 +65,23 @@ class WorkspaceContentErrorBoundary extends Component<
 					<div className="max-w-sm text-xs text-[var(--inno-text-muted)]">
 						Switch tabs or close and reopen the panel to try again.
 					</div>
+					{this.state.error.message ? (
+						<div className="max-w-sm break-words text-[10px] text-[var(--inno-danger)]">
+							{this.state.error.message}
+						</div>
+					) : null}
 					<button
 						type="button"
 						className="inno-primary-button rounded-md px-3 py-1.5 text-xs text-white"
 						onClick={() => {
+							// A failed dynamic import is cached by the browser for the
+							// current document. Re-mounting React.lazy with the same
+							// specifier only returns the same rejected module promise;
+							// reload the document so Vite can provide a fresh chunk graph.
+							if (isDynamicImportError(this.state.error)) {
+								window.location.reload();
+								return;
+							}
 							this.setState({ error: null });
 							this.props.onRetry();
 						}}
@@ -86,14 +102,14 @@ class WorkspaceContentErrorBoundary extends Component<
 	}
 }
 
-function WorkspaceBrowserContent({ retryKey, onPreviewFile }: { retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"] }) {
+function WorkspaceBrowserContent({ retryKey, onPreviewFile, dndManager }: { retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"]; dndManager: DragDropManager }) {
 	const Browser = useMemo(
 		() => lazy(() => import("./WorkspaceBrowser.js").then((mod) => ({ default: mod.WorkspaceBrowser }))),
 		[retryKey],
 	);
 	return (
 		<Suspense fallback={<WorkspaceContentFallback />}>
-			<Browser onPreviewFile={onPreviewFile} />
+			<Browser onPreviewFile={onPreviewFile} dndManager={dndManager} />
 		</Suspense>
 	);
 }
@@ -106,23 +122,24 @@ function WorkspaceContentFallback() {
 	);
 }
 
-function WorkspaceContent({ activeTab, retryKey, onPreviewFile }: { activeTab: RightPanelTab; retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"] }) {
+function WorkspaceContent({ activeTab, retryKey, onPreviewFile, dndManager }: { activeTab: RightPanelTab; retryKey: number; onPreviewFile: WorkspacePanelProps["onPreviewFile"]; dndManager: DragDropManager }) {
 	switch (activeTab) {
 		case "notebook":
 			return <Notebook />;
 		case "preview":
-			return <WorkspaceBrowserContent retryKey={retryKey} onPreviewFile={onPreviewFile} />;
+			return <WorkspaceBrowserContent retryKey={retryKey} onPreviewFile={onPreviewFile} dndManager={dndManager} />;
 		case "profile":
 			return <LearnerProfilePanel />;
 		case "skills":
-			return <SkillsPanel />;
+			return <SkillsPanel dndManager={dndManager} />;
 		case "jobs":
 			return <JobsPanel />;
 	}
 }
 
-export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChange, onWidthChange, onPreviewFile }: WorkspacePanelProps) {
+function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChange, onWidthChange, onPreviewFile }: WorkspacePanelProps) {
 	const { t } = useTranslation();
+	const dndManager = useDragDropManager();
 	const [isResizing, setIsResizing] = useState(false);
 	const [contentRetryKey, setContentRetryKey] = useState(0);
 	const [hasOpenedWorkspace, setHasOpenedWorkspace] = useState(mode !== "collapsed");
@@ -175,6 +192,20 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 	const compact = mode !== "full" && width < 500;
 	const collapsed = mode === "collapsed";
 	const shouldMountContent = hasOpenedWorkspace || !collapsed;
+	const handleTabChange = useCallback((tab: RightPanelTab) => {
+		if (tab !== activeTab && dndManager.getMonitor().isDragging()) {
+			// A file drag can outlive the source tree for a tick after drop. End
+			// it before the tab transition removes that tree from the document.
+			dndManager.getActions().endDrag();
+		}
+		onTabChange(tab);
+	}, [activeTab, dndManager, onTabChange]);
+
+	useEffect(() => () => {
+		if (dndManager.getMonitor().isDragging()) {
+			dndManager.getActions().endDrag();
+		}
+	}, [dndManager]);
 
 	return (
 		<aside className={`workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col ${collapsed ? "overflow-visible border-l-0 bg-transparent" : "overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]"}`}>
@@ -207,7 +238,7 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 								className={`inno-workspace-tab flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md transition-colors ${compact ? "w-7 justify-center px-0" : "px-2"} ${isActive ? "bg-[var(--inno-surface)] font-medium text-[var(--inno-accent)] shadow-sm" : "text-[var(--inno-text-muted)] hover:bg-[var(--inno-surface)] hover:text-[var(--inno-text)]"}`}
 								title={compact ? label : undefined}
 								aria-label={compact ? label : undefined}
-								onClick={() => onTabChange(tab)}
+								onClick={() => handleTabChange(tab)}
 							>
 								{TAB_ICONS[tab]}
 								{compact ? null : label}
@@ -260,7 +291,7 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 						>
 							<WorkspaceContentErrorBoundary resetKey={`${activeTab}:${contentRetryKey}`} onRetry={retryContent}>
 								<Suspense fallback={<WorkspaceContentFallback />}>
-									<WorkspaceContent activeTab={activeTab} retryKey={contentRetryKey} onPreviewFile={onPreviewFile} />
+									<WorkspaceContent activeTab={activeTab} retryKey={contentRetryKey} onPreviewFile={onPreviewFile} dndManager={dndManager} />
 								</Suspense>
 							</WorkspaceContentErrorBoundary>
 						</motion.div>
@@ -268,5 +299,19 @@ export function WorkspacePanel({ activeTab, mode, width, onTabChange, onModeChan
 				) : null}
 			</div>
 		</aside>
+	);
+}
+
+/**
+ * react-arborist creates an HTML5 backend for every Tree unless a manager is
+ * supplied. The workspace and skills tabs can overlap briefly during a tab
+ * transition, so keep one manager for the whole panel and hand it to both
+ * trees instead of letting each tab register a backend on document.
+ */
+export function WorkspacePanel(props: WorkspacePanelProps) {
+	return (
+		<DndProvider backend={HTML5Backend}>
+			<WorkspacePanelContent {...props} />
+		</DndProvider>
 	);
 }

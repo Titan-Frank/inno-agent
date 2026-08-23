@@ -423,6 +423,12 @@ describe("server smoke", () => {
 		expect(res.headers.get("content-type")).toContain("application/json");
 	});
 
+	it("missing hashed frontend assets return 404 instead of the SPA index", async () => {
+		const res = await api("/assets/WorkspaceBrowser-definitely-missing.js");
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).toContain("application/json");
+	});
+
 	it("chat: POST /api/chat 400 without prompt, stream 400 without fields, status 200 found:false", async () => {
 		const noPrompt = await fetch(`http://127.0.0.1:${port}/api/chat`, {
 			method: "POST",
