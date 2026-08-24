@@ -1,4 +1,5 @@
-export type WikiPageType = "source-summary" | "entity" | "concept" | "analysis";
+export type BuiltInWikiPageType = "source-summary" | "source" | "entity" | "concept" | "query" | "comparison" | "synthesis" | "analysis";
+export type WikiPageType = BuiltInWikiPageType | (string & {});
 export type WikiPageStatus = "draft" | "reviewed" | "outdated";
 export type ConfidenceLevel = "low" | "medium" | "high";
 
@@ -7,6 +8,7 @@ export interface WikiPageFrontmatter {
 	created: string;
 	type: WikiPageType;
 	tags: string[];
+	related?: string[];
 	sources: string[];
 	source_ids: string[];
 	updated: string;
@@ -26,6 +28,19 @@ export interface WikiPageSummary {
 export interface WikiPageDetail {
 	path: string;
 	content: string;
+}
+
+export interface WikiReview {
+	id: string;
+	sourceId: string;
+	sourcePath: string;
+	type: "contradiction" | "duplicate" | "missing-page" | "suggestion" | "confirm";
+	title: string;
+	description: string;
+	pages?: string[];
+	search?: string[];
+	options?: Array<{ label: string; action: string }>;
+	createdAt: string;
 }
 
 export interface WikiGraphData {

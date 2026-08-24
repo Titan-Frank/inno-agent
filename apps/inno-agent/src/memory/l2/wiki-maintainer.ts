@@ -1,6 +1,6 @@
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { wikiPathJoin } from "./wiki-paths.js";
+import { currentWikiDate } from "./wiki-date.js";
 import { parse as parseYaml, Document as YamlDocument } from "yaml";
 import { ensureDir, writeText, readText, appendText, fileExists } from "../../storage/file-store.js";
 import type {
@@ -12,22 +12,7 @@ import type {
 	WikiPrerequisite,
 } from "./types.js";
 import { logger } from "../../logger.js";
-
-const L2_SCHEMA_VERSION = "1.0";
-
-const TYPE_SECTION_MAP: Record<WikiPageType, string> = {
-	"source-summary": "## 资料摘要 (Sources)",
-	entity: "## 实体 (Entities)",
-	concept: "## 概念 (Concepts)",
-	analysis: "## 分析 (Analysis)",
-};
-
-const TYPE_DIR_MAP: Record<WikiPageType, string> = {
-	"source-summary": "sources",
-	entity: "entities",
-	concept: "concepts",
-	analysis: "analysis",
-};
+import { listWikiPagePaths } from "./wiki-page-files.js";
 
 // ============================================================================
 // Frontmatter serialization — backed by the `yaml` library
@@ -44,6 +29,7 @@ export function serializeFrontmatter(fm: WikiPageFrontmatter): string {
 		created: fm.created || fm.updated,
 		type: fm.type,
 		tags: fm.tags,
+		related: fm.related ?? [],
 		sources: fm.sources,
 		source_ids: fm.source_ids,
 		updated: fm.updated,
@@ -58,10 +44,14 @@ export function serializeFrontmatter(fm: WikiPageFrontmatter): string {
 	const doc = new YamlDocument(obj);
 	const tagsNode = doc.get("tags", true) as { flow?: boolean } | undefined;
 	if (tagsNode && typeof tagsNode === "object") tagsNode.flow = true;
+	const relatedNode = doc.get("related", true) as { flow?: boolean } | undefined;
+	if (relatedNode && typeof relatedNode === "object") relatedNode.flow = true;
 
 	// The yaml lib pads flow collections (`[ a, b ]`); strip the inner padding
 	// to match the legacy `[a, b]` format and minimize diffs.
-	const yamlBody = doc.toString({ lineWidth: 0 }).replace(/^tags: \[ (.*) \]$/m, "tags: [$1]");
+	const yamlBody = doc.toString({ lineWidth: 0 })
+		.replace(/^tags: \[ (.*) \]$/m, "tags: [$1]")
+		.replace(/^related: \[ (.*) \]$/m, "related: [$1]");
 	return `---\n${yamlBody}---`;
 }
 
@@ -128,6 +118,8 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 		contested,
 		contradictions: asStringArray(raw.contradictions),
 	};
+	const related = asStringArray(raw.related);
+	frontmatter.related = related;
 	const conceptId = asString(raw.concept_id).trim();
 	if (conceptId) frontmatter.concept_id = conceptId;
 	if (prerequisites.length > 0) frontmatter.prerequisites = prerequisites;
@@ -139,45 +131,48 @@ export function parseFrontmatter(content: string): { frontmatter: WikiPageFrontm
 }
 
 function defaultSchemaContent(): string {
-	const today = new Date().toISOString().slice(0, 10);
-	return `# L2 Wiki Schema
+	return `# Wiki Schema
 
-> System-managed schema for Inno Agent L2 memory. Created automatically; users do not need to initialize it.
-> Schema version: ${L2_SCHEMA_VERSION}
-> Last updated: ${today}
+## Page Types
 
-## Domain
+| Type | Directory | Purpose |
+|------|-----------|---------|
+| entity | wiki/entities/ | Named things (people, tools, organizations, datasets) |
+| concept | wiki/concepts/ | Ideas, techniques, phenomena, frameworks |
+| source | wiki/sources/ | Papers, articles, talks, books, blog posts |
+| query | wiki/queries/ | Open questions under active investigation |
+| comparison | wiki/comparisons/ | Side-by-side analysis of related entities |
+| synthesis | wiki/synthesis/ | Cross-cutting summaries and conclusions |
+| overview | wiki/ | High-level project summary (one per project) |
 
-L2 stores learning content: source summaries, entities, concepts, and durable analysis. It does not store learner ability judgments, goals, preferences, or misconceptions; those belong to L1.
+## Naming Conventions
 
-## Directory Layout
-
-- \`raw/\`: immutable original sources.
-- \`extracted/\`: faithful extracted Markdown evidence.
-- \`wiki/sources/\`: one source-summary page per archived source.
-- \`wiki/entities/\`: people, organizations, products, projects, papers, standards, and concrete named artifacts.
-- \`wiki/concepts/\`: technical concepts, theories, methods, mechanisms, patterns, and problem types.
-- \`wiki/analysis/\`: durable synthesis, comparisons, research conclusions, and learning routes.
+- Files: \`kebab-case.md\`
+- Entities: match official name where possible (e.g., \`openai.md\`, \`gpt-4.md\`)
+- Concepts: descriptive noun phrases (e.g., \`chain-of-thought.md\`)
+- Sources: \`author-year-slug.md\` (e.g., \`wei-2022-cot.md\`)
+- Queries: question as slug (e.g., \`does-scale-improve-reasoning.md\`)
 
 ## Frontmatter
 
-Every wiki page must include:
+Source pages also include:
+\`\`\`yaml
+authors: []
+year: YYYY
+url: ""
+venue: ""
+\`\`\`
+
+All pages must include YAML frontmatter:
 
 \`\`\`yaml
 ---
-title: Page Title
+type: entity | concept | source | query | comparison | synthesis | overview
+title: Human-readable title
+tags: []
+related: []
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-type: source-summary | entity | concept | analysis
-tags: [learning-content]
-sources:
-  - raw/uploads/source.txt
-source_ids:
-  - l2src_xxxxxxxx
-status: draft | reviewed | outdated
-confidence: high | medium | low
-contested: false
-contradictions: []
 ---
 \`\`\`
 
@@ -198,67 +193,78 @@ prerequisites:
 
 An ordinary \`[[wikilink]]\` means only that two pages are related. It must not be treated as a prerequisite unless the directional relationship is declared above.
 
-## Maintenance Rules
+## Index Format
 
-- Raw files are immutable after ingestion.
-- Read existing schema, index, and recent log before adding new pages.
-- Prefer updating existing entity/concept pages over creating duplicates.
-- Use \`[[wikilinks]]\` for cross-references.
-- When a page is updated, bump \`updated\`.
-- Every archive action rebuilds \`wiki/index.md\` and appends \`wiki/log.md\`.
-- If new information conflicts with existing content, keep both claims with sources, lower confidence when needed, and set \`contested: true\`.
-- Pages over roughly 200 lines should be split into narrower pages when practical.
+\`wiki/index.md\` lists all pages grouped by type. Each entry:
+\`\`\`
+- [[page-slug]] — one-line description
+\`\`\`
 
-## Tag Taxonomy
+## Log Format
 
-- learning-content
-- source-summary
-- entity
-- concept
-- analysis
-- conversation
-- upload
-- research
-- web
-- agent-inferred
-- draft
-- reviewed
-- contested
+\`wiki/log.md\` records activity in reverse chronological order:
+\`\`\`
+## YYYY-MM-DD
 
-## Page Thresholds
+- Action taken / finding noted
+\`\`\`
 
-- Create a page when an entity or concept is central to one archived source or appears across multiple sources.
-- Update an existing page when a new source mentions something already covered.
-- Do not create pages for passing mentions, one-off wording, or private learner-state facts.
+## Cross-referencing Rules
+
+- Use \`[[page-slug]]\` syntax to link between wiki pages
+- Every entity and concept should appear in \`wiki/index.md\`
+- Queries link to the sources and concepts they draw on
+- Synthesis pages cite all contributing sources via \`related:\`
+
+## Contradiction Handling
+
+When sources contradict each other:
+1. Note the contradiction in the relevant concept or entity page
+2. Create or update a query page to track the open question
+3. Link both sources from the query page
+4. Resolve in a synthesis page once sufficient evidence exists
+`;
+}
+
+function defaultPurposeContent(): string {
+	return `# Project Purpose
+
+## Goal
+
+<!-- What are you trying to understand or build? -->
+
+## Key Questions
+
+<!-- List the primary questions driving this project -->
+
+1.
+2.
+3.
+
+## Scope
+
+**In scope:**
+-
+
+**Out of scope:**
+-
+
+## Thesis
+
+<!-- Your current working hypothesis or conclusion (update as the project progresses) -->
+
+> TBD
 `;
 }
 
 function initialIndexContent(): string {
-	const today = new Date().toISOString().slice(0, 10);
-	return [
-		"# L2 Wiki 索引",
-		"",
-		"> Content catalog. Every wiki page is listed under its type with a one-line summary.",
-		"> Read this first before L2 maintenance to avoid duplicate pages.",
-		`> Last updated: ${today} | Total pages: 0`,
-		"",
-		"## 资料摘要 (Sources)",
-		"<!-- none yet -->",
-		"",
-		"## 实体 (Entities)",
-		"<!-- none yet -->",
-		"",
-		"## 概念 (Concepts)",
-		"<!-- none yet -->",
-		"",
-		"## 分析 (Analysis)",
-		"<!-- none yet -->",
-		"",
-	].join("\n");
+	// Project setup creates no index. Ingestion materializes this
+	// seed when the first successful ingest adds Recently Updated entries.
+	return "# Wiki Index\n";
 }
 
 function initialLogContent(): string {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = currentWikiDate();
 	return [
 		"# L2 Wiki Log",
 		"",
@@ -278,23 +284,37 @@ export function ensureSchema(l2DataDir: string): void {
 	}
 }
 
+function ensurePurpose(l2DataDir: string): void {
+	const purposePath = join(l2DataDir, "wiki", "PURPOSE.md");
+	if (!fileExists(purposePath)) writeText(purposePath, defaultPurposeContent());
+}
+
 export function ensureNavigationFiles(l2DataDir: string): void {
 	const wikiDir = join(l2DataDir, "wiki");
 	ensureDir(wikiDir);
 	ensureSchema(l2DataDir);
+	ensurePurpose(l2DataDir);
 	const indexPath = join(wikiDir, "index.md");
 	if (!fileExists(indexPath)) writeText(indexPath, initialIndexContent());
 	const logPath = join(wikiDir, "log.md");
-	if (!fileExists(logPath)) writeText(logPath, initialLogContent());
+	// Do not seed model-visible log content before the first ingest.
+	// Keep the storage file present, but let rich generation write the first entry.
+	if (!fileExists(logPath)) writeText(logPath, "");
 }
 
-export function readMaintenanceContext(l2DataDir: string): { schema: string; index: string; recentLog: string } {
+export function readMaintenanceContext(l2DataDir: string): { schema: string; purpose: string; index: string; overview: string; recentLog: string } {
 	ensureNavigationFiles(l2DataDir);
 	const schema = readText(join(l2DataDir, "wiki", "SCHEMA.md"));
-	const index = readText(join(l2DataDir, "wiki", "index.md"));
+	const purpose = readText(join(l2DataDir, "wiki", "PURPOSE.md"));
+	const storedIndex = readText(join(l2DataDir, "wiki", "index.md"));
+	// Keep an index file for Inno's storage/UI APIs, while giving the first
+	// ingest the same empty index context used before the first index write.
+	const index = storedIndex === initialIndexContent() ? "" : storedIndex;
+	const overviewPath = join(l2DataDir, "wiki", "analysis", "overview.md");
+	const overview = fileExists(overviewPath) ? readText(overviewPath) : "";
 	const log = readText(join(l2DataDir, "wiki", "log.md"));
 	const recentLog = log.split("\n").slice(-80).join("\n");
-	return { schema, index, recentLog };
+	return { schema, purpose, index, overview, recentLog };
 }
 
 // ============================================================================
@@ -310,6 +330,39 @@ function sourcePageFilename(title: string, id: string): string {
 	return `${slug}-${id.slice(-6)}.md`;
 }
 
+function stableSourceSlugHash(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index += 1) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(36);
+}
+
+/** Derive a stable source-page slug from the source identity. */
+export function sourceSummarySlugFromIdentity(sourceIdentity: string): string {
+	const parts = sourceIdentity.replace(/\.[^/.]+$/, "").split("/").map((part) => part.trim()).filter(Boolean);
+	if (parts.length <= 1) return parts[0] || "source";
+	const slug = parts.map((part) => {
+		const structural = part.normalize("NFKC").trim().replace(/\s+/g, "-")
+			.replace(/[^\p{L}\p{N}-]/gu, "").replace(/^-|-$/g, "").toLowerCase();
+		const readable = structural.replace(/-+/g, "-") || "source";
+		return `${Math.max(1, Array.from(structural || "source").length)}-${readable}`;
+	}).join("--");
+	const hash = stableSourceSlugHash(sourceIdentity);
+	const full = `${slug}--${hash}`;
+	if (full.length <= 120) return full;
+	const prefix = slug.slice(0, 120 - hash.length - 2).replace(/-+$/, "");
+	return `${prefix || "source"}--${hash}`;
+}
+
+export function getSourcePagePath(entry: Pick<ManifestEntry, "title" | "id">, sourceIdentity?: string): string {
+	const filename = sourceIdentity
+		? `${sourceSummarySlugFromIdentity(sourceIdentity)}.md`
+		: sourcePageFilename(entry.title, entry.id);
+	return join("wiki", "sources", filename);
+}
+
 /**
  * Create a wiki source summary page.
  * @param summaryBody - LLM-generated summary markdown (or full content as fallback)
@@ -321,16 +374,17 @@ export function createSourcePage(
 	entry: ManifestEntry,
 	summaryBody: string,
 	extractedPath?: string,
+	sourceIdentity?: string,
 ): string {
 	const dir = join(l2DataDir, "wiki", "sources");
 	ensureDir(dir);
-	const filename = sourcePageFilename(entry.title, entry.id);
+	const filename = basename(getSourcePagePath(entry, sourceIdentity));
 	const fm: WikiPageFrontmatter = {
 		title: entry.title,
 		created: new Date().toISOString().slice(0, 10),
 		type: "source-summary",
 		tags: mergeUniqueTags(["source-summary"], entry.tags),
-		sources: [entry.rawPath],
+		sources: [sourceIdentity ?? entry.source.identity ?? entry.rawPath],
 		source_ids: [entry.id],
 		updated: new Date().toISOString().slice(0, 10),
 		status: "draft",
@@ -359,6 +413,9 @@ function readWikiPageIndexItem(
 	}
 	if (wikiPath.includes("wiki/entities/")) return { type: "entity", title: fallbackTitle, path: wikiPath };
 	if (wikiPath.includes("wiki/concepts/")) return { type: "concept", title: fallbackTitle, path: wikiPath };
+	if (wikiPath.includes("wiki/queries/")) return { type: "query", title: fallbackTitle, path: wikiPath };
+	if (wikiPath.includes("wiki/comparisons/")) return { type: "comparison", title: fallbackTitle, path: wikiPath };
+	if (wikiPath.includes("wiki/synthesis/")) return { type: "synthesis", title: fallbackTitle, path: wikiPath };
 	if (wikiPath.includes("wiki/analysis/")) return { type: "analysis", title: fallbackTitle, path: wikiPath };
 	return { type: "source-summary", title: fallbackTitle, path: wikiPath };
 }
@@ -370,42 +427,81 @@ export function rebuildIndex(l2DataDir: string, entries: ManifestEntry[]): void 
 	ensureDir(join(l2DataDir, "wiki"));
 	ensureSchema(l2DataDir);
 	const allPages = listWikiPagesForIndex(l2DataDir, entries);
-	const totalPages = allPages.length;
-	const lines: string[] = [
-		"# L2 Wiki 索引",
-		"",
-		"> Content catalog. Every wiki page is listed under its type with a one-line summary.",
-		"> Read this first before L2 maintenance to avoid duplicate pages.",
-		`> Last updated: ${new Date().toISOString().slice(0, 10)} | Total pages: ${totalPages}`,
-		"",
-	];
-
-	const groups: Record<WikiPageType, { title: string; path: string }[]> = {
-		"source-summary": [],
-		entity: [],
-		concept: [],
-		analysis: [],
-	};
-
-	for (const item of allPages) {
-		if (groups[item.type].some((existing) => existing.path === item.path)) continue;
-		groups[item.type].push({ title: item.title, path: item.path });
-	}
-
-	for (const type of ["source-summary", "entity", "concept", "analysis"] as WikiPageType[]) {
-		lines.push(TYPE_SECTION_MAP[type]);
-		if (groups[type].length > 0) {
-			groups[type].sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
-			for (const item of groups[type]) {
-				lines.push(`- [[${item.title}]] — \`${item.path}\``);
-			}
-		} else {
-			lines.push("<!-- none yet -->");
+	const byPath = new Map(allPages.map((item) => [item.path, item]));
+	const orderedPaths: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of [...entries].reverse()) {
+		for (const wikiPath of entry.wikiPages) {
+			if (seen.has(wikiPath) || !byPath.has(wikiPath)) continue;
+			seen.add(wikiPath);
+			orderedPaths.push(wikiPath);
 		}
-		lines.push("");
 	}
-
+	for (const item of allPages) {
+		if (seen.has(item.path)) continue;
+		seen.add(item.path);
+		orderedPaths.push(item.path);
+	}
+	const lines = [
+		"# Wiki Index", "", "## Entities", "", "## Concepts", "", "## Sources", "",
+		"## Queries", "", "## Comparisons", "", "## Synthesis", "", "## Recently Updated",
+	];
+	for (const wikiPath of orderedPaths.slice(0, 200)) {
+		const item = byPath.get(wikiPath)!;
+		const target = wikiPath.replace(/^wiki\//, "").replace(/\.md$/i, "");
+		lines.push(`- [[${target}]] — ${item.title}`);
+	}
+	lines.push("");
 	writeText(join(l2DataDir, "wiki", "index.md"), lines.join("\n"));
+}
+
+function normalizeIndexTarget(target: string): string {
+	return target.replaceAll("\\", "/").replace(/^\.\//, "").replace(/^wiki\//i, "").replace(/\.md$/i, "").toLowerCase();
+}
+
+export function updateBoundedRecentIndexSection(index: string, additions: string[]): string {
+	const section = "## Recently Updated";
+	const lines = index.trimEnd().split("\n");
+	const start = lines.findIndex((line) => line.trim() === section);
+	const prefix = start >= 0 ? lines.slice(0, start) : lines;
+	const sectionEnd = start >= 0
+		? lines.findIndex((line, position) => position > start && /^##\s+/.test(line))
+		: -1;
+	const existing = start >= 0
+		? lines.slice(start + 1, sectionEnd >= 0 ? sectionEnd : undefined).filter((line) => /^-\s+/.test(line))
+		: [];
+	const suffix = sectionEnd >= 0 ? lines.slice(sectionEnd) : [];
+	const recent = Array.from(new Set([...additions, ...existing])).slice(0, 200);
+	return [...prefix, "", section, ...recent, ...(suffix.length ? ["", ...suffix] : []), ""].join("\n");
+}
+
+/** Update the deterministic wiki index after an ingest. */
+export function updateIndexAfterIngest(l2DataDir: string, writtenPaths: string[]): boolean {
+	const candidates = Array.from(new Set(writtenPaths.map((path) => path.replaceAll("\\", "/"))))
+		.filter((path) => path.startsWith("wiki/") && path.endsWith(".md")
+			&& !["wiki/index.md", "wiki/overview.md", "wiki/log.md"].includes(path));
+	if (candidates.length === 0) return false;
+
+	const indexPath = join(l2DataDir, "wiki", "index.md");
+	const index = fileExists(indexPath) ? readText(indexPath) : "# Wiki Index\n";
+	const knownTargets = new Set(
+		Array.from(index.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g))
+			.map((match) => normalizeIndexTarget(match[1])),
+	);
+	const additions: string[] = [];
+	for (const path of candidates) {
+		const target = path.replace(/^wiki\//, "").replace(/\.md$/i, "");
+		if (knownTargets.has(normalizeIndexTarget(target))) continue;
+		const fullPath = join(l2DataDir, path);
+		const content = fileExists(fullPath) ? readText(fullPath) : "";
+		const parsed = parseFrontmatter(content);
+		const title = parsed.frontmatter?.title?.trim() || basename(path).replace(/\.md$/i, "");
+		additions.push(`- [[${target}]] — ${title}`);
+	}
+	if (additions.length === 0) return false;
+
+	writeText(indexPath, updateBoundedRecentIndexSection(index, additions));
+	return true;
 }
 
 // ============================================================================
@@ -418,13 +514,25 @@ export function rebuildIndex(l2DataDir: string, entries: ManifestEntry[]): void 
 export function appendLog(l2DataDir: string, action: string, title: string, details?: string): void {
 	const logPath = join(l2DataDir, "wiki", "log.md");
 	ensureDir(join(l2DataDir, "wiki"));
-	if (!fileExists(logPath)) {
+	if (!fileExists(logPath) || !readText(logPath).trim()) {
 		writeText(logPath, initialLogContent());
 	}
-	const today = new Date().toISOString().slice(0, 10);
+	const today = currentWikiDate();
 	let entry = `\n## [${today}] ${action} | ${title}\n`;
 	if (details) entry += `${details.trim()}\n`;
 	appendText(logPath, entry);
+}
+
+/** Append the structural ingest entry used when rich generation omits wiki/log.md. */
+export function appendDeterministicIngestLog(l2DataDir: string, sourceIdentity: string): void {
+	const logPath = join(l2DataDir, "wiki", "log.md");
+	ensureDir(join(l2DataDir, "wiki"));
+	const existing = fileExists(logPath) ? readText(logPath) : "";
+	const entry = `## [${currentWikiDate()}] ingest | ${sourceIdentity}`;
+	const next = existing.trim()
+		? `${existing.trimEnd()}\n\n${entry}\n`
+		: `# Wiki Log\n\n${entry}\n`;
+	writeText(logPath, next);
 }
 
 // ============================================================================
@@ -444,6 +552,9 @@ export function ensureL2Directories(l2DataDir: string): void {
 		"wiki/sources",
 		"wiki/entities",
 		"wiki/concepts",
+		"wiki/queries",
+		"wiki/comparisons",
+		"wiki/synthesis",
 		"wiki/analysis",
 	];
 	for (const dir of dirs) {
@@ -477,23 +588,9 @@ function listWikiPagesForIndex(
 			fallbackTitleByPath.set(wikiPath, entry.title);
 		}
 	}
-	for (const type of ["source-summary", "entity", "concept", "analysis"] as WikiPageType[]) {
-		const dir = join(l2DataDir, "wiki", TYPE_DIR_MAP[type]);
-		if (!fileExists(dir)) continue;
-		const files = readDirectoryMdFiles(dir);
-		for (const file of files) {
-			const wikiPath = wikiPathJoin("wiki", TYPE_DIR_MAP[type], file);
-			items.push(readWikiPageIndexItem(l2DataDir, fallbackTitleByPath.get(wikiPath) ?? file.replace(/\.md$/, ""), wikiPath));
-		}
+	for (const wikiPath of listWikiPagePaths(l2DataDir)) {
+		const file = basename(wikiPath);
+		items.push(readWikiPageIndexItem(l2DataDir, fallbackTitleByPath.get(wikiPath) ?? file.replace(/\.md$/, ""), wikiPath));
 	}
 	return items;
-}
-
-function readDirectoryMdFiles(dir: string): string[] {
-	try {
-		return readdirSync(dir).filter((file) => file.endsWith(".md"));
-	} catch (err) {
-		logger.warn({ err, dir }, "failed to read wiki directory");
-		return [];
-	}
 }

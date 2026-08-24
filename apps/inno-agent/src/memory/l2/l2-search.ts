@@ -2,8 +2,8 @@
  * L2 retrieval: lexical (BM25) candidate ranking, then one-hop graph expansion
  * over the wiki link graph.
  *
- * The graph signals mirror llm_wiki's relevance model, scaled down for a
- * personal-size wiki:
+ * The graph signals combine explicit links, shared provenance, and common
+ * neighbors, scaled for a personal-size wiki:
  *   - DIRECT_LINK   — pages connected via `[[wikilinks]]` (out-links + backlinks)
  *   - SOURCE_OVERLAP — pages sharing a raw source (frontmatter source_ids)
  *   - ADAMIC_ADAR   — pages sharing neighbors, weighted toward rare (low-degree) ones

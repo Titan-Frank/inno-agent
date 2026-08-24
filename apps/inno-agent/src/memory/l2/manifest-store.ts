@@ -60,3 +60,9 @@ export function findManifestByTitle(l2DataDir: string, title: string): ManifestE
 export function findManifestByHash(l2DataDir: string, contentHash: string): ManifestEntry | undefined {
 	return readManifest(l2DataDir).find((e) => e.contentHash === contentHash);
 }
+
+export function findManifestBySourceIdentity(l2DataDir: string, identity: string): ManifestEntry | undefined {
+	const normalized = identity.trim();
+	if (!normalized) return undefined;
+	return readManifest(l2DataDir).find((entry) => entry.source.identity?.trim() === normalized);
+}

@@ -2,26 +2,29 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { randomUUID, createHash } from "node:crypto";
-import { join, isAbsolute, resolve } from "node:path";
+import { basename, join, isAbsolute, resolve } from "node:path";
+import { unlinkSync } from "node:fs";
 
 import type { ManifestEntry, RawSourceType } from "./types.js";
 import { saveRaw, saveRawFile } from "./raw-store.js";
 import { convertToExtracted } from "./source-converter.js";
-import { upsertManifest, readManifest, findManifestByHash } from "./manifest-store.js";
+import { findManifestByHash, findManifestBySourceIdentity, upsertManifest } from "./manifest-store.js";
 import {
 	createSourcePage,
-	rebuildIndex,
+	getSourcePagePath,
+	updateIndexAfterIngest,
 	appendLog,
+	appendDeterministicIngestLog,
 	ensureL2Directories,
 	readMaintenanceContext,
 } from "./wiki-maintainer.js";
 import { queryWikiHybridDetailed } from "./wiki-query.js";
 import { summarizeContent } from "./summarizer.js";
+import { generateRichWikiPages } from "./wiki-generator.js";
 import { maintainLinkedWikiPages } from "./wiki-linker.js";
 import { fileExists, readText } from "../../storage/file-store.js";
 import { parseDocument, DocumentParseError } from "./document-parser.js";
 import { getL2Memory, type L2Memory } from "./l2-memory.js";
-import { regenerateOverview } from "./overview.js";
 import { formatL2LintReport, runL2Lint } from "./l2-lint.js";
 import { logger } from "../../logger.js";
 
@@ -41,6 +44,15 @@ function enqueueArchive<T>(l2DataDir: string, task: () => Promise<T>): Promise<T
 	return run.finally(() => {
 		if (archiveQueueTails.get(queueKey) === tail) archiveQueueTails.delete(queueKey);
 	});
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error ? signal.reason : new Error("L2 archive cancelled");
+}
+
+function uniquePaths(paths: string[]): string[] {
+	return [...new Set(paths.filter(Boolean))];
 }
 
 /**
@@ -76,6 +88,8 @@ export function createL2Tools(
 			title: Type.String({ description: "资料标题" }),
 			content: Type.Optional(Type.String({ description: "要归档的文本内容（与 filePath 二选一）" })),
 			filePath: Type.Optional(Type.String({ description: "要归档的文件路径（PDF/Word/Image），与 content 二选一" })),
+			sourceIdentity: Type.Optional(Type.String({ description: "原资料的稳定相对路径；默认从 filePath 文件名推导" })),
+			folderContext: Type.Optional(Type.String({ description: "资料所在目录的组织语义，例如 AI研究 > 论文" })),
 			sourceType: StringEnum(["text", "markdown", "conversation", "pdf", "word", "image"] as const, {
 				description: "资料类型：text（纯文本）、markdown、conversation（对话片段）、pdf、word、image",
 			}),
@@ -89,9 +103,10 @@ export function createL2Tools(
 			sessionId: Type.Optional(Type.String({ description: "关联的会话 ID" })),
 			force: Type.Optional(Type.Boolean({ description: "为 true 时跳过重复检查，强制归档" })),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (isEnabled && !isEnabled()) return l2DisabledResult();
-			return enqueueArchive(l2DataDir, async () => {
+			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+				if (isEnabled && !isEnabled()) return l2DisabledResult();
+				return enqueueArchive(l2DataDir, async () => {
+				throwIfAborted(signal);
 			ensureL2Directories(l2DataDir);
 			const maintenanceContext = readMaintenanceContext(l2DataDir);
 
@@ -121,7 +136,8 @@ export function createL2Tools(
 					};
 				}
 
-				content = parsed.text;
+					content = parsed.text;
+					throwIfAborted(signal);
 			} else if (params.content) {
 				// Text-based: use content directly
 				content = params.content;
@@ -132,11 +148,23 @@ export function createL2Tools(
 				};
 			}
 
-			const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+				const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+				const promptSourceIdentity = params.sourceIdentity?.trim()
+					|| (resolvedFilePath ? basename(resolvedFilePath) : params.title.trim());
 
-				// Completed content is a duplicate. Incomplete records resume below.
-				const existing = !params.force ? findManifestByHash(l2DataDir, contentHash) : undefined;
-				if (existing?.status === "indexed") {
+					// Force reprocesses a stable source record; it must not manufacture a
+					// second provenance identity for the same source page.
+					const existing = findManifestByHash(l2DataDir, contentHash)
+						?? (params.force ? findManifestBySourceIdentity(l2DataDir, promptSourceIdentity) : undefined);
+				const completedArtifactsExist = Boolean(
+					existing?.rawPath
+					&& fileExists(join(l2DataDir, existing.rawPath))
+					&& existing.extractedPath
+					&& fileExists(join(l2DataDir, existing.extractedPath))
+					&& existing?.wikiPages.length
+					&& existing.wikiPages.every((pagePath) => fileExists(join(l2DataDir, pagePath))),
+				);
+					if (!params.force && existing?.status === "indexed" && completedArtifactsExist) {
 						return {
 						content: [
 							{
@@ -153,7 +181,8 @@ export function createL2Tools(
 					};
 				}
 
-				const existingRawPath = existing?.rawPath && fileExists(join(l2DataDir, existing.rawPath))
+					const retryingSameContent = existing?.contentHash === contentHash;
+					const existingRawPath = retryingSameContent && existing?.rawPath && fileExists(join(l2DataDir, existing.rawPath))
 					? existing.rawPath
 					: undefined;
 				const rawPath = existingRawPath ?? (resolvedFilePath
@@ -164,7 +193,7 @@ export function createL2Tools(
 				const tags = params.tags ?? [];
 
 				// Convert to extracted markdown
-				const existingExtractedPath = existing?.extractedPath && fileExists(join(l2DataDir, existing.extractedPath))
+					const existingExtractedPath = retryingSameContent && existing?.extractedPath && fileExists(join(l2DataDir, existing.extractedPath))
 					? existing.extractedPath
 					: undefined;
 				const extractedPath = existingExtractedPath
@@ -172,70 +201,199 @@ export function createL2Tools(
 
 				// Persist the recoverable source record before model/page work begins.
 				const inferredOrigin = sourceType === "conversation" ? "conversation" : "user_upload";
-				const entry: ManifestEntry = {
+					const entry: ManifestEntry = {
 					...existing,
 					id,
 				title: params.title,
 				sourceType,
 				rawPath,
 				extractedPath,
-				wikiPages: [],
+					wikiPages: (existing?.wikiPages ?? []).filter((pagePath) => fileExists(join(l2DataDir, pagePath))),
 				tags,
 				contentHash,
 				status: "extracted",
-				source: {
+					source: {
+						...existing?.source,
 					origin: (params.origin ?? inferredOrigin) as ManifestEntry["source"]["origin"],
+					identity: promptSourceIdentity,
 					...(params.url && { url: params.url }),
 					...(params.sessionId && { sessionId: params.sessionId }),
 				},
 					createdAt: existing?.createdAt ?? new Date().toISOString(),
 					updatedAt: new Date().toISOString(),
-				};
+					};
 				upsertManifest(l2DataDir, entry);
 
 				let wikiPagePath = "";
-				let linkMaintenance: Awaited<ReturnType<typeof maintainLinkedWikiPages>>;
+				let ingestWarnings: string[] = [];
+				let reviewCount = 0;
+				let linkMaintenance: {
+					created: string[]; updated: string[]; unchanged: string[]; contested: string[];
+					pages: string[]; sourcePageBody: string;
+				};
 				try {
+						throwIfAborted(signal);
 					// Create wiki source page (with LLM summary)
 					const extractedContent = readText(join(l2DataDir, extractedPath));
+						const wikiContext = [
+							maintenanceContext.schema && `## Schema\n${maintenanceContext.schema}`,
+							maintenanceContext.index && `## Existing index\n${maintenanceContext.index}`,
+					].filter(Boolean).join("\n\n");
 					let summaryBody = `## 摘要\n\n${extractedContent}`;
+					let generationSourceContext = extractedContent;
+					const analysisCheckpointPath = join(l2DataDir, "ingest-progress", `${entry.id}-${entry.contentHash}.json`);
 					if (ctx.model) {
-						const summary = await summarizeContent(ctx.model, ctx.modelRegistry, params.title, extractedContent);
-						if (summary) summaryBody = summary;
+						const summary = await summarizeContent(
+							ctx.model,
+							ctx.modelRegistry,
+							params.title,
+							extractedContent,
+							wikiContext,
+							{
+								checkpointPath: analysisCheckpointPath,
+								sourceIdentity: promptSourceIdentity,
+								folderContext: params.folderContext?.trim(),
+								overview: maintenanceContext.overview,
+								purpose: maintenanceContext.purpose,
+								schema: maintenanceContext.schema,
+								index: maintenanceContext.index,
+								signal,
+							},
+						);
+						if (!summary) throw new Error(`Wiki analysis failed for ${entry.rawPath}`);
+						summaryBody = summary.analysis;
+						generationSourceContext = summary.sourceContext;
 					}
-					wikiPagePath = createSourcePage(l2DataDir, entry, summaryBody, extractedPath);
-					linkMaintenance = await maintainLinkedWikiPages(
-						l2DataDir,
-						entry,
-						wikiPagePath,
-						summaryBody,
-						ctx.model,
-						ctx.modelRegistry,
-					);
-					if (linkMaintenance.sourcePageBody !== summaryBody) {
-						createSourcePage(l2DataDir, entry, linkMaintenance.sourcePageBody, extractedPath);
+					wikiPagePath = getSourcePagePath(entry, promptSourceIdentity);
+					const rich = ctx.model
+						? await generateRichWikiPages(
+							l2DataDir,
+							entry,
+							summaryBody,
+							generationSourceContext,
+							{
+								schema: maintenanceContext.schema,
+								purpose: maintenanceContext.purpose,
+								index: maintenanceContext.index,
+								overview: maintenanceContext.overview,
+								sourceIdentity: promptSourceIdentity,
+							},
+							ctx.model,
+							ctx.modelRegistry,
+							signal,
+						)
+						: null;
+					if (ctx.model && !rich) {
+						throw new Error(`Rich wiki generation failed for ${entry.rawPath}`);
 					}
-					entry.wikiPages = [wikiPagePath, ...linkMaintenance.pages];
+					if (rich) {
+						ingestWarnings = rich.warnings;
+						reviewCount = rich.reviews;
+					}
+					if (!rich) {
+						createSourcePage(l2DataDir, entry, summaryBody, extractedPath, promptSourceIdentity);
+					}
+					linkMaintenance = rich
+						? {
+							created: rich.created,
+							updated: rich.updated,
+							unchanged: [],
+							contested: [],
+							pages: rich.pages.filter((page) => page !== wikiPagePath),
+							sourcePageBody: summaryBody,
+						}
+						: await maintainLinkedWikiPages(
+							l2DataDir,
+							entry,
+							wikiPagePath,
+							summaryBody,
+							ctx.model,
+							ctx.modelRegistry,
+						);
+					if (!rich && linkMaintenance.sourcePageBody !== summaryBody) {
+						createSourcePage(l2DataDir, entry, linkMaintenance.sourcePageBody, extractedPath, promptSourceIdentity);
+					}
+						throwIfAborted(signal);
+						entry.wikiPages = uniquePaths([
+							...entry.wikiPages,
+							...(rich ? rich.pages : [wikiPagePath, ...linkMaintenance.pages]),
+						]);
+
+					// Write index/log metadata before the completeness gate.
+					// Their persistence failures are warnings, never a reason to retry
+					// otherwise-complete generated pages.
+					if (!rich) {
+						try {
+							appendLog(
+								l2DataDir,
+								"ingest",
+								params.title,
+								[
+									`- ID: ${id}`,
+									`- 类型: ${sourceType}`,
+									`- 原始文件: ${rawPath}`,
+									`- 提取文本: ${extractedPath}`,
+									`- Source 页面: ${wikiPagePath}`,
+									`- concepts/entities: 新建 ${linkMaintenance.created.length}, 更新 ${linkMaintenance.updated.length}, 不变 ${linkMaintenance.unchanged.length}, 争议 ${linkMaintenance.contested.length}`,
+									`- 维护前上下文: schema ${maintenanceContext.schema.length} chars, index ${maintenanceContext.index.length} chars, recent log ${maintenanceContext.recentLog.length} chars`,
+								].join("\n"),
+							);
+						} catch (err) {
+							logger.warn({ err, source: params.title }, "l2_archive: failed to append ingest log");
+						}
+				}
+				try {
+					updateIndexAfterIngest(l2DataDir, entry.wikiPages);
+				} catch (err) {
+					logger.warn({ err, source: params.title }, "l2_archive: deterministic index update failed");
+				}
+				if (rich && !rich.aggregateWrites?.some((path) => path.replaceAll("\\", "/").toLowerCase() === "wiki/log.md")) {
+					try {
+						appendDeterministicIngestLog(l2DataDir, promptSourceIdentity);
+					} catch (err) {
+						const warning = `Deterministic log update failed: ${err instanceof Error ? err.message : String(err)}`;
+						ingestWarnings.push(warning);
+						logger.warn({ err, source: params.title }, "l2_archive: deterministic log update failed");
+					}
+				}
+
+					if (rich && (rich.hardFailures.length > 0 || rich.unrecoveredTruncatedPaths.length > 0)) {
+						const reasons = [
+							rich.hardFailures.length > 0 ? `${rich.hardFailures.length} wiki file write failure(s)` : "",
+							rich.unrecoveredTruncatedPaths.length > 0
+								? `${rich.unrecoveredTruncatedPaths.length} truncated FILE block(s) could not be repaired: ${rich.unrecoveredTruncatedPaths.join(", ")}`
+								: "",
+						].filter(Boolean);
+						throw new Error(`Ingest incomplete: ${reasons.join("; ")}`);
+					}
+
 					entry.status = "indexed";
 					entry.updatedAt = new Date().toISOString();
 					upsertManifest(l2DataDir, entry);
 
-					// Rebuild index
-					const allEntries = readManifest(l2DataDir);
-					rebuildIndex(l2DataDir, allEntries);
-
-					// Keep the retrieval index in sync with the touched pages.
-					for (const wikiPath of entry.wikiPages) {
-						await l2Memory.indexPageByPath(wikiPath);
-					}
-
-					// Regenerate the knowledge-base overview (best-effort; never fails archive).
+					// Retrieval is downstream of the same completeness gate as
+					// The reference flow does not index partial writes. A
+					// single retrieval-index failure is non-critical after the page
+					// set has passed completeness and must not make the source retry.
+						let retrievalIndexFailed = false;
+						for (const wikiPath of entry.wikiPages) {
+							try {
+								await l2Memory.indexPageByPath(wikiPath);
+							} catch (err) {
+								retrievalIndexFailed = true;
+								logger.warn({ err, wikiPath, source: params.title }, "l2_archive: retrieval index update failed");
+							}
+						}
+						if (retrievalIndexFailed) {
+							const reconciled = typeof l2Memory.reconcile === "function" && await l2Memory.reconcile();
+							if (!reconciled) logger.warn({ source: params.title }, "l2_archive: retrieval index remains out of sync");
+						}
 					try {
-						const overviewPath = await regenerateOverview(l2DataDir, ctx.model, ctx.modelRegistry);
-						if (overviewPath) await l2Memory.indexPageByPath(overviewPath);
+						if (fileExists(analysisCheckpointPath)) unlinkSync(analysisCheckpointPath);
 					} catch (err) {
-						logger.warn({ err }, "l2_archive: overview regeneration failed");
+						logger.warn({ err, analysisCheckpointPath }, "l2_archive: failed to clear completed ingest checkpoint");
 					}
+
 				} catch (err) {
 					entry.status = "error";
 					entry.updatedAt = new Date().toISOString();
@@ -243,39 +401,34 @@ export function createL2Tools(
 					throw err;
 				}
 
-			// Append log
-			appendLog(
-				l2DataDir,
-				"ingest",
-				params.title,
-				[
-					`- ID: ${id}`,
-					`- 类型: ${sourceType}`,
-					`- 原始文件: ${rawPath}`,
-					`- 提取文本: ${extractedPath}`,
-					`- Source 页面: ${wikiPagePath}`,
-					`- concepts/entities: 新建 ${linkMaintenance.created.length}, 更新 ${linkMaintenance.updated.length}, 不变 ${linkMaintenance.unchanged.length}, 争议 ${linkMaintenance.contested.length}`,
-					`- 维护前上下文: schema ${maintenanceContext.schema.length} chars, index ${maintenanceContext.index.length} chars, recent log ${maintenanceContext.recentLog.length} chars`,
-				].join("\n"),
-			);
-
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text:
-							`资料已归档到 L2 Wiki。\n\n` +
-							`- ID: ${id}\n` +
-							`- 标题: ${params.title}\n` +
-							`- 原始文件: ${rawPath}\n` +
-							`- Wiki 页面: ${wikiPagePath}\n` +
-							`- 自动维护: 新建 ${linkMaintenance.created.length} 个概念/实体页，更新 ${linkMaintenance.updated.length} 个\n` +
-							`- 标签: ${tags.join(", ") || "无"}\n\n` +
-							`Wiki 索引已更新。`,
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text:
+								`资料已归档到 L2 Wiki。\n\n` +
+								`- ID: ${id}\n` +
+								`- 标题: ${params.title}\n` +
+								`- 原始文件: ${rawPath}\n` +
+								`- Wiki 页面: ${wikiPagePath}\n` +
+								`- 自动维护: 新建 ${linkMaintenance.created.length} 个概念/实体页，更新 ${linkMaintenance.updated.length} 个\n` +
+								`- 标签: ${tags.join(", ") || "无"}\n\n` +
+								`Wiki 索引已更新。` +
+								(reviewCount > 0 ? `\n- 待审阅事项: ${reviewCount} 个` : "") +
+								(ingestWarnings.length > 0
+									? `\n\n归档完成，但有 ${ingestWarnings.length} 条警告：\n${ingestWarnings.map((warning) => `- ${warning}`).join("\n")}`
+									: ""),
+						},
+					],
+					details: {
+						id,
+						rawPath,
+						wikiPagePath,
+						linkedPages: linkMaintenance.pages,
+						reviewCount,
+						warnings: ingestWarnings,
 					},
-				],
-				details: { id, rawPath, wikiPagePath, linkedPages: linkMaintenance.pages },
-			};
+				};
 			});
 		},
 	});

@@ -22,7 +22,7 @@ export interface L2PageDoc {
 	/** Wiki-relative path, e.g. `wiki/entities/foo.md`. Primary key. */
 	path: string;
 	title: string;
-	/** WikiPageType as a string (source-summary | entity | concept | analysis). */
+	/** WikiPageType as a string (source-summary | entity | concept | query | comparison | synthesis | analysis). */
 	type: string;
 	tags: string[];
 	sourceIds: string[];

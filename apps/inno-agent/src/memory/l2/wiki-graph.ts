@@ -1,9 +1,9 @@
 /**
  * Wiki link graph builder + graph analysis.
  *
- * Builds the `[[link]]` + tag graph for the `/api/wiki/graph` endpoint, and
+ * Builds the resolved `[[link]]` graph for the `/api/wiki/graph` endpoint, and
  * computes algorithmic graph metrics used for maintenance and the overview:
- *   - link resolution via the shared alias index (fewer phantom nodes)
+ *   - filename-id link resolution
  *   - node degree (resolved links only)
  *   - Louvain communities + modularity + per-community cohesion
  *   - maintenance signals: missing (dangling) links, orphan pages, possible
@@ -14,7 +14,6 @@
  * additive so the existing frontend keeps working.
  */
 
-import { readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { wikiPathJoin } from "./wiki-paths.js";
 import { UndirectedGraph } from "graphology";
@@ -24,11 +23,10 @@ import louvainImport from "graphology-communities-louvain";
 // interop; pin the one method we use to a local type.
 type LouvainDetailed = (g: unknown) => { communities: Record<string, number>; modularity: number; count: number };
 const louvainDetailed = (louvainImport as unknown as { detailed: LouvainDetailed }).detailed;
-import { readText, fileExists } from "../../storage/file-store.js";
+import { readText } from "../../storage/file-store.js";
 import { parseFrontmatter } from "./wiki-maintainer.js";
 import { buildAliasIndex, extractOutgoingLinks, normalizeWikiLink, stripParenthetical } from "./wiki-links.js";
-
-const WIKI_SUBDIRS = ["sources", "entities", "concepts", "analysis"] as const;
+import { listWikiPagePaths } from "./wiki-page-files.js";
 
 /** Cohesion below this (for communities of at least MIN_COMMUNITY_SIZE) is flagged. */
 const LOW_COHESION_THRESHOLD = 0.15;
@@ -97,77 +95,94 @@ interface ResolvedLinkRecord {
 	directions: Set<string>;
 }
 
+// Relevance weights only already-resolved explicit wikilinks; they never invent
+// edges and keep provenance/common-neighbor signals bounded.
 const DIRECT_LINK_WEIGHT = 3;
 const SOURCE_OVERLAP_WEIGHT = 4;
 const COMMON_NEIGHBOR_WEIGHT = 1.5;
 
 const TYPE_AFFINITY: Record<string, Record<string, number>> = {
-	entity: { concept: 1.2, entity: 0.8, "source-summary": 1, analysis: 1 },
-	concept: { entity: 1.2, concept: 0.8, "source-summary": 1, analysis: 1.2 },
-	"source-summary": { entity: 1, concept: 1, "source-summary": 0.5, analysis: 1 },
-	analysis: { entity: 1, concept: 1.2, "source-summary": 1, analysis: 0.8 },
+	entity: { concept: 1.2, entity: 0.8, source: 1, synthesis: 1, query: 0.8 },
+	concept: { entity: 1.2, concept: 0.8, source: 1, synthesis: 1.2, query: 1 },
+	source: { entity: 1, concept: 1, source: 0.5, query: 0.8, synthesis: 1 },
+	query: { concept: 1, entity: 0.8, synthesis: 1, source: 0.8, query: 0.5 },
+	synthesis: { concept: 1.2, entity: 1, source: 1, query: 1, synthesis: 0.8 },
 };
+
+function relevanceType(type: string): string {
+	return type === "source-summary" ? "source" : type;
+}
 
 function inferTypeFromPath(wikiPath: string): string {
 	if (wikiPath.includes("entities/")) return "entity";
 	if (wikiPath.includes("concepts/")) return "concept";
+	if (wikiPath.includes("queries/")) return "query";
+	if (wikiPath.includes("comparisons/")) return "comparison";
+	if (wikiPath.includes("synthesis/")) return "synthesis";
 	if (wikiPath.includes("analysis/")) return "analysis";
 	return "source-summary";
 }
 
 /** Read all wiki pages (excluding the generated overview). */
-function readAllPages(l2DataDir: string): PageRecord[] {
+function readAllPages(l2DataDir: string, includeQueries = false): PageRecord[] {
 	const pages: PageRecord[] = [];
-	for (const sub of WIKI_SUBDIRS) {
-		const dir = join(l2DataDir, "wiki", sub);
-		if (!fileExists(dir)) continue;
-		let files: string[];
-		try {
-			files = readdirSync(dir);
-		} catch {
-			continue;
-		}
-		for (const file of files) {
-			if (!file.endsWith(".md")) continue;
-			const wikiPath = wikiPathJoin("wiki", sub, file);
-			if (wikiPath === OVERVIEW_PATH) continue;
-			const { frontmatter, body } = parseFrontmatter(readText(join(l2DataDir, wikiPath)));
-			if (!frontmatter) continue;
-			pages.push({
-				path: wikiPath,
-				title: frontmatter.title || basename(wikiPath, extname(wikiPath)),
-				type: frontmatter.type || inferTypeFromPath(wikiPath),
-				tags: frontmatter.tags ?? [],
-				sourceIds: frontmatter.source_ids ?? [],
-				body,
-				contested: frontmatter.contested === true,
-			});
-		}
+	for (const wikiPath of listWikiPagePaths(l2DataDir)) {
+		if (wikiPath === OVERVIEW_PATH) continue;
+		const { frontmatter, body } = parseFrontmatter(readText(join(l2DataDir, wikiPath)));
+		if (!frontmatter) continue;
+		if (!includeQueries && frontmatter.type === "query") continue;
+		pages.push({
+			path: wikiPath,
+			title: frontmatter.title || basename(wikiPath, extname(wikiPath)),
+			type: frontmatter.type || inferTypeFromPath(wikiPath),
+			tags: frontmatter.tags ?? [],
+			sourceIds: frontmatter.source_ids ?? [],
+			body,
+			contested: frontmatter.contested === true,
+		});
 	}
 	return pages.sort((a, b) => a.path.localeCompare(b.path, "zh-CN"));
 }
 
 /**
+ * The relevance graph retains query pages even though the visible graph
+ * excludes them. Queries can therefore contribute a common neighbor to the
+ * weight of an already-explicit page edge, but never become visible nodes.
+ */
+function buildRetrievalAdjacency(pages: PageRecord[]): { outgoing: Map<string, Set<string>>; incoming: Map<string, Set<string>> } {
+	const alias = buildAliasIndex(pages);
+	const outgoing = new Map(pages.map((page) => [page.path, new Set<string>()]));
+	const incoming = new Map(pages.map((page) => [page.path, new Set<string>()]));
+	for (const page of pages) {
+		for (const rawLink of extractOutgoingLinks(page.body)) {
+			const target = alias.resolve(rawLink);
+			if (!target || target === page.path) continue;
+			outgoing.get(page.path)!.add(target);
+			incoming.get(target)!.add(page.path);
+		}
+	}
+	return { outgoing, incoming };
+}
+
+/**
  * Build the wiki graph plus algorithmic analysis. Node ids are wiki-relative
- * paths; `[[links]]` are resolved to page ids via the shared alias index, and
- * unresolved links become synthetic nodes (and are reported under maintenance).
+ * paths; `[[links]]` resolve with filename-id aliases. Unresolved
+ * links remain maintenance findings and never become graph nodes.
  */
 export function buildWikiGraph(l2DataDir: string): WikiGraph {
-	const pages = readAllPages(l2DataDir);
+	const allPages = readAllPages(l2DataDir, true);
+	const pages = allPages.filter((page) => page.type !== "query");
 	const alias = buildAliasIndex(pages);
-	const pagePaths = new Set(pages.map((p) => p.path));
 	const pageByPath = new Map(pages.map((p) => [p.path, p]));
+	const retrievalAdjacency = buildRetrievalAdjacency(allPages);
 
 	const nodes: WikiGraphNode[] = [];
 	const resolvedLinks = new Map<string, ResolvedLinkRecord>();
-	const auxiliaryEdges = new Map<string, WikiGraphEdge>();
 	const missing: { from: string; link: string }[] = [];
 
 	// Resolved-link adjacency (undirected, distinct neighbors) for degree/community.
 	const neighbors = new Map<string, Set<string>>();
 	for (const p of pages) neighbors.set(p.path, new Set());
-
-	const unresolvedNodes = new Set<string>();
 
 	for (const p of pages) {
 		nodes.push({ id: p.path, title: p.title, type: p.type, tags: p.tags });
@@ -184,33 +199,25 @@ export function buildWikiGraph(l2DataDir: string): WikiGraph {
 				neighbors.get(p.path)!.add(target);
 				neighbors.get(target)!.add(p.path);
 			} else if (!target) {
-				// Dangling link → phantom node (backward compat) + maintenance signal.
+				// Skip unresolved links in the graph; retain only lint data.
 				const label = rawLink.split("|")[0].trim();
-				const key = `missing\u0000${p.path}\u0000${label}`;
-				auxiliaryEdges.set(key, { source: p.path, target: label, type: "link", weight: 0.5 });
-				unresolvedNodes.add(label);
 				if (!missing.some((item) => item.from === p.path && item.link === label)) {
 					missing.push({ from: p.path, link: label });
 				}
 			}
 		}
-		for (const tag of p.tags) {
-			const target = `tag:${tag}`;
-			auxiliaryEdges.set(`tag\u0000${p.path}\u0000${target}`, {
-				source: p.path,
-				target,
-				type: "tag",
-				weight: 0.35,
-			});
-		}
 	}
 
+	const retrievalNeighbors = (path: string): Set<string> => new Set([
+		...(retrievalAdjacency.outgoing.get(path) ?? []),
+		...(retrievalAdjacency.incoming.get(path) ?? []),
+	]);
 	const commonNeighborScore = (source: string, target: string): number => {
 		let score = 0;
-		const targetNeighbors = neighbors.get(target) ?? new Set<string>();
-		for (const candidate of neighbors.get(source) ?? []) {
+		const targetNeighbors = retrievalNeighbors(target);
+		for (const candidate of retrievalNeighbors(source)) {
 			if (!targetNeighbors.has(candidate)) continue;
-			const degree = neighbors.get(candidate)?.size ?? 0;
+			const degree = (retrievalAdjacency.outgoing.get(candidate)?.size ?? 0) + (retrievalAdjacency.incoming.get(candidate)?.size ?? 0);
 			score += 1 / Math.log(Math.max(degree, 2));
 		}
 		return score;
@@ -221,29 +228,17 @@ export function buildWikiGraph(l2DataDir: string): WikiGraph {
 		const targetPage = pageByPath.get(record.target)!;
 		const sourceIds = new Set(sourcePage.sourceIds);
 		const sharedSourceCount = targetPage.sourceIds.filter((id) => sourceIds.has(id)).length;
-		const affinity = TYPE_AFFINITY[sourcePage.type]?.[targetPage.type] ?? 0.5;
+		const affinity = TYPE_AFFINITY[relevanceType(sourcePage.type)]?.[relevanceType(targetPage.type)] ?? 0.5;
 		const weight =
 			record.directions.size * DIRECT_LINK_WEIGHT +
 			sharedSourceCount * SOURCE_OVERLAP_WEIGHT +
 			commonNeighborScore(record.source, record.target) * COMMON_NEIGHBOR_WEIGHT +
 			affinity;
-		return { source: record.source, target: record.target, type: "link", weight: Number(weight.toFixed(3)) };
+		return { source: record.source, target: record.target, type: "link", weight };
 	});
-	const edges = [...resolvedEdges, ...auxiliaryEdges.values()];
+	const edges = resolvedEdges;
 
-	// Synthetic nodes for tags and unresolved links.
-	const tagSeen = new Set<string>();
-	for (const e of edges) {
-		if (e.type === "tag" && !tagSeen.has(e.target)) {
-			tagSeen.add(e.target);
-			nodes.push({ id: e.target, title: e.target.replace("tag:", "#"), type: "tag", tags: [] });
-		}
-	}
-	for (const label of unresolvedNodes) {
-		if (!pagePaths.has(label)) nodes.push({ id: label, title: label, type: "concept", tags: [] });
-	}
-
-	// ---- community detection + degree over the resolved page graph ----
+	// ---- community detection over the explicit-wikilink graph ----
 	const g = new UndirectedGraph();
 	for (const p of pages) g.addNode(p.path);
 	for (const edge of resolvedEdges) {
@@ -280,11 +275,9 @@ export function buildWikiGraph(l2DataDir: string): WikiGraph {
 	for (const [path, set] of neighbors) degreeByPath.set(path, set.size);
 
 	for (const node of nodes) {
-		if (pagePaths.has(node.id)) {
-			node.degree = degreeByPath.get(node.id) ?? 0;
-			const c = community.get(node.id);
-			if (c !== undefined) node.community = c;
-		}
+		node.degree = degreeByPath.get(node.id) ?? 0;
+		const c = community.get(node.id);
+		if (c !== undefined) node.community = c;
 	}
 
 	// ---- maintenance signals ----

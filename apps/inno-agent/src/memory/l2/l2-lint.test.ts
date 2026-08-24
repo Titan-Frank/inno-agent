@@ -22,7 +22,7 @@ function page(sourceId = "l2src_clean", body = "# Clean\n\nNo links."): string {
 		created: "2026-07-30",
 		type: "concept",
 		tags: ["concept"],
-		sources: ["raw/uploads/source.md"],
+		sources: ["source.md"],
 		source_ids: [sourceId],
 		updated: "2026-07-30",
 		status: "draft",
@@ -34,7 +34,7 @@ function writeCleanFixture(root: string): void {
 	writeText(join(root, "raw/uploads/source.md"), "raw");
 	writeText(join(root, "extracted/source.md"), "extracted");
 	writeText(join(root, "wiki/concepts/clean.md"), page());
-	writeText(join(root, "wiki/index.md"), "- [[Clean]] — `wiki/concepts/clean.md`\n");
+	writeText(join(root, "wiki/index.md"), "- [[concepts/clean]] — Clean\n");
 	upsertManifest(root, {
 		id: "l2src_clean",
 		title: "Clean source",
@@ -45,7 +45,7 @@ function writeCleanFixture(root: string): void {
 		tags: [],
 		contentHash: "cleanhash",
 		status: "indexed",
-		source: { origin: "user_upload" },
+		source: { origin: "user_upload", identity: "source.md" },
 		createdAt: "2026-07-30T00:00:00.000Z",
 		updatedAt: "2026-07-30T00:00:00.000Z",
 	});
@@ -67,7 +67,7 @@ describe("L2 structural lint", () => {
 		writeCleanFixture(root);
 		writeText(join(root, "wiki/concepts/broken.md"), "# Missing metadata\n\nSee [[Unknown Topic]].");
 		writeText(join(root, "wiki/entities/invalid.md"), "---\ntitle: [unterminated\n---\ninvalid");
-		writeText(join(root, "wiki/index.md"), "- [[Ghost]] — `wiki/concepts/ghost.md`\n");
+		writeText(join(root, "wiki/index.md"), "- [[concepts/ghost]] — Ghost\n");
 		upsertManifest(root, {
 			id: "l2src_incomplete",
 			title: "Broken source",
@@ -105,5 +105,23 @@ describe("L2 structural lint", () => {
 
 		expect(runL2Lint(root).findings).toContainEqual(expect.objectContaining({ code: "unknown_source_id" }));
 		expect(readFileSync(path, "utf8")).toBe(before);
+	});
+
+	it("accepts and indexes a custom schema page type", () => {
+		const root = makeTempDir();
+		writeCleanFixture(root);
+		writeText(join(root, "wiki/SCHEMA.md"), [
+			"# Wiki Schema", "", "## Page Types", "", "| Type | Directory |", "| --- | --- |",
+			"| concept | wiki/concepts/ | Concepts |", "| method | wiki/methods/ | Methods |",
+		].join("\n"));
+		writeText(join(root, "wiki/methods/custom.md"), `${serializeFrontmatter({
+			title: "Custom method", created: "2026-07-30", type: "method", tags: [], sources: ["source.md"],
+			source_ids: ["l2src_clean"], updated: "2026-07-30", status: "draft", confidence: "medium",
+		})}\n# Custom method\n`);
+		writeText(join(root, "wiki/index.md"), "- [[concepts/clean]] — Clean\n- [[methods/custom]] — Custom method\n");
+
+		const report = runL2Lint(root);
+		expect(report.pagesChecked).toBe(2);
+		expect(report.findings.filter((item) => item.path === "wiki/methods/custom.md")).toEqual([]);
 	});
 });

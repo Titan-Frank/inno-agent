@@ -84,9 +84,13 @@
 		"search": "Search pages or tags…",
 		"filter": {
 			"all": "All",
+			"source": "Sources",
 			"source-summary": "Sources",
 			"entity": "Entities",
 			"concept": "Concepts",
+			"query": "Queries",
+			"comparison": "Comparisons",
+			"synthesis": "Synthesis",
 			"analysis": "Analysis"
 		},
 		"view": {
@@ -127,6 +131,10 @@
 			"openInNotebook": "Open page",
 			"backToGraph": "Back to graph"
 		},
+		"reviews": {
+			"title": "Reviews",
+			"empty": "No pending review items."
+		},
 		"delete": {
 			"button": "Delete",
 			"confirm": "Delete \"{{title}}\"? This page will be permanently removed."
@@ -139,9 +147,13 @@
 			"openPage": "Open page"
 		},
 		"types": {
+			"source": "Source",
 			"source-summary": "Source",
 			"entity": "Entity",
 			"concept": "Concept",
+			"query": "Query",
+			"comparison": "Comparison",
+			"synthesis": "Synthesis",
 			"analysis": "Analysis",
 			"tag": "Tag",
 			"unknown": "Unknown"

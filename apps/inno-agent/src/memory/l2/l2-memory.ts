@@ -13,18 +13,16 @@
  * and the HTTP server share ONE handle within a process.
  */
 
-import { join } from "node:path";
 import { logger } from "../../logger.js";
-import { fileExists } from "../../storage/file-store.js";
 import { openL2IndexStore, type L2IndexStore } from "./l2-index-store.js";
 import { indexAllPages, indexPage, removePageFromIndex } from "./l2-indexer.js";
 import { searchL2, type L2SearchResult } from "./l2-search.js";
-import { regenerateOverview, OVERVIEW_PATH } from "./overview.js";
 
 export class L2Memory {
 	private store: L2IndexStore | null = null;
 	private opened = false;
 	private backfilled = false;
+	private backfillPromise: Promise<void> | null = null;
 
 	constructor(private readonly l2DataDir: string) {}
 
@@ -51,32 +49,44 @@ export class L2Memory {
 	 * One-time backfill of all existing wiki pages (cheap: skips unchanged
 	 * files). Index sync always runs — even when L2 is disabled — so the
 	 * layer can be re-enabled without a backfill gap (same philosophy as L3).
-	 * `generateOverview` gates the visible side effect (bootstrapping
-	 * `wiki/analysis/overview.md`); pass false when L2 is disabled.
+	 * Backfill is index-only: ingestion reads an existing overview during ingest
+	 * but does not create aggregate model-visible context as a startup side effect.
 	 */
-	async backfill(options: { generateOverview?: boolean } = {}): Promise<void> {
+	async backfill(): Promise<void> {
 		if (this.backfilled) return;
+		if (this.backfillPromise) return this.backfillPromise;
+
+		const run = this.runBackfill();
+		this.backfillPromise = run;
+		try {
+			await run;
+		} finally {
+			if (this.backfillPromise === run) this.backfillPromise = null;
+		}
+	}
+
+	private async runBackfill(): Promise<void> {
 		const store = await this.ensureStore();
 		if (!store) return;
-		this.backfilled = true;
 		try {
 			const { indexed, pruned } = indexAllPages(store, this.l2DataDir);
+			this.backfilled = true;
 			if (indexed > 0 || pruned > 0) logger.info(`[L2] backfill indexed ${indexed} page(s), pruned ${pruned}.`);
 		} catch (err) {
 			logger.warn({ err }, `[L2] backfill failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
 
-		if (options.generateOverview === false) return;
-
-		// Ensure an overview page exists (deterministic core; an LLM narrative is
-		// added on the next archive, which has a model available).
+	/** Reconcile every page after an incremental update failed in this process. */
+	async reconcile(): Promise<boolean> {
+		const store = await this.ensureStore();
+		if (!store) return false;
 		try {
-			if (!fileExists(join(this.l2DataDir, OVERVIEW_PATH))) {
-				const rel = await regenerateOverview(this.l2DataDir);
-				if (rel) await this.indexPageByPath(rel);
-			}
+			indexAllPages(store, this.l2DataDir);
+			return true;
 		} catch (err) {
-			logger.warn({ err }, "[L2] overview bootstrap failed");
+			logger.warn({ err }, `[L2] reconciliation failed: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
 		}
 	}
 
@@ -85,11 +95,7 @@ export class L2Memory {
 		if (!wikiPath) return;
 		const store = await this.ensureStore();
 		if (!store) return;
-		try {
-			indexPage(store, this.l2DataDir, wikiPath);
-		} catch (err) {
-			logger.warn({ err }, `[L2] index ${wikiPath} failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
+		indexPage(store, this.l2DataDir, wikiPath);
 	}
 
 	/**

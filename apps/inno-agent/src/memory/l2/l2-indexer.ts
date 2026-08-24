@@ -9,14 +9,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
-import { wikiPathJoin } from "./wiki-paths.js";
 import { readText, fileExists } from "../../storage/file-store.js";
 import { parseFrontmatter } from "./wiki-maintainer.js";
 import type { L2IndexStore, L2PageDoc } from "./l2-index-store.js";
-
-const WIKI_SUBDIRS = ["sources", "entities", "concepts", "analysis"] as const;
+import { listWikiPagePaths } from "./wiki-page-files.js";
 
 function contentHashOf(s: string): string {
 	return createHash("sha256").update(s).digest("hex").slice(0, 16);
@@ -25,6 +23,9 @@ function contentHashOf(s: string): string {
 function inferTypeFromPath(wikiPath: string): string {
 	if (wikiPath.includes("entities/")) return "entity";
 	if (wikiPath.includes("concepts/")) return "concept";
+	if (wikiPath.includes("queries/")) return "query";
+	if (wikiPath.includes("comparisons/")) return "comparison";
+	if (wikiPath.includes("synthesis/")) return "synthesis";
 	if (wikiPath.includes("analysis/")) return "analysis";
 	return "source-summary";
 }
@@ -73,19 +74,9 @@ export function indexPage(store: L2IndexStore, l2DataDir: string, wikiPath: stri
 export function indexAllPages(store: L2IndexStore, l2DataDir: string): { indexed: number; pruned: number } {
 	const present = new Set<string>();
 	let indexed = 0;
-	for (const sub of WIKI_SUBDIRS) {
-		const dir = join(l2DataDir, "wiki", sub);
-		let files: string[];
-		try {
-			files = readdirSync(dir).filter((f) => f.endsWith(".md"));
-		} catch {
-			continue;
-		}
-		for (const f of files) {
-			const wikiPath = wikiPathJoin("wiki", sub, f);
-			present.add(wikiPath);
-			if (indexPage(store, l2DataDir, wikiPath)) indexed++;
-		}
+	for (const wikiPath of listWikiPagePaths(l2DataDir)) {
+		present.add(wikiPath);
+		if (indexPage(store, l2DataDir, wikiPath)) indexed++;
 	}
 	let pruned = 0;
 	for (const p of store.listIndexedPaths()) {

@@ -1,15 +1,16 @@
 import type { IncomingMessage as HttpReq, ServerResponse } from "node:http";
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { wikiPathJoin } from "../../memory/l2/wiki-paths.js";
 import { logger } from "../../logger.js";
 import { getL2Memory } from "../../memory/l2/l2-memory.js";
 import { readManifest, removeWikiPathFromManifest } from "../../memory/l2/manifest-store.js";
 import { buildWikiGraph } from "../../memory/l2/wiki-graph.js";
-import { parseFrontmatter } from "../../memory/l2/wiki-maintainer.js";
-import { ensureDir, readText, writeText } from "../../storage/file-store.js";
+import { parseFrontmatter, rebuildIndex } from "../../memory/l2/wiki-maintainer.js";
+import type { WikiIngestReview } from "../../memory/l2/wiki-generator.js";
+import { ensureDir, readJsonl, readText, writeText } from "../../storage/file-store.js";
 import { safeJoinReal } from "../file-helpers.js";
 import { json, readBody, UPLOAD_MAX_BODY_BYTES } from "../http-helpers.js";
+import { listWikiPagePaths } from "../../memory/l2/wiki-page-files.js";
 
 export interface WikiRouteContext {
 	l2DataDir: string;
@@ -20,23 +21,6 @@ export interface WikiRouteContext {
 // listing helpers closed over server.ts's module-level l2DataDir; they take
 // it as an explicit parameter instead.
 // ---------------------------------------------------------------------------
-
-const WIKI_PAGE_DIRS = ["sources", "entities", "concepts", "analysis"] as const;
-
-function listWikiPagePaths(l2DataDir: string): string[] {
-	const wikiRoot = join(l2DataDir, "wiki");
-	const paths: string[] = [];
-	for (const dirName of WIKI_PAGE_DIRS) {
-		const dir = join(wikiRoot, dirName);
-		if (!existsSync(dir)) continue;
-		for (const file of readdirSync(dir)) {
-			if (file.endsWith(".md")) {
-				paths.push(wikiPathJoin("wiki", dirName, file));
-			}
-		}
-	}
-	return paths.sort((a, b) => a.localeCompare(b, "zh-CN"));
-}
 
 function manifestSourceIdByWikiPath(l2DataDir: string): Map<string, string> {
 	const map = new Map<string, string>();
@@ -146,6 +130,11 @@ export async function handleWikiRoutes(
 		}
 		writeText(fullPath, content);
 		await getL2Memory(l2DataDir).indexPageByPath(path);
+		try {
+			rebuildIndex(l2DataDir, readManifest(l2DataDir));
+		} catch (err) {
+			logger.warn({ err, path }, "failed to rebuild wiki index after page update");
+		}
 		json(res, 200, { path, saved: true });
 		return true;
 	}
@@ -170,10 +159,27 @@ export async function handleWikiRoutes(
 			rmSync(fullPath);
 			removeWikiPathFromManifest(l2DataDir, path);
 			await getL2Memory(l2DataDir).removePage(path);
+			try {
+				rebuildIndex(l2DataDir, readManifest(l2DataDir));
+			} catch (err) {
+				logger.warn({ err, path }, "failed to rebuild wiki index after page deletion");
+			}
 			json(res, 200, { path, deleted: true });
 		} catch (err) {
 			logger.warn({ err }, "failed to delete wiki page");
 			json(res, 500, { error: "Failed to delete wiki page" });
+		}
+		return true;
+	}
+
+	if (method === "GET" && url === "/api/wiki/reviews") {
+		try {
+			const reviews = readJsonl<WikiIngestReview>(join(l2DataDir, "reviews.jsonl"))
+				.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+			json(res, 200, reviews);
+		} catch (err) {
+			logger.warn({ err }, "failed to list wiki reviews");
+			json(res, 200, []);
 		}
 		return true;
 	}
