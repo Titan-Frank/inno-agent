@@ -170,6 +170,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 	const { t } = useTranslation();
 	const dndManager = useDragDropManager();
 	const [isResizing, setIsResizing] = useState(false);
+	const [resizeLimitReached, setResizeLimitReached] = useState(false);
 	const [resizePreviewWidth, setResizePreviewWidth] = useState<number | null>(null);
 	const resizeStartRef = useRef<WorkspaceResizeStart | null>(null);
 	const resizePreviewWidthRef = useRef<number | null>(null);
@@ -216,12 +217,17 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			const start = resizeStartRef.current;
 			if (!start || event.pointerId !== start.pointerId) return;
 			event.preventDefault();
+			const maxWidth = Math.max(
+				mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH,
+				resizeMaxWidthRef.current,
+			);
 			const nextWidth = clampResizeWidth(
 				start.width + start.clientX - event.clientX,
 				mode,
 				resizeMaxWidthRef.current,
 			);
 			resizePreviewWidthRef.current = nextWidth;
+			setResizeLimitReached(nextWidth >= maxWidth);
 			setResizePreviewWidth(nextWidth);
 		};
 		const finishResize = (commit: boolean) => {
@@ -231,6 +237,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			resizeStartRef.current = null;
 			resizePreviewWidthRef.current = null;
 			resizeMaxWidthRef.current = WORKSPACE_MAX_WIDTH;
+			setResizeLimitReached(false);
 			setResizePreviewWidth(null);
 			setIsResizing(false);
 			if (nextWidth !== null) void commitResize(nextWidth);
@@ -284,6 +291,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			width: startWidth,
 		};
 		resizePreviewWidthRef.current = startWidth;
+		setResizeLimitReached(startWidth >= Math.max(startWidth, layoutMaxWidth));
 		setResizePreviewWidth(startWidth);
 		setIsResizing(true);
 		if (event.currentTarget.setPointerCapture) {
@@ -311,6 +319,13 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 						getMaximumWorkspaceWidth(expandedViewportWidth, appStore.sidebarCollapsed, mode),
 					),
 				);
+				const maxWidth = Math.max(
+					mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH,
+					resizeMaxWidthRef.current,
+				);
+				setResizeLimitReached(
+					resizePreviewWidthRef.current !== null && resizePreviewWidthRef.current >= maxWidth,
+				);
 			});
 		}
 	}, [mode, width]);
@@ -321,7 +336,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 	const resizePreviewPortal = isResizing && resizePreviewWidth !== null && typeof document !== "undefined"
 		? createPortal(
 			<div
-				className="workspace-resize-preview"
+				className={`workspace-resize-preview ${resizeLimitReached ? "workspace-resize-preview--limit" : ""}`}
 				aria-hidden="true"
 				style={{ "--inno-workspace-preview-width": `${resizePreviewWidth}px` } as React.CSSProperties}
 			/>,
