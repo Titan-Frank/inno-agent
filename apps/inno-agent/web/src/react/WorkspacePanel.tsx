@@ -291,14 +291,19 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 		}
 
 		// On desktop, include the amount of host-window space that can still be
-		// expanded on the right. Browser builds simply keep the layout-derived
-		// limit above.
+		// expanded on either edge. The commit uses the right edge first and moves
+		// the window left when the right edge is already at the display boundary.
 		const getWindowWidthCapacity = window.innoDesktop?.getWindowWidthCapacity;
 		if (getWindowWidthCapacity) {
-			void getWindowWidthCapacity("right").then((capacity) => {
+			void Promise.all([
+				getWindowWidthCapacity("right").catch(() => 0),
+				getWindowWidthCapacity("left").catch(() => 0),
+			]).then(([rightCapacity, leftCapacity]) => {
 				const active = resizeStartRef.current;
 				if (!active || active.pointerId !== event.pointerId) return;
-				const expandedViewportWidth = window.innerWidth + Math.max(0, Math.round(capacity));
+				const expandedViewportWidth = window.innerWidth
+					+ Math.max(0, Math.round(rightCapacity))
+					+ Math.max(0, Math.round(leftCapacity));
 				resizeMaxWidthRef.current = Math.min(
 					WORKSPACE_MAX_WIDTH,
 					Math.max(
