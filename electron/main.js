@@ -119,6 +119,10 @@ ipcMain.on("inno-close-dialog-copy", (_event, copy) => {
 
 const MAX_WINDOW_EXPANSION = 1200;
 
+function isWindowExpansionSide(value) {
+  return value === "left" || value === "right";
+}
+
 function isWindowExpansionRequest(value) {
   return value
     && typeof value === "object"
@@ -160,6 +164,23 @@ ipcMain.handle("inno-expand-window-width", (event, request) => {
     width: nextWidth,
   }, true);
   return true;
+});
+
+ipcMain.handle("inno-window-width-capacity", (event, side) => {
+  if (!isWindowExpansionSide(side)
+    || !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents) {
+    return 0;
+  }
+
+  const currentBounds = mainWindow.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const workArea = display.workArea;
+  const capacity = side === "left"
+    ? currentBounds.x - workArea.x
+    : workArea.x + workArea.width - (currentBounds.x + currentBounds.width);
+  return Math.max(0, Math.min(MAX_WINDOW_EXPANSION, Math.floor(capacity)));
 });
 
 // ── Loading 窗口（服务启动期间显示） ────────────────────────────────────────

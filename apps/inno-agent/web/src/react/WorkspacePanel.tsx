@@ -1,4 +1,5 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "motion/react";
 import { DndProvider, useDragDropManager } from "react-dnd";
@@ -6,8 +7,10 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 import type { DragDropManager } from "dnd-core";
 import { PanelRightOpen, PanelRightClose, Columns2, Maximize2, BookOpen, BriefcaseBusiness, FolderKanban, Settings, Sparkles, UserRound } from "lucide-react";
 import type { RightPanelTab, WorkspaceMode } from "../stores/app-store.js";
+import { getMaximumWorkspaceWidth, WORKSPACE_MAX_WIDTH, WORKSPACE_MIN_WIDTH, WORKSPACE_QUARTER_MIN_WIDTH } from "../stores/app-layout.js";
 import { appStore } from "../stores/app-store.js";
 import { settingsStore } from "../stores/settings-store.js";
+import { ensureWindowForPanel } from "../stores/window-expansion.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { isDynamicImportError, recoverFromDynamicImportError } from "../utils/dynamic-import-recovery.js";
 
@@ -35,6 +38,32 @@ const TAB_ICONS: Record<RightPanelTab, ReactNode> = {
 	jobs: <BriefcaseBusiness size={14} />,
 	skills: <Sparkles size={14} />,
 };
+
+interface WorkspaceResizeStart {
+	pointerId: number;
+	clientX: number;
+	width: number;
+}
+
+function getLayoutResizeMax(mode: WorkspaceMode): number {
+	return typeof window === "undefined"
+		? WORKSPACE_MAX_WIDTH
+		: getMaximumWorkspaceWidth(window.innerWidth, appStore.sidebarCollapsed, mode);
+}
+
+function clampResizeWidth(width: number, mode: WorkspaceMode, maxWidth = getLayoutResizeMax(mode)): number {
+	const minWidth = mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH;
+	return Math.max(minWidth, Math.min(Math.max(minWidth, maxWidth), Math.round(width)));
+}
+
+function waitForWindowLayoutToSettle(): Promise<void> {
+	if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return Promise.resolve();
+	return new Promise((resolve) => {
+		window.requestAnimationFrame(() => {
+			window.requestAnimationFrame(() => resolve());
+		});
+	});
+}
 
 class WorkspaceContentErrorBoundary extends Component<
 	{ resetKey: string; onRetry(): void; children: ReactNode },
@@ -141,6 +170,11 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 	const { t } = useTranslation();
 	const dndManager = useDragDropManager();
 	const [isResizing, setIsResizing] = useState(false);
+	const [resizePreviewWidth, setResizePreviewWidth] = useState<number | null>(null);
+	const resizeStartRef = useRef<WorkspaceResizeStart | null>(null);
+	const resizePreviewWidthRef = useRef<number | null>(null);
+	const resizeMaxWidthRef = useRef(WORKSPACE_MAX_WIDTH);
+	const resizeCommitGenerationRef = useRef(0);
 	const [contentRetryKey, setContentRetryKey] = useState(0);
 	const [hasOpenedWorkspace, setHasOpenedWorkspace] = useState(mode !== "collapsed");
 	const retryContent = useCallback(() => setContentRetryKey((key) => key + 1), []);
@@ -158,25 +192,77 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			onTabChange("preview");
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [simpleMode, activeTab, onTabChange]);
+		}, [simpleMode, activeTab, onTabChange]);
+
+	const commitResize = useCallback(async (nextWidth: number) => {
+		const generation = ++resizeCommitGenerationRef.current;
+		// When the current chat column is already at its baseline width, the
+		// renderer cannot fit a wider workspace without first making more room.
+		// Electron can expand the host window; browser builds safely fall back to
+		// the existing fitPanelLayout constraint inside onWidthChange.
+		await ensureWindowForPanel("right", nextWidth, mode);
+		// The host-window resize can emit a second renderer resize event after
+		// ensureWindowForPanel resolves. Commit after those fit passes settle so
+		// the requested workspace width is not overwritten by the old width.
+		await waitForWindowLayoutToSettle();
+		if (generation !== resizeCommitGenerationRef.current) return;
+		onWidthChange(nextWidth);
+	}, [mode, onWidthChange]);
 
 	useEffect(() => {
 		if (!isResizing) return;
 
 		const handlePointerMove = (event: PointerEvent) => {
-			onWidthChange(window.innerWidth - event.clientX);
+			const start = resizeStartRef.current;
+			if (!start || event.pointerId !== start.pointerId) return;
+			event.preventDefault();
+			const nextWidth = clampResizeWidth(
+				start.width + start.clientX - event.clientX,
+				mode,
+				resizeMaxWidthRef.current,
+			);
+			resizePreviewWidthRef.current = nextWidth;
+			setResizePreviewWidth(nextWidth);
 		};
-		const handlePointerUp = () => setIsResizing(false);
+		const finishResize = (commit: boolean) => {
+			const start = resizeStartRef.current;
+			if (!start) return;
+			const nextWidth = commit ? resizePreviewWidthRef.current : null;
+			resizeStartRef.current = null;
+			resizePreviewWidthRef.current = null;
+			resizeMaxWidthRef.current = WORKSPACE_MAX_WIDTH;
+			setResizePreviewWidth(null);
+			setIsResizing(false);
+			if (nextWidth !== null) void commitResize(nextWidth);
+		};
+		const handlePointerUp = (event: PointerEvent) => {
+			if (resizeStartRef.current?.pointerId !== event.pointerId) return;
+			finishResize(true);
+		};
+		const handlePointerCancel = (event: PointerEvent) => {
+			if (resizeStartRef.current?.pointerId !== event.pointerId) return;
+			finishResize(false);
+		};
+		const handleWindowBlur = () => finishResize(false);
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") finishResize(false);
+		};
 
 		document.body.classList.add("workspace-resizing");
 		window.addEventListener("pointermove", handlePointerMove);
-		window.addEventListener("pointerup", handlePointerUp, { once: true });
+		window.addEventListener("pointerup", handlePointerUp);
+		window.addEventListener("pointercancel", handlePointerCancel);
+		window.addEventListener("blur", handleWindowBlur);
+		window.addEventListener("keydown", handleKeyDown);
 		return () => {
 			document.body.classList.remove("workspace-resizing");
 			window.removeEventListener("pointermove", handlePointerMove);
 			window.removeEventListener("pointerup", handlePointerUp);
+			window.removeEventListener("pointercancel", handlePointerCancel);
+			window.removeEventListener("blur", handleWindowBlur);
+			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [isResizing, onWidthChange]);
+	}, [commitResize, isResizing, mode]);
 
 	// Keep the workspace browser mounted after its first open. Collapsing the
 	// panel should hide it, not restart its tree/preview lifecycle on reopen.
@@ -186,12 +272,57 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 
 	const startResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
 		event.preventDefault();
+		// Invalidate a previous asynchronous commit if the user starts another
+		// resize before a host-window expansion has finished.
+		resizeCommitGenerationRef.current += 1;
+		const layoutMaxWidth = getLayoutResizeMax(mode);
+		const startWidth = clampResizeWidth(width, mode, Math.max(width, layoutMaxWidth));
+		resizeMaxWidthRef.current = Math.max(startWidth, layoutMaxWidth);
+		resizeStartRef.current = {
+			pointerId: event.pointerId,
+			clientX: event.clientX,
+			width: startWidth,
+		};
+		resizePreviewWidthRef.current = startWidth;
+		setResizePreviewWidth(startWidth);
 		setIsResizing(true);
-	}, []);
+		if (event.currentTarget.setPointerCapture) {
+			event.currentTarget.setPointerCapture(event.pointerId);
+		}
+
+		// On desktop, include the amount of host-window space that can still be
+		// expanded on the right. Browser builds simply keep the layout-derived
+		// limit above.
+		const getWindowWidthCapacity = window.innoDesktop?.getWindowWidthCapacity;
+		if (getWindowWidthCapacity) {
+			void getWindowWidthCapacity("right").then((capacity) => {
+				const active = resizeStartRef.current;
+				if (!active || active.pointerId !== event.pointerId) return;
+				const expandedViewportWidth = window.innerWidth + Math.max(0, Math.round(capacity));
+				resizeMaxWidthRef.current = Math.min(
+					WORKSPACE_MAX_WIDTH,
+					Math.max(
+						resizeMaxWidthRef.current,
+						getMaximumWorkspaceWidth(expandedViewportWidth, appStore.sidebarCollapsed, mode),
+					),
+				);
+			});
+		}
+	}, [mode, width]);
 
 	const compact = mode !== "full" && width < 500;
 	const collapsed = mode === "collapsed";
 	const shouldMountContent = hasOpenedWorkspace || !collapsed;
+	const resizePreviewPortal = isResizing && resizePreviewWidth !== null && typeof document !== "undefined"
+		? createPortal(
+			<div
+				className="workspace-resize-preview"
+				aria-hidden="true"
+				style={{ "--inno-workspace-preview-width": `${resizePreviewWidth}px` } as React.CSSProperties}
+			/>,
+			document.body,
+		)
+		: null;
 	const handleTabChange = useCallback((tab: RightPanelTab) => {
 		if (tab !== activeTab && dndManager.getMonitor().isDragging()) {
 			// A file drag can outlive the source tree for a tick after drop. End
@@ -209,6 +340,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 
 	return (
 		<aside className={`workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col ${collapsed ? "overflow-visible border-l-0 bg-transparent" : "overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]"}`}>
+			{resizePreviewPortal}
 			{collapsed ? (
 				<button
 					className="absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-[var(--inno-text-subtle)] transition-colors hover:bg-white/90 hover:text-[var(--inno-text)] hover:shadow-sm"

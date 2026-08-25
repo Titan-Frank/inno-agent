@@ -43,4 +43,8 @@ contextBridge.exposeInMainWorld("innoDesktop", {
     }
     return ipcRenderer.invoke("inno-expand-window-width", { side, additionalWidth });
   },
+  getWindowWidthCapacity(side) {
+    if (!isWindowExpansionSide(side)) return Promise.resolve(0);
+    return ipcRenderer.invoke("inno-window-width-capacity", side);
+  },
 });

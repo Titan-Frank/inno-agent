@@ -12,6 +12,20 @@ export function getEffectiveWorkspaceWidth(width: number, mode: WorkspaceMode = 
 	return Math.max(minWidth, Math.min(WORKSPACE_MAX_WIDTH, Math.round(width)));
 }
 
+/**
+ * Maximum workspace width that can fit in the current non-overlay layout
+ * without squeezing the chat below its baseline width.
+ */
+export function getMaximumWorkspaceWidth(
+	viewportWidth: number,
+	sidebarCollapsed: boolean,
+	mode: WorkspaceMode,
+): number {
+	const minWidth = mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH;
+	const availableWidth = viewportWidth - CHAT_BASELINE_WIDTH - (sidebarCollapsed ? 0 : SIDEBAR_WIDTH);
+	return Math.max(minWidth, Math.min(WORKSPACE_MAX_WIDTH, Math.round(availableWidth)));
+}
+
 export interface FittedPanelLayout {
 	sidebarCollapsed: boolean;
 	workspaceMode: WorkspaceMode;
