@@ -45,13 +45,7 @@ interface WorkspaceResizeStart {
 	width: number;
 }
 
-function getLayoutResizeMax(mode: WorkspaceMode): number {
-	return typeof window === "undefined"
-		? WORKSPACE_MAX_WIDTH
-		: getMaximumWorkspaceWidth(window.innerWidth, appStore.sidebarCollapsed, mode);
-}
-
-function clampResizeWidth(width: number, mode: WorkspaceMode, maxWidth = getLayoutResizeMax(mode)): number {
+function clampResizeWidth(width: number, mode: WorkspaceMode, maxWidth: number): number {
 	const minWidth = mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH;
 	return Math.max(minWidth, Math.min(Math.max(minWidth, maxWidth), Math.round(width)));
 }
@@ -282,7 +276,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 		// Invalidate a previous asynchronous commit if the user starts another
 		// resize before a host-window expansion has finished.
 		resizeCommitGenerationRef.current += 1;
-		const layoutMaxWidth = getLayoutResizeMax(mode);
+		const layoutMaxWidth = getMaximumWorkspaceWidth(window.innerWidth, appStore.sidebarCollapsed, mode);
 		const startWidth = clampResizeWidth(width, mode, Math.max(width, layoutMaxWidth));
 		resizeMaxWidthRef.current = Math.max(startWidth, layoutMaxWidth);
 		resizeStartRef.current = {
@@ -291,7 +285,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			width: startWidth,
 		};
 		resizePreviewWidthRef.current = startWidth;
-		setResizeLimitReached(startWidth >= Math.max(startWidth, layoutMaxWidth));
+		setResizeLimitReached(startWidth >= layoutMaxWidth);
 		setResizePreviewWidth(startWidth);
 		setIsResizing(true);
 		if (event.currentTarget.setPointerCapture) {
