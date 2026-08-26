@@ -1632,8 +1632,8 @@ inno-workspace-panel textarea {
 	user-select: none;
 }
 
-/* The panel stays in place while resizing; this ghost edge follows the
- * pointer and is committed only when the pointer is released. */
+/* The panel stays in place only when a requested width cannot be applied to
+ * the live layout; this ghost edge follows the pointer until release. */
 .workspace-resize-preview {
 	position: fixed;
 	top: 0;
@@ -1681,8 +1681,9 @@ inno-workspace-panel textarea {
 }
 
 /* Hide the old edge while the ghost edge is active so the user sees one
- * unambiguous target position. */
-.workspace-resizing .workspace-resize-handle::after {
+ * unambiguous target position. During a normal resize the real edge remains
+ * visible and the workspace follows the pointer directly. */
+.workspace-resize-preview-active .workspace-resize-handle::after {
 	background: transparent;
 	box-shadow: none;
 }

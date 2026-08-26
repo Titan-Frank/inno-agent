@@ -211,15 +211,26 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			const start = resizeStartRef.current;
 			if (!start || event.pointerId !== start.pointerId) return;
 			event.preventDefault();
-			const maxWidth = Math.max(
-				mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH,
-				resizeMaxWidthRef.current,
-			);
+			const maxWidth = resizeMaxWidthRef.current;
 			const nextWidth = clampResizeWidth(
 				start.width + start.clientX - event.clientX,
 				mode,
 				resizeMaxWidthRef.current,
 			);
+			const directMaxWidth = Math.max(
+				start.width,
+				getMaximumWorkspaceWidth(window.innerWidth, appStore.sidebarCollapsed, mode),
+			);
+			if (nextWidth <= directMaxWidth) {
+				// Keep the workspace attached to the pointer while the current
+				// window has room for it. The preview edge is only a fallback for
+				// widths that cannot be applied to the live layout yet.
+				resizePreviewWidthRef.current = null;
+				setResizeLimitReached(false);
+				setResizePreviewWidth(null);
+				onWidthChange(nextWidth);
+				return;
+			}
 			resizePreviewWidthRef.current = nextWidth;
 			setResizeLimitReached(nextWidth >= maxWidth);
 			setResizePreviewWidth(nextWidth);
@@ -235,6 +246,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			setResizePreviewWidth(null);
 			setIsResizing(false);
 			if (nextWidth !== null) void commitResize(nextWidth);
+			else if (!commit) onWidthChange(start.width);
 		};
 		const handlePointerUp = (event: PointerEvent) => {
 			if (resizeStartRef.current?.pointerId !== event.pointerId) return;
@@ -284,9 +296,9 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 			clientX: event.clientX,
 			width: startWidth,
 		};
-		resizePreviewWidthRef.current = startWidth;
-		setResizeLimitReached(startWidth >= layoutMaxWidth);
-		setResizePreviewWidth(startWidth);
+		resizePreviewWidthRef.current = null;
+		setResizeLimitReached(false);
+		setResizePreviewWidth(null);
 		setIsResizing(true);
 		if (event.currentTarget.setPointerCapture) {
 			event.currentTarget.setPointerCapture(event.pointerId);
@@ -313,10 +325,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 						getMaximumWorkspaceWidth(expandedViewportWidth, appStore.sidebarCollapsed, mode),
 					),
 				);
-				const maxWidth = Math.max(
-					mode === "quarter" ? WORKSPACE_QUARTER_MIN_WIDTH : WORKSPACE_MIN_WIDTH,
-					resizeMaxWidthRef.current,
-				);
+				const maxWidth = resizeMaxWidthRef.current;
 				setResizeLimitReached(
 					resizePreviewWidthRef.current !== null && resizePreviewWidthRef.current >= maxWidth,
 				);
@@ -353,7 +362,7 @@ function WorkspacePanelContent({ activeTab, mode, width, onTabChange, onModeChan
 	}, [dndManager]);
 
 	return (
-		<aside className={`workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col ${collapsed ? "overflow-visible border-l-0 bg-transparent" : "overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]"}`}>
+		<aside className={`workspace-panel inno-workspace-scope relative flex h-full min-h-0 min-w-0 flex-col ${resizePreviewWidth !== null ? "workspace-resize-preview-active" : ""} ${collapsed ? "overflow-visible border-l-0 bg-transparent" : "overflow-hidden border-l border-[var(--inno-border)] bg-[var(--inno-workspace-bg)]"}`}>
 			{resizePreviewPortal}
 			{collapsed ? (
 				<button
