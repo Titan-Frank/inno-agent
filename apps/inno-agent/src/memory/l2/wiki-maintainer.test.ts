@@ -8,6 +8,7 @@ import {
 	appendLog,
 	createSourcePage,
 	ensureL2Directories,
+	getSourcePagePath,
 	parseFrontmatter,
 	readMaintenanceContext,
 	rebuildIndex,
@@ -46,6 +47,15 @@ afterEach(() => {
 });
 
 describe("L2 wiki maintenance", () => {
+	it("uses portable logical paths for source pages", () => {
+		for (const pagePath of [
+			getSourcePagePath(entry()),
+			getSourcePagePath(entry(), "notes/algebra.md"),
+		]) {
+			expect(pagePath).toMatch(/^wiki\/sources\/[^/\\]+\.md$/);
+		}
+	});
+
 	it("round-trips frontmatter through the YAML parser", () => {
 		const frontmatter: WikiPageFrontmatter = {
 			title: "包含: 冒号与 # 符号",
