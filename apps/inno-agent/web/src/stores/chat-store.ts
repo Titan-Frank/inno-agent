@@ -800,6 +800,31 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.emit("change", undefined);
 	}
 
+	/**
+	 * Mirror a server-side session branch in the visible conversation.
+	 * The edited user message and every response after it belong to the
+	 * abandoned branch and must disappear before the replacement is sent.
+	 */
+	branchBefore(entryId: string): boolean {
+		const index = this.messages.findIndex((message) => message.entryId === entryId);
+		if (index < 0 || this.messages[index]?.role !== "user") return false;
+
+		this.messages = this.messages.slice(0, index);
+		let priorUserMessage: ChatMessage | undefined;
+		for (let cursor = this.messages.length - 1; cursor >= 0; cursor--) {
+			if (this.messages[cursor]?.role === "user") {
+				priorUserMessage = this.messages[cursor];
+				break;
+			}
+		}
+		this.lastUserPrompt = priorUserMessage?.content ?? null;
+		this.lastImages = undefined;
+		this.pendingQuestion = null;
+		this.resetTransientStreamState();
+		this.emit("change", undefined);
+		return true;
+	}
+
 	showError(message: string): void {
 		this.streamingError = message;
 		this.emit("change", undefined);

@@ -384,6 +384,22 @@ describe("ChatStore stream ownership", () => {
 		expect(store.isSending).toBe(false);
 	});
 
+	it("removes the edited user turn and every later message from the active branch", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{ role: "assistant", content: "36 / (9 - 3) * 2 = ?", timestamp: 1, entryId: "question" },
+			{ role: "user", content: "12", timestamp: 2, entryId: "answer-12", parentEntryId: "question" },
+			{ role: "assistant", content: "Correct. Which option is an equation?", timestamp: 3, entryId: "choice" },
+			{ role: "user", content: "8", timestamp: 4, entryId: "appended-8", parentEntryId: "choice" },
+		], "session.jsonl");
+
+		expect(store.branchBefore("answer-12")).toBe(true);
+		expect(store.messages).toEqual([
+			{ role: "assistant", content: "36 / (9 - 3) * 2 = ?", timestamp: 1, entryId: "question" },
+		]);
+		expect(store.pendingQuestion).toBeNull();
+	});
+
 	it("rechecks isSending after the async session-store import", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => { release = resolve; });

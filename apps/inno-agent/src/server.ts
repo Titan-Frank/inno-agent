@@ -55,6 +55,7 @@ import { handleChatRoutes } from "./server/routes/chat.js";
 import { handleCommandsRoutes } from "./server/routes/commands.js";
 import {
 	mergeChannels,
+	selectActiveSessionEntries,
 	type SessionChannel,
 	type SessionChannelMetadata,
 	type SessionMessageSummary,
@@ -873,6 +874,7 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 	try {
 		const raw = readFileSync(filePath, "utf-8");
 		const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+		const entries = selectActiveSessionEntries(lines.map((line) => JSON.parse(line) as Record<string, unknown>));
 		const messages: SessionMessageSummary[] = [];
 		const channels = new Set<SessionChannel>();
 		let createdAt = "";
@@ -895,8 +897,7 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 			return pendingAssistant;
 		};
 
-		for (const line of lines) {
-			const entry = JSON.parse(line) as Record<string, unknown>;
+		for (const entry of entries) {
 			const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : "";
 			if (!createdAt && timestamp) createdAt = timestamp;
 			// Detect channel ONLY from structured JSON fields written by the system
@@ -950,7 +951,14 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 				const content = textFromContent(message.content);
 				if (!content) continue;
 				const images = imagesFromContent(message.content);
-				const msg: SessionMessageSummary = { role: "user", content, timestamp: ts, channel: entryChannel };
+				const msg: SessionMessageSummary = {
+					role: "user",
+					content,
+					timestamp: ts,
+					channel: entryChannel,
+					entryId: typeof entry.id === "string" ? entry.id : undefined,
+					parentEntryId: typeof entry.parentId === "string" ? entry.parentId : null,
+				};
 				if (images.length > 0) msg.images = images;
 				messages.push(msg);
 				continue;

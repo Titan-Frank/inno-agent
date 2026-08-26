@@ -35,6 +35,7 @@ interface ChatConversationProps {
 	busyBlocker: ReactNode;
 	composer: ReactNode;
 	onOpenAttachment: (file: AttachmentRef) => void;
+	onEditMessage: (message: ChatMessage) => void;
 	wsError: string;
 }
 
@@ -50,6 +51,7 @@ export function ChatConversation({
 	busyBlocker,
 	composer,
 	onOpenAttachment,
+	onEditMessage,
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
@@ -107,6 +109,7 @@ export function ChatConversation({
 											showChannel={multiChannel}
 											resolveAttachmentUrl={resolveAttachmentUrl}
 											onOpenAttachment={onOpenAttachment}
+											onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
 										/>
 									</div>
 								);

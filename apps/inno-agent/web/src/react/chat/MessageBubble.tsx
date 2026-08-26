@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { X, AlertTriangle, FileCode2, Zap } from "lucide-react";
+import { X, AlertTriangle, FileCode2, Pencil, Zap } from "lucide-react";
 import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
@@ -373,7 +373,7 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment }: {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onEdit }: {
 	message: ChatMessage;
 	showChannel?: boolean;
 	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
@@ -381,7 +381,10 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	resolveAttachmentUrl?: AttachmentUrlResolver;
 	/** Prefer the host app's workspace preview when available. */
 	onOpenAttachment?: AttachmentOpenHandler;
+	/** Restore a persisted plain Web user message and branch from that turn. */
+	onEdit?: (message: ChatMessage) => void;
 }) {
+	const { t } = useTranslation();
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
 		const questionnaire = answeredQuestionnaireFromTool(tool);
@@ -393,9 +396,18 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 
 	if (message.role === "user") {
 		const skillMessage = collapseSkillMessage(message.content);
+		const hasAttachments = Boolean(message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0));
+		const canEdit = Boolean(
+			onEdit
+			&& message.entryId
+			&& message.content.trim()
+			&& !message.images?.length
+			&& !hasAttachments
+			&& (!message.channel || message.channel === "web"),
+		);
 		return (
 			<motion.div
-				className="flex justify-end"
+				className="flex flex-col items-end"
 				initial={{ opacity: 0, y: 12 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.25, ease: "easeOut" }}
@@ -437,6 +449,18 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 						message.content.trim()
 					)}
 				</div>
+				{canEdit ? (
+					<button
+						type="button"
+						className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--inno-text-subtle)] transition-colors hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--inno-accent)]"
+						title={t("chat.editAndResend")}
+						aria-label={t("chat.editAndResend")}
+						onClick={() => onEdit?.(message)}
+					>
+						<Pencil size={11} />
+						<span>{t("chat.editAndResend")}</span>
+					</button>
+				) : null}
 			</motion.div>
 		);
 	}

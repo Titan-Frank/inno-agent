@@ -70,6 +70,20 @@ export async function activateSession(id: string): Promise<SessionActivationResu
 	});
 }
 
+export interface SessionBranchResult {
+	sessionId: string;
+	replacedEntryId: string;
+	branchMarkerId: string;
+	sessionRevision: string;
+}
+
+export async function branchSessionBeforeMessage(id: string, entryId: string): Promise<SessionBranchResult> {
+	return apiFetch<SessionBranchResult>(`/api/sessions/${encodeURIComponent(id)}/branch-before-message`, {
+		method: "POST",
+		body: JSON.stringify({ entryId }),
+	});
+}
+
 export async function createSession(input: CreateSessionInput = {}): Promise<NewSessionResult> {
 	return apiFetch<NewSessionResult>("/api/sessions", {
 		method: "POST",

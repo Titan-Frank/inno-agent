@@ -175,6 +175,7 @@ web/                  # 前端 (React + Lit + Tailwind + Vite)
 | POST | `/api/chat/stream` | 发送消息（SSE 流式） |
 | GET | `/api/sessions` | 会话列表 |
 | GET | `/api/sessions/:id` | 会话详情 |
+| POST | `/api/sessions/:id/branch-before-message` | 在指定用户消息前创建活动分支，用于重新编辑并生成后续对话 |
 | GET | `/api/wiki/pages` | Wiki 页面列表 |
 | GET | `/api/wiki/page?path=` | 读取 Wiki 页面 |
 | PUT | `/api/wiki/page` | 保存 Wiki 页面 |
