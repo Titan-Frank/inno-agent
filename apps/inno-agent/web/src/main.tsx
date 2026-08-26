@@ -1,4 +1,5 @@
 import "./app.css";
+import "./agent-command-bubbles.css";
 import "./i18n/index.js";
 import "./stores/theme-store.js";
 // Register <markdown-block> explicitly — QuestionDialog depends on it and must not

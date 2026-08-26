@@ -18,6 +18,9 @@ export interface SmartBubbleClipboardBubble {
 	word: string;
 	rule: SmartInputRule;
 	files: SmartBubbleClipboardFile[];
+	/** Agent command bubbles carry their command instead of file bindings. */
+	bubbleType?: "file" | "agent";
+	agentCommand?: string;
 }
 
 export interface SmartBubbleClipboardPayload {
@@ -54,6 +57,23 @@ export function clipboardFilesFor(clipboardId: string): Map<string, File> | unde
 	return smartBubbleClipboardFiles.get(clipboardId);
 }
 
+function normalizeAgentCommand(value: string): string | null {
+	const command = value.trim().replace(/^\/+/, "");
+	return command && !/\s/.test(command) ? command : null;
+}
+
+function agentRule(command: string): SmartInputRule {
+	return {
+		id: `smart-agent-${command}`,
+		isPreset: true,
+		keyword: `/${command}`,
+		extensions: [],
+		allExtensions: true,
+		excludeExtensions: [],
+		enabled: true,
+	};
+}
+
 /**
  * Build the copy payload for a selection: the plain-text projection (bubbles
  * replaced by their words) plus per-bubble file descriptors. Pure with respect
@@ -83,9 +103,12 @@ export function buildClipboardPayload(
 		const slot = slots.find((entry) => entry.id === slotId);
 		if (!slot) continue;
 		text += value.slice(cursor, start);
+		const isAgent = slot.bubbleType === "agent";
+		const command = isAgent ? normalizeAgentCommand(slot.agentCommand ?? slot.word) : null;
+		if (isAgent && !command) continue;
 		const bubbleStart = text.length;
 		text += slot.word;
-		const files = slot.files.map((file) => {
+		const files = isAgent ? [] : slot.files.map((file) => {
 			const isWorkspace = file.state === "workspace";
 			const cacheKey = !isWorkspace && file.file ? String(cacheIndex++) : undefined;
 			if (cacheKey && file.file) cachedFiles.set(cacheKey, file.file);
@@ -96,7 +119,14 @@ export function buildClipboardPayload(
 				...(cacheKey ? { cacheKey } : {}),
 			};
 		});
-		bubbles.push({ start: bubbleStart, end: text.length, word: slot.word, rule: slot.rule, files });
+		bubbles.push({
+			start: bubbleStart,
+			end: text.length,
+			word: slot.word,
+			rule: slot.rule,
+			files,
+			...(isAgent ? { bubbleType: "agent" as const, agentCommand: command! } : {}),
+		});
 		cursor = end;
 	}
 	text += value.slice(cursor, selectedEnd);
@@ -114,6 +144,7 @@ export function buildClipboardPayload(
 export function parseClipboardPayload(
 	raw: string,
 	resolveRule: (raw: unknown, word: string) => SmartInputRule | null,
+	options: { allowAgentBubbles?: boolean } = {},
 ): SmartBubbleClipboardPayload | null {
 	try {
 		const parsed = JSON.parse(raw) as Partial<SmartBubbleClipboardPayload>;
@@ -129,9 +160,14 @@ export function parseClipboardPayload(
 				if (typeof start !== "number" || typeof end !== "number" || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) return null;
 				const word = bubble.word;
 				if (typeof word !== "string" || !word || text.slice(start, end) !== word) return null;
-				const rule = resolveRule(bubble.rule, word);
+				const bubbleType = bubble.bubbleType === "agent" ? "agent" : "file";
+				const command = bubbleType === "agent"
+					? normalizeAgentCommand(typeof bubble.agentCommand === "string" ? bubble.agentCommand : word)
+					: null;
+				if (bubbleType === "agent" && (!options.allowAgentBubbles || !command || word !== `/${command}`)) return null;
+				const rule = bubbleType === "agent" ? agentRule(command!) : resolveRule(bubble.rule, word);
 				if (!rule) return null;
-				const files = Array.isArray(bubble.files)
+				const files = bubbleType === "agent" ? [] : Array.isArray(bubble.files)
 					? bubble.files.flatMap((rawFile) => {
 						if (!rawFile || typeof rawFile !== "object") return [];
 						const file = rawFile as Partial<SmartBubbleClipboardFile>;
@@ -144,7 +180,14 @@ export function parseClipboardPayload(
 						}];
 					})
 					: [];
-				return { start, end, word, rule, files };
+				return {
+					start,
+					end,
+					word,
+					rule,
+					files,
+					...(bubbleType === "agent" ? { bubbleType: "agent" as const, agentCommand: command! } : {}),
+				};
 			})
 			.filter((bubble): bubble is SmartBubbleClipboardBubble => bubble !== null)
 			.filter((bubble) => bubble.end <= text.length)

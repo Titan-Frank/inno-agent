@@ -14,6 +14,8 @@ export interface KwRange {
 	/** High-confidence demonstrative reference — rendered with a solid underline. */
 	hi: boolean;
 	rule: SmartInputRule;
+	/** Agent keywords use the skill picker instead of the file fill menu. */
+	kind?: "file" | "agent";
 }
 
 export interface SlotRange {
@@ -50,6 +52,15 @@ export function tokenIdFromMatch(char: string): number {
 
 const DEMONSTRATIVE = /[这该张份]$/;
 
+const AGENT_KEYWORD_RULE_BASE: Omit<SmartInputRule, "keyword"> = {
+	id: "smart-agent-keyword",
+	isPreset: true,
+	extensions: [],
+	allExtensions: true,
+	excludeExtensions: [],
+	enabled: true,
+};
+
 function isLatinKeyword(keyword: string): boolean {
 	return /^[a-z0-9]+$/i.test(keyword);
 }
@@ -68,6 +79,12 @@ function* matchKeyword(value: string, keyword: string): Generator<{ start: numbe
 	}
 }
 
+function isInsideSlashCommand(value: string, start: number): boolean {
+	// The slash palette owns `/skill:...`; do not turn its `skill` prefix into
+	// a second, nested keyword bubble while the user is filtering commands.
+	return start > 0 && value[start - 1] === "/";
+}
+
 /**
  * Scan the composer text for bubble tokens (kept as slot ranges) and enabled
  * keyword occurrences (kept as keyword ranges). Keyword hits inside tokens
@@ -79,6 +96,7 @@ export function analyzeKeywords(
 	value: string,
 	rules: SmartInputRule[],
 	slotIds: Set<number>,
+	agentKeywords: string[] = [],
 ): { kws: KwRange[]; slots: SlotRange[] } {
 	const slots: SlotRange[] = [];
 	TOKEN_RE.lastIndex = 0;
@@ -98,6 +116,18 @@ export function analyzeKeywords(
 			if (inSlot(hit.start)) continue;
 			const before = value.slice(Math.max(0, hit.start - 1), hit.start);
 			candidates.push({ ...hit, hi: DEMONSTRATIVE.test(before), rule });
+		}
+	}
+	for (const keyword of agentKeywords) {
+		if (!keyword) continue;
+		for (const hit of matchKeyword(value, keyword)) {
+			if (inSlot(hit.start) || isInsideSlashCommand(value, hit.start)) continue;
+			candidates.push({
+				...hit,
+				hi: false,
+				kind: "agent",
+				rule: { ...AGENT_KEYWORD_RULE_BASE, keyword },
+			});
 		}
 	}
 	// Rendered ranges cannot overlap: the mirror would otherwise append the

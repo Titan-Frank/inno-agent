@@ -46,6 +46,7 @@ export function SmartInputControl({
 	const enabledRuleCount = rules.filter((rule) => rule.enabled).length;
 	const dragFeatureEnabled = smartInputSettings?.enabled === true && smartInputSettings.allowDrag === true;
 	const rightClickFeatureEnabled = smartInputSettings?.enabled === true && smartInputSettings.allowRightClick === true;
+	const agentCommandFeatureEnabled = smartInputSettings?.enabled === true && smartInputSettings.allowAgentCommands === true;
 	const isRuleActive = (rule: SmartInputRule): boolean => Boolean(
 		smartInputSettings?.enabled
 			&& rule.enabled
@@ -94,6 +95,10 @@ export function SmartInputControl({
 						<br />
 						<span className={rightClickFeatureEnabled ? "is-enabled" : undefined}>
 							{t("settings.smartInput.homeRightClickHint", "右键附件插入为气泡")}
+						</span>
+						<br />
+						<span className={agentCommandFeatureEnabled ? "is-enabled" : undefined}>
+							{t("settings.smartInput.homeAgentCommandsHint", "允许 Agent 命令转气泡：输入“技能”或 skill 可选择技能；/ Agent 命令可直接转为气泡")}
 						</span>
 						<br />
 						<span className="is-enabled">

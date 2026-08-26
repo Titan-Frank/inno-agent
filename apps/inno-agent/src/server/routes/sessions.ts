@@ -31,6 +31,7 @@ import {
 	clearSessionAttachments,
 	mergeSessionAttachments,
 } from "../attachments-store.js";
+import { clearSessionAgentCommands } from "../agent-command-store.js";
 import { contentDispositionAttachment } from "../file-helpers.js";
 import { HttpError, json, matchRoute, readBody } from "../http-helpers.js";
 import {
@@ -622,6 +623,7 @@ export async function handleSessionsRoutes(
 				writeSessionQuestionMetadata(questionMeta);
 			}
 			clearSessionAttachments(dataDir, sessionId);
+			clearSessionAgentCommands(dataDir, sessionId);
 			workspaceRegistry.unbindSession(sessionId);
 			if (shouldDropTempWorkspace) {
 				workspaceRegistry.deleteWorkspace(boundWorkspaceId, { removeFiles: true });

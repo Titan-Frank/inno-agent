@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Check, ListChecks, Plus, RotateCcw, X } from "lucide-react";
-import type { EngineAttachmentItem, SmartInputEngine } from "./engine.js";
+import { ArrowLeft, Check, ListChecks, Plus, RotateCcw, X, Zap } from "lucide-react";
+import type { AgentCommandDescriptor, EngineAttachmentItem, SmartInputEngine } from "./engine.js";
+import type { KwRange } from "./rules.js";
 import { KIND_LABEL_KEYS, kindFromName, kindFromRule, nameMatchesRule } from "./kinds.js";
 import type { PendingUpload } from "../composer-utils.js";
 import { FileName } from "../../FileName.js";
@@ -19,9 +20,11 @@ import { PopoverSurface } from "../../ui/PopoverSurface.js";
  */
 
 export interface SmartPanelState {
-	kind: "status" | "fill" | "menu";
-	slotId: number;
+	kind: "status" | "fill" | "menu" | "agent";
+	slotId?: number;
 	anchor: { left: number; bottom: number };
+	/** Keyword range that opened an Agent/skill picker. */
+	agentKeyword?: KwRange;
 	/** Context-menu coordinates (kind === "menu"). */
 	x?: number;
 	y?: number;
@@ -40,10 +43,101 @@ interface SmartInputOverlayProps {
 	/** Increments when bound files change without changing the slot count. */
 	refreshKey: number;
 	onOpenFilePreview: (path: string) => void;
+	agentCommands: AgentCommandDescriptor[];
+	onSelectAgentCommand: (command: AgentCommandDescriptor) => void;
+	onOpenSkillPanel: (skillName: string) => void;
 }
 
 const AUTO_CLOSE_MS = 260;
 const UNPIN_MOVE_PX = 25;
+const SKILL_TITLE_MARQUEE_SPEED_PX_PER_SECOND = 28;
+const SKILL_TITLE_MARQUEE_END_PADDING_PX = 2;
+
+function useSkillTitleMarquee(name: string, hovered: boolean) {
+	const titleViewportRef = useRef<HTMLSpanElement>(null);
+	const titleMeasureRef = useRef<HTMLSpanElement>(null);
+	const [titleOverflowing, setTitleOverflowing] = useState(false);
+	const [titleShift, setTitleShift] = useState(0);
+
+	useEffect(() => {
+		const viewport = titleViewportRef.current;
+		const measure = titleMeasureRef.current;
+		if (!viewport || !measure) return;
+		const updateTitleOverflow = () => {
+			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
+			setTitleOverflowing(shift > 2);
+			setTitleShift(Math.ceil(shift));
+		};
+		updateTitleOverflow();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(updateTitleOverflow);
+		observer.observe(viewport);
+		observer.observe(measure);
+		return () => observer.disconnect();
+	}, [name]);
+
+	const marqueeActive = titleOverflowing && hovered;
+	const marqueeShift = titleShift + SKILL_TITLE_MARQUEE_END_PADDING_PX;
+	return {
+		titleViewportRef,
+		titleMeasureRef,
+		titleOverflowing,
+		marqueeActive,
+		marqueeShift,
+		titleMarqueeDuration: Math.max(0.05, marqueeShift / SKILL_TITLE_MARQUEE_SPEED_PX_PER_SECOND),
+	};
+}
+
+type SkillTitleMarqueeState = ReturnType<typeof useSkillTitleMarquee>;
+
+function SkillNameMarquee({ name, titleState }: { name: string; titleState: SkillTitleMarqueeState }) {
+	const {
+		titleViewportRef,
+		titleMeasureRef,
+		titleOverflowing,
+		marqueeActive,
+		marqueeShift,
+		titleMarqueeDuration,
+	} = titleState;
+
+	return (
+		<span ref={titleViewportRef} className="inno-smart-agent-skill-title" title={name}>
+			<span
+				className={`inno-sidebar-title ${marqueeActive ? "inno-sidebar-title-marquee" : "block overflow-hidden whitespace-nowrap"}${titleOverflowing ? " inno-sidebar-title-fade" : ""} font-medium text-[var(--inno-text)]`}
+				style={marqueeActive ? ({
+					"--inno-title-shift": `-${marqueeShift}px`,
+					"--inno-title-duration": `${titleMarqueeDuration}s`,
+				} as CSSProperties) : undefined}
+			>
+				{name}
+				{titleOverflowing ? <span aria-hidden="true" className="inno-sidebar-title-marquee-tail" /> : null}
+			</span>
+			<span ref={titleMeasureRef} aria-hidden="true" className="inno-sidebar-title pointer-events-none invisible absolute left-0 top-0 -z-10 w-max whitespace-nowrap font-medium">
+				{name}
+			</span>
+		</span>
+	);
+}
+
+function AgentSkillOption({ command, onSelect }: { command: AgentCommandDescriptor; onSelect: (command: AgentCommandDescriptor) => void }) {
+	const [hovered, setHovered] = useState(false);
+	const skillName = command.name.startsWith("skill:") ? command.name.slice("skill:".length) : command.name;
+	const titleState = useSkillTitleMarquee(skillName, hovered);
+
+	return (
+		<button
+			type="button"
+			className="inno-smart-panel-row inno-smart-panel-pick"
+			onMouseEnter={() => setHovered(true)}
+			onMouseLeave={() => setHovered(false)}
+			onClick={() => onSelect(command)}
+		>
+			<Zap size={14} className="shrink-0 text-[var(--inno-accent)]" aria-hidden="true" />
+			<SkillNameMarquee name={skillName} titleState={titleState} />
+			{command.description ? <span className="inno-smart-agent-description" title={command.description}>{command.description}</span> : null}
+		</button>
+	);
+}
 
 function rectOf(el: HTMLElement): SmartPanelState["anchor"] {
 	const rect = el.getBoundingClientRect();
@@ -58,7 +152,21 @@ function chipFor(slotId: number): HTMLElement | null {
 	}) ?? null;
 }
 
-export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspaceFiles, workspaceFilesLoading, attachments, takeAttachment, onWorkspaceHighlight, refreshKey, onOpenFilePreview }: SmartInputOverlayProps) {
+function agentKeywordFor(keyword: KwRange | undefined): HTMLElement | null {
+	if (!keyword) return null;
+	return document.querySelector<HTMLElement>(
+		`.inno-smart-kw-hit[data-smart-kw-start="${keyword.start}"][data-smart-kw-end="${keyword.end}"]`,
+	);
+}
+
+function panelAnchor(panel: SmartPanelState): HTMLElement | null {
+	if (panel.kind === "agent") {
+		return panel.slotId !== undefined ? chipFor(panel.slotId) : agentKeywordFor(panel.agentKeyword);
+	}
+	return panel.slotId !== undefined ? chipFor(panel.slotId) : null;
+}
+
+export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspaceFiles, workspaceFilesLoading, attachments, takeAttachment, onWorkspaceHighlight, refreshKey, onOpenFilePreview, agentCommands, onSelectAgentCommand, onOpenSkillPanel }: SmartInputOverlayProps) {
 	const { t } = useTranslation();
 	const panelRef = useRef<HTMLDivElement | null>(null);
 	const closeTimer = useRef<number | null>(null);
@@ -68,7 +176,9 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 	const [multiSelect, setMultiSelect] = useState(false);
 	const [picked, setPicked] = useState<Map<string, string>>(new Map());
 
-	const slot = panel ? engine?.slots.find((entry) => entry.id === panel.slotId) ?? null : null;
+	const slot = panel && panel.kind !== "agent" && panel.slotId !== undefined
+		? engine?.slots.find((entry) => entry.id === panel.slotId) ?? null
+		: null;
 	const boundFileCount = slot?.files.length ?? 0;
 
 	const cancelClose = useCallback(() => {
@@ -103,8 +213,8 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		if (!panel || panel.kind === "menu" || !panelRef.current) return;
 		cancelClose();
 		const el = panelRef.current;
-		const chip = chipFor(panel.slotId);
-		const chipRect = chip?.getBoundingClientRect();
+		const anchor = panelAnchor(panel);
+		const chipRect = anchor?.getBoundingClientRect();
 		// No visible chip (engine is mid-sync rebuilding the hit layer): keep the
 		// panel where it is instead of snapping to the stale open-time anchor.
 		if (!chipRect) return;
@@ -114,7 +224,7 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		const height = el.offsetHeight;
 		el.style.left = `${Math.max(8, Math.min(desiredLeft, window.innerWidth - width - 8))}px`;
 		el.style.top = `${Math.max(8, Math.min(desiredTop, window.innerHeight - height - 8))}px`;
-	}, [cancelClose, panel?.kind, panel?.slotId]);
+	}, [cancelClose, panel?.agentKeyword, panel?.kind, panel?.slotId]);
 
 	// The attachment row can wrap to another line without changing the panel
 	// state. Observe the actual composer and chip geometry so the portal follows
@@ -125,7 +235,7 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		if (!panel || panel.kind === "menu" || !panelRef.current) return;
 		repositionPanel();
 
-		const chip = chipFor(panel.slotId);
+		const chip = panelAnchor(panel);
 		const composer = chip?.closest<HTMLElement>(".inno-composer")
 			?? document.querySelector<HTMLElement>(".inno-composer");
 		const attachments = composer?.querySelector<HTMLElement>(".inno-composer-attachments");
@@ -160,7 +270,7 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 			const target = event.target as Node;
 			if (target.isConnected === false) return;
 			if (panelRef.current?.contains(target)) return;
-			if ((target as HTMLElement).closest?.(".inno-smart-chip")) return;
+			if ((target as HTMLElement).closest?.(".inno-smart-chip, .inno-smart-kw-hit")) return;
 			onClose();
 		};
 		const onScroll = (event: Event) => {
@@ -196,7 +306,45 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 		if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
 	}, []);
 
-	if (!panel || !engine || !slot) return null;
+	if (!panel || !engine) return null;
+
+	const renderAgentPicker = () => {
+		const skills = agentCommands.filter((command) => command.source === "skill");
+		return (
+			<PopoverSurface
+				ref={panelRef}
+				className="inno-smart-panel inno-smart-panel--agent"
+				onMouseEnter={cancelClose}
+				onMouseLeave={scheduleClose}
+				style={{ left: panel.anchor.left, top: panel.anchor.bottom + 4 }}
+			>
+				<div className="inno-smart-fill-head">
+					<div className="inno-smart-panel-title">
+						{t(panel.slotId !== undefined ? "chat.smartInput.switchSkillTitle" : "chat.smartInput.chooseSkillTitle", panel.slotId !== undefined ? "切换技能" : "选择技能")}
+					</div>
+				</div>
+				{skills.length === 0 ? (
+					<div className="inno-smart-panel-empty">{t("chat.smartInput.chooseSkillEmpty", "暂无已加载的技能")}</div>
+				) : (
+					<div className="inno-smart-panel-list inno-smart-agent-list">
+						{skills.map((command) => (
+							<AgentSkillOption
+								key={command.name}
+								command={command}
+								onSelect={(selected) => {
+									onSelectAgentCommand(selected);
+									onClose();
+								}}
+							/>
+						))}
+					</div>
+				)}
+			</PopoverSurface>
+		);
+	};
+
+	if (panel.kind === "agent") return createPortal(renderAgentPicker(), document.body);
+	if (!slot) return null;
 
 	const primaryKind = kindFromRule(slot.rule);
 	const kindLabel = t(KIND_LABEL_KEYS[primaryKind]);
@@ -469,6 +617,28 @@ export function SmartInputOverlay({ engine, panel, onClose, onOpenPanel, workspa
 
 	const renderMenu = () => {
 		const items: ContextMenuItem[] = [];
+		if (slot.bubbleType === "agent") {
+			const commandName = (slot.agentCommand ?? slot.word).replace(/^\/+/, "");
+			if (commandName.startsWith("skill:") && commandName.slice("skill:".length)) {
+				items.push({
+					label: t("chat.smartInput.openSkillDescription", "打开技能说明"),
+					onSelect: () => onOpenSkillPanel(commandName.slice("skill:".length)),
+				});
+			}
+			items.push({
+				label: t("chat.smartInput.deleteAgentBubble", "删除命令气泡"),
+				danger: true,
+				onSelect: () => engine.removeSlot(slot),
+			});
+			return (
+				<ContextMenu
+					x={panel.x ?? 0}
+					y={panel.y ?? 0}
+					items={items}
+					onClose={onClose}
+				/>
+			);
+		}
 		if (slot.files.length > 0) {
 			items.push({ label: t("chat.smartInput.viewStatus", "查看上传状态"), onSelect: () => switchPanel("status") });
 			items.push({ label: t("chat.smartInput.unbindAll", "移除全部绑定（{{count}} 个文件回到附件）", { count: slot.files.length }), onSelect: () => engine.unbindAll(slot) });

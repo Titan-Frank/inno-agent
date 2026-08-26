@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { SmartInputRule } from "../../../types/settings.js";
 import { SmartInputEngine, type EngineAttachmentItem, type Slot } from "./engine.js";
-import { slotChar } from "./rules.js";
+import { slotChar, type KwRange } from "./rules.js";
 
 function makeRule(keyword = "pdf"): SmartInputRule {
 	return { id: `r-${keyword}`, isPreset: false, keyword, extensions: [".pdf"], allExtensions: false, excludeExtensions: [], enabled: true };
@@ -16,6 +16,10 @@ function makeEngine(
 	allowDrag = true,
 	rules: SmartInputRule[] = [makeRule()],
 	onOpenStatusPanel: (slot: Slot, anchor: HTMLElement) => void = () => undefined,
+	onOpenFillMenu: (slot: Slot, anchor: HTMLElement) => void = () => undefined,
+	allowAgentCommands = false,
+	onOpenAgentPicker: (keyword: KwRange, anchor: HTMLElement) => void = () => undefined,
+	onAgentBubbleClick: (slot: Slot, anchor: HTMLElement) => void = () => undefined,
 ): { engine: SmartInputEngine; textarea: HTMLTextAreaElement; mirror: HTMLDivElement; hitLayer: HTMLDivElement } {
 	const textarea = document.createElement("textarea");
 	const mirror = document.createElement("div");
@@ -29,17 +33,19 @@ function makeEngine(
 		labels: () => ({
 			kwHitTitle: "",
 		}),
-			data: {
-				getSettings: () => ({ enabled: true, allowDrag, allowRightClick: false }),
-				getRules: () => rules,
-				takeAttachment: () => undefined,
+		data: {
+			getSettings: () => ({ enabled: true, allowDrag, allowRightClick: false, allowAgentCommands }),
+			getRules: () => rules,
+			takeAttachment: () => undefined,
 			returnAttachment: onReturnAttachment,
-			},
-			callbacks: {
-				onChange: () => undefined,
+		},
+		callbacks: {
+			onChange: () => undefined,
 			onSlotsSnapshot: () => undefined,
 			onOpenStatusPanel,
-			onOpenFillMenu: () => undefined,
+			onOpenFillMenu,
+			onOpenAgentPicker,
+			onAgentBubbleClick,
 			onBubbleContextMenu: () => undefined,
 			onWorkspaceHighlight: () => undefined,
 		},
@@ -202,6 +208,30 @@ describe("SmartInputEngine token editing", () => {
 		expect(returned.map((file) => file.name)).toEqual(["lesson.pdf", "slides.pdf"]);
 	});
 
+	it("copies and pastes an Agent command bubble without restoring slash text", () => {
+		const source = makeEngine("", undefined, undefined, true, [makeRule()], undefined, undefined, true);
+		source.engine.attach();
+		source.engine.insertAgentCommandAsBubble("recall");
+		source.textarea.setSelectionRange(0, source.textarea.value.length - 1);
+		const copied = new Map<string, string>();
+		source.textarea.dispatchEvent(clipboardEvent("copy", copied));
+
+		expect(copied.get("text/plain")).toBe("/recall");
+		const payload = JSON.parse(copied.get("application/x-inno-agent-smart-bubble") ?? "null") as { bubbles?: Array<{ bubbleType?: string; agentCommand?: string }> };
+		expect(payload.bubbles?.[0]).toMatchObject({ bubbleType: "agent", agentCommand: "recall" });
+
+		const target = makeEngine("", undefined, undefined, true, [makeRule()], undefined, undefined, true);
+		target.engine.attach();
+		const paste = clipboardEvent("paste", copied);
+		target.textarea.dispatchEvent(paste);
+
+		expect(paste.defaultPrevented).toBe(true);
+		expect(target.engine.slots[0]).toMatchObject({ bubbleType: "agent", agentCommand: "recall" });
+		expect(target.engine.buildOutgoing().visibleText).toBe("/recall");
+		target.engine.removeSlot(target.engine.slots[0]!);
+		expect(target.textarea.value).toBe("");
+	});
+
 	it("leaves ordinary text clipboard operations native", () => {
 		const { engine, textarea } = makeEngine("普通文字");
 		engine.attach();
@@ -233,6 +263,129 @@ describe("SmartInputEngine token editing", () => {
 		keywordHit?.click();
 
 		expect(scrollTop).toBe(48);
+	});
+
+	it("opens the workspace file picker after a keyword becomes a bubble", () => {
+		let opened = 0;
+		let openedWord = "";
+		let openedAnchorIsChip = false;
+		const { engine, hitLayer } = makeEngine(
+			"pdf",
+			undefined,
+			undefined,
+			true,
+			[makeRule()],
+			undefined,
+			(slot, anchor) => {
+				opened += 1;
+				openedWord = slot.word;
+				openedAnchorIsChip = anchor.classList.contains("inno-smart-chip");
+			},
+		);
+		engine.attach();
+
+		hitLayer.querySelector<HTMLElement>(".inno-smart-kw-hit")?.click();
+
+		expect(engine.slots).toHaveLength(1);
+		expect(opened).toBe(1);
+		expect(openedWord).toBe("pdf");
+		expect(openedAnchorIsChip).toBe(true);
+	});
+
+	it("opens the skill picker for 技能 and deletes the selected command as one bubble", () => {
+		let keyword: KwRange | null = null;
+		const { engine, textarea, hitLayer } = makeEngine(
+			"技能",
+			undefined,
+			undefined,
+			true,
+			[makeRule()],
+			undefined,
+			undefined,
+			true,
+			(kw) => { keyword = kw; },
+		);
+		engine.attach();
+
+		const hit = hitLayer.querySelector<HTMLElement>(".inno-smart-kw-hit.is-agent");
+		expect(hit).not.toBeNull();
+		hit?.click();
+		expect(keyword).toMatchObject({ word: "技能", kind: "agent", start: 0, end: 2 });
+
+		const selected = engine.convertAgentKeywordToBubble(keyword!, "skill:backwards-design-unit-planner");
+		expect(selected).toMatchObject({ bubbleType: "agent", agentCommand: "skill:backwards-design-unit-planner", word: "/skill:backwards-design-unit-planner" });
+		expect(engine.buildOutgoing().visibleText).toBe("/skill:backwards-design-unit-planner");
+
+		engine.removeSlot(selected!);
+		expect(textarea.value).toBe("");
+		expect(engine.slots).toHaveLength(0);
+	});
+
+	it("inserts slash Agent commands as bubbles and removes the auto spacer with them", () => {
+		const { engine, textarea } = makeEngine("", undefined, undefined, true, [makeRule()], undefined, undefined, true);
+		engine.attach();
+
+		const inserted = engine.insertAgentCommandAsBubble("recall");
+		expect(inserted).toMatchObject({ bubbleType: "agent", agentCommand: "recall", word: "/recall" });
+		expect(engine.buildOutgoing().visibleText).toBe("/recall ");
+
+		const tokenEnd = textarea.value.length - 1;
+		textarea.setSelectionRange(tokenEnd, tokenEnd);
+		const event = new KeyboardEvent("keydown", { key: "Backspace", cancelable: true });
+		textarea.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("");
+		expect(engine.slots).toHaveLength(0);
+	});
+
+	it("shows a skill name without /skill and lets its bubble switch skills", () => {
+		let clicked: Slot | null = null;
+		const { engine, hitLayer } = makeEngine(
+			"",
+			undefined,
+			undefined,
+			true,
+			[makeRule()],
+			undefined,
+			undefined,
+			true,
+			undefined,
+			(slotValue) => { clicked = slotValue; },
+		);
+		engine.attach();
+
+		const inserted = engine.insertAgentCommandAsBubble("skill:backwards-design-unit-planner");
+		const chip = hitLayer.querySelector<HTMLElement>(".inno-smart-chip.is-agent");
+		expect(inserted).not.toBeNull();
+		expect(chip?.classList.contains("inno-smart-agent-surface")).toBe(true);
+		expect(chip?.querySelector(".inno-smart-chip-word")?.textContent).toBe("backwards-design-unit-planner");
+		expect(chip?.querySelector(".inno-smart-agent-mark")).not.toBeNull();
+
+		chip?.click();
+		expect((clicked as Slot | null)?.id).toBe(inserted?.id);
+
+		const replaced = engine.replaceAgentBubbleCommand(inserted!, "skill:another-skill");
+		expect(replaced?.agentCommand).toBe("skill:another-skill");
+		expect(engine.buildOutgoing().visibleText).toBe("/skill:another-skill ");
+		expect(hitLayer.querySelector(".inno-smart-chip-word")?.textContent).toBe("another-skill");
+	});
+
+	it("does not animate Agent bubbles during a file drag", () => {
+		const agentSlot: Slot = {
+			...slot(),
+			word: "/skill:backwards-design-unit-planner",
+			bubbleType: "agent",
+			agentCommand: "skill:backwards-design-unit-planner",
+		};
+		const token = `{${slotChar(agentSlot.id)}}\u00A0\u00A0`;
+		const { engine, hitLayer } = makeEngine(`前${token}后`, agentSlot, undefined, true, [makeRule()], undefined, undefined, true);
+		engine.attach();
+		engine.markDragStart({ name: "lesson.pdf", path: "lesson.pdf", source: "workspace" }, "page:lesson.pdf");
+
+		const chip = hitLayer.querySelector<HTMLElement>(".inno-smart-chip.is-agent");
+		expect(chip).not.toBeNull();
+		expect(chip?.classList.contains("is-drag-match")).toBe(false);
 	});
 
 	it("keeps the bubble hit layer aligned while the textarea scrolls", () => {

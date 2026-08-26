@@ -35,16 +35,22 @@ describe("normalizeSmartInputExtension", () => {
 });
 
 describe("normalizeSmartInputConfig", () => {
-	it("defaults to enabled with the six built-in rules", () => {
+	it("defaults to enabled with Agent command bubbles and the six built-in rules", () => {
 		const config = normalizeSmartInputConfig(undefined);
 		expect(config.enabled).toBe(true);
 		expect(config.allowDrag).toBe(true);
 		expect(config.allowRightClick).toBe(true);
+		expect(config.allowAgentCommands).toBe(true);
 		expect(config.rules).toEqual(DEFAULT_SMART_INPUT_RULES);
 	});
 
 	it("honors an explicit opt-out", () => {
 		expect(normalizeSmartInputConfig({ enabled: false }).enabled).toBe(false);
+	});
+
+	it("keeps Agent command bubbles enabled unless explicitly disabled", () => {
+		expect(normalizeSmartInputConfig({ allowAgentCommands: true }).allowAgentCommands).toBe(true);
+		expect(normalizeSmartInputConfig({ allowAgentCommands: false }).allowAgentCommands).toBe(false);
 	});
 
 	it("dedupes keywords, normalizes extensions and keeps an intentionally empty rule list", () => {

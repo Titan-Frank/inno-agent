@@ -95,6 +95,8 @@ export interface InnoSmartInputConfig {
 	enabled: boolean;
 	allowDrag: boolean;
 	allowRightClick: boolean;
+	/** Convert Agent slash commands and skill keywords into inline bubbles. */
+	allowAgentCommands: boolean;
 	rules: InnoSmartInputRule[];
 }
 
@@ -452,6 +454,8 @@ export function normalizeSmartInputConfig(
 		enabled: smartInput?.enabled !== false,
 		allowDrag: smartInput?.allowDrag !== false,
 		allowRightClick: smartInput?.allowRightClick !== false,
+		// Default ON; only an explicit false opts out.
+		allowAgentCommands: smartInput?.allowAgentCommands !== false,
 		rules: [...presetRules, ...customRules],
 	};
 }

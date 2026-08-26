@@ -17,6 +17,8 @@ export interface UseSmartInputOptions {
 	onSnapshot?: (snapshot: EngineSnapshot) => void;
 	onOpenStatusPanel: EngineCallbacks["onOpenStatusPanel"];
 	onOpenFillMenu: EngineCallbacks["onOpenFillMenu"];
+	onOpenAgentPicker?: EngineCallbacks["onOpenAgentPicker"];
+	onAgentBubbleClick?: EngineCallbacks["onAgentBubbleClick"];
 	onBubbleContextMenu: EngineCallbacks["onBubbleContextMenu"];
 	onBubbleClose?: EngineCallbacks["onBubbleClose"];
 	onChipHover?: EngineCallbacks["onChipHover"];
@@ -49,8 +51,21 @@ export function useSmartInput(options: UseSmartInputOptions) {
 		const hit = optionsRef.current.hitRef.current;
 		if (!textarea || !mirror || !hit) return;
 
+		const agentCommandLabel = (command: string): string => {
+			switch (command) {
+				case "recall": return t("chat.smartInput.agentCommandRecall", "回顾对话");
+				case "remember": return t("chat.smartInput.agentCommandRemember", "记忆信息");
+				case "wiki": return t("chat.smartInput.agentCommandWiki", "查阅知识库");
+				default: return command.startsWith("skill:") ? command.slice("skill:".length) : command;
+			}
+		};
+
 		const labels = () => ({
 			kwHitTitle: t("chat.smartInput.kwHitTitle", "点击转为文件气泡，或拖文件悬停 1 秒自动转换"),
+			agentKwHitTitle: t("chat.smartInput.agentKwHitTitle", "点击选择 Agent 命令"),
+			agentCommandRecallHint: t("chat.smartInput.agentCommandRecallHint", "查找并回顾以前的对话"),
+			agentCommandRememberHint: t("chat.smartInput.agentCommandRememberHint", "将关于你的信息保存到记忆中"),
+			agentCommandWikiHint: t("chat.smartInput.agentCommandWikiHint", "在知识库中查找相关资料"),
 			emptyBubbleTitle: t("chat.smartInput.emptyBubbleTitle", "拖入文件，或点击选择"),
 			removeBubble: t("chat.smartInput.removeBubble", "删除气泡"),
 			mergeBubbleHint: t("chat.smartInput.mergeBubbleHint", "融合"),
@@ -65,6 +80,7 @@ export function useSmartInput(options: UseSmartInputOptions) {
 			mirror,
 			hitLayer: hit,
 			labels,
+			agentCommandLabel,
 			data: {
 				getSettings: () => {
 					const settings = optionsRef.current.getSettings();
@@ -72,6 +88,7 @@ export function useSmartInput(options: UseSmartInputOptions) {
 						enabled: settings?.enabled ?? false,
 						allowDrag: settings?.allowDrag !== false,
 						allowRightClick: settings?.allowRightClick !== false,
+						allowAgentCommands: settings?.allowAgentCommands === true,
 					};
 				},
 				getRules: (): SmartInputRule[] => optionsRef.current.getSettings()?.rules ?? [],
@@ -83,6 +100,8 @@ export function useSmartInput(options: UseSmartInputOptions) {
 				onSlotsSnapshot: (snapshot) => optionsRef.current.onSnapshot?.(snapshot),
 				onOpenStatusPanel: (...args) => optionsRef.current.onOpenStatusPanel(...args),
 				onOpenFillMenu: (...args) => optionsRef.current.onOpenFillMenu(...args),
+				onOpenAgentPicker: (...args) => optionsRef.current.onOpenAgentPicker?.(...args),
+				onAgentBubbleClick: (...args) => optionsRef.current.onAgentBubbleClick?.(...args),
 				onBubbleContextMenu: (...args) => optionsRef.current.onBubbleContextMenu(...args),
 				onBubbleClose: (...args) => optionsRef.current.onBubbleClose?.(...args),
 				onChipHover: (...args) => optionsRef.current.onChipHover?.(...args),

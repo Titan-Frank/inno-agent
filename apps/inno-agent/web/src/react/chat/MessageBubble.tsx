@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { X, AlertTriangle, FileCode2, Zap } from "lucide-react";
+import { X, AlertTriangle, FileCode2, History, BookmarkPlus, BookOpen, TerminalSquare } from "lucide-react";
 import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
@@ -14,6 +14,8 @@ import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
 import { FileName } from "../FileName.js";
 import { FileTypeIcon } from "../FileTypeIcon.js";
 import { collapseSkillMessage } from "./skill-message-collapse.js";
+import { parseAgentCommandMessage, type AgentCommandMessage } from "./agent-command-message.js";
+import { PopoverSurface } from "../ui/PopoverSurface.js";
 
 // Pure, props-driven chat rendering components. This module must NOT import
 // stores or the api/ layer — apps/showcase reuses it to replay recorded
@@ -44,6 +46,64 @@ export function ChannelBadge({ channel }: { channel: string }) {
 	return (
 		<span className={`inline-block rounded px-1.5 py-px text-[9px] font-medium leading-tight ring-1 ring-black/5 ${CHANNEL_BADGE_CLASS[channel] ?? "bg-[var(--inno-surface-muted)] text-[var(--inno-text-subtle)]"}`}>
 			{CHANNEL_LABEL[channel] ?? channel}
+		</span>
+	);
+}
+
+function AgentCommandIcon({ command }: { command: string }) {
+	if (command.startsWith("skill:")) {
+		return (
+			<svg className="inno-smart-agent-mark" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+				<path d="m13 2-10 12h9l-1 8 10-12h-9z" />
+			</svg>
+		);
+	}
+	if (command === "recall") return <History size={12} aria-hidden="true" />;
+	if (command === "remember") return <BookmarkPlus size={12} aria-hidden="true" />;
+	if (command === "wiki") return <BookOpen size={12} aria-hidden="true" />;
+	return <TerminalSquare size={12} aria-hidden="true" />;
+}
+
+function AgentCommandMessageContent({ command, args, onOpenSkill }: AgentCommandMessage & { onOpenSkill?: (skillName: string) => void }) {
+	const { t } = useTranslation();
+	const displayName = command.startsWith("skill:")
+		? command.slice("skill:".length)
+		: command === "recall"
+			? t("chat.smartInput.agentCommandRecall", "回顾对话")
+				: command === "remember"
+					? t("chat.smartInput.agentCommandRemember", "记忆信息")
+					: command === "wiki"
+						? t("chat.smartInput.agentCommandWiki", "查阅知识库")
+						: command;
+	const hint = command === "recall"
+		? t("chat.smartInput.agentCommandRecallHint", "查找并回顾以前的对话")
+		: command === "remember"
+			? t("chat.smartInput.agentCommandRememberHint", "将关于你的信息保存到记忆中")
+			: command === "wiki"
+				? t("chat.smartInput.agentCommandWikiHint", "在知识库中查找相关资料")
+				: "";
+
+	const skillName = command.startsWith("skill:") ? command.slice("skill:".length) : "";
+	const bubbleClassName = "inno-smart-ref-word inno-smart-agent-ref-bubble inno-smart-agent-surface";
+	const chipContent = (
+		<>
+			<AgentCommandIcon command={command} />
+			<span className="inno-smart-agent-ref-name">{displayName}</span>
+		</>
+	);
+
+	return (
+		<span className="inno-smart-ref-inline inno-smart-agent-ref-content">
+			{skillName && onOpenSkill ? (
+				<button type="button" className={bubbleClassName} onClick={() => onOpenSkill(skillName)}>
+					{chipContent}
+				</button>
+			) : skillName ? (
+				<span className={bubbleClassName}>{chipContent}</span>
+			) : (
+				<span title={hint || displayName} className={bubbleClassName}>{chipContent}</span>
+			)}
+			{args ? <span className="inno-smart-agent-ref-args">{args}</span> : null}
 		</span>
 	);
 }
@@ -151,7 +211,7 @@ function SentBindingPanel({ binding, anchor, onOpenFile }: { binding: Attachment
 	const width = 260;
 
 	return createPortal(
-		<div
+		<PopoverSurface
 			ref={panelRef}
 			className="inno-smart-panel inno-smart-panel--readonly"
 			style={{
@@ -185,7 +245,7 @@ function SentBindingPanel({ binding, anchor, onOpenFile }: { binding: Attachment
 				{" · "}
 				{t("chat.smartInput.sentReadonly", "已随消息发送 · 只读")}
 			</div>
-		</div>,
+		</PopoverSurface>,
 		document.body,
 	);
 }
@@ -235,7 +295,7 @@ function UserAttachmentContent({ content, attachments, resolveUrl, onOpenFile }:
 			onMouseEnter={(event) => showBinding(binding, event)}
 			onMouseLeave={scheduleHide}
 		>
-			<span className="inno-smart-ref-word" title={t("chat.smartInput.sentBubbleHint", "已绑定 {{count}} 个文件", { count: binding.files.length })}>
+			<span className="inno-smart-ref-word inno-smart-file-ref-bubble" title={t("chat.smartInput.sentBubbleHint", "已绑定 {{count}} 个文件", { count: binding.files.length })}>
 					<FileTypeIcon kind={binding.files[0]?.kind ?? "file"} size={13} />
 				{binding.word}
 			</span>
@@ -373,7 +433,7 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment }: {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onOpenSkill }: {
 	message: ChatMessage;
 	showChannel?: boolean;
 	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
@@ -381,6 +441,8 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	resolveAttachmentUrl?: AttachmentUrlResolver;
 	/** Prefer the host app's workspace preview when available. */
 	onOpenAttachment?: AttachmentOpenHandler;
+	/** Open the right-side skill detail panel for a sent skill bubble. */
+	onOpenSkill?: (skillName: string) => void;
 }) {
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
@@ -393,6 +455,9 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 
 	if (message.role === "user") {
 		const skillMessage = collapseSkillMessage(message.content);
+		const agentCommandMessage = skillMessage
+			? { command: `skill:${skillMessage.skillName}`, args: skillMessage.args }
+			: parseAgentCommandMessage(message.content);
 		return (
 			<motion.div
 				className="flex justify-end"
@@ -421,18 +486,12 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 					{message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0) ? (
 						<UserAttachmentContent
 							content={message.content.trim()}
-								attachments={message.attachments}
-								resolveUrl={resolveAttachmentUrl}
-								onOpenFile={onOpenAttachment}
+							attachments={message.attachments}
+							resolveUrl={resolveAttachmentUrl}
+							onOpenFile={onOpenAttachment}
 						/>
-					) : skillMessage ? (
-						<span className="inline-flex items-center gap-1.5 whitespace-normal">
-							<span className="inline-flex items-center gap-1 rounded-md bg-[var(--inno-accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--inno-accent)]">
-								<Zap size={12} />
-								/skill:{skillMessage.skillName}
-							</span>
-							{skillMessage.args ? <span>{skillMessage.args}</span> : null}
-						</span>
+					) : agentCommandMessage ? (
+						<AgentCommandMessageContent {...agentCommandMessage} onOpenSkill={onOpenSkill} />
 					) : (
 						message.content.trim()
 					)}
