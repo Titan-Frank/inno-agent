@@ -1,9 +1,12 @@
 import type { SmartInputRule } from "../../../types/settings.js";
 import type { AttachmentBinding } from "../../../types/chat.js";
+import type { SlashCommandItem } from "../../../api/commands.js";
 import { KIND_COLORS, activeRules, kindFromName, kindFromRule, nameMatchesRule, sameRuleFormat } from "./kinds.js";
 import {
 	analyzeKeywords,
+	agentRule,
 	buildOutgoing as buildOutgoingPure,
+	normalizeAgentCommand,
 	slotChar,
 	TOKEN_RE,
 	tokenRegexFor,
@@ -108,12 +111,6 @@ export interface EngineData {
 
 export interface EngineLabels {
 	[key: string]: string;
-}
-
-export interface AgentCommandDescriptor {
-	name: string;
-	description?: string;
-	source: "extension" | "prompt" | "skill";
 }
 
 export interface SmartInputEngineOptions {
@@ -836,10 +833,10 @@ export class SmartInputEngine {
 		button.title = kw.kind === "agent"
 			? (this.opts.labels().agentKwHitTitle ?? this.opts.labels().kwHitTitle)
 			: this.opts.labels().kwHitTitle;
+		button.addEventListener("mouseenter", () => setHot(true));
+		button.addEventListener("mouseleave", () => setHot(false));
 		if (kw.kind === "agent") {
 			button.addEventListener("click", () => this.opts.callbacks.onOpenAgentPicker?.(kw, button));
-			button.addEventListener("mouseenter", () => setHot(true));
-			button.addEventListener("mouseleave", () => setHot(false));
 			return button;
 		}
 		button.addEventListener("click", () => {
@@ -851,9 +848,6 @@ export class SmartInputEngine {
 			const chip = this.hit.querySelector<HTMLElement>(`.inno-smart-chip[data-slot-id="${slot.id}"]`);
 			if (chip) this.opts.callbacks.onOpenFillMenu(slot, chip);
 		});
-		button.addEventListener("mouseenter", () => setHot(true));
-		button.addEventListener("mouseleave", () => setHot(false));
-
 		// Drag-dwell: hover 1s while dragging a compatible file → auto-convert
 		// and bind the in-hand file.
 		let dwellTimer: number | null = null;
@@ -1495,16 +1489,16 @@ export class SmartInputEngine {
 			this.removeSlot(slot);
 		});
 		chip.appendChild(remove);
+		chip.addEventListener("contextmenu", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
+		});
 
 		if (isAgent) {
 			chip.addEventListener("click", (event) => {
 				if (this.consumeSuppressedBubbleClick(slot.id, event)) return;
 				this.opts.callbacks.onAgentBubbleClick?.(slot, chip);
-			});
-			chip.addEventListener("contextmenu", (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
 			});
 			return chip;
 		}
@@ -1532,12 +1526,6 @@ export class SmartInputEngine {
 				this.opts.callbacks.onOpenFillMenu(slot, chip);
 			});
 		}
-		chip.addEventListener("contextmenu", (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
-		});
-
 		// Drop-to-bind (+drop-ok/drop-bad feedback).
 		let dropOkTimer: number | null = null;
 		const clearDropHint = () => {
@@ -1614,20 +1602,15 @@ export class SmartInputEngine {
 
 	// ── slot operations ─────────────────────────────────────────────────────
 
-	private normalizeAgentCommand(command: AgentCommandDescriptor | string): string {
-		const raw = typeof command === "string" ? command : command.name;
-		return raw.trim().replace(/^\/+/, "");
-	}
-
 	private agentDisplayName(slot: Slot): string {
-		const command = this.normalizeAgentCommand(slot.agentCommand ?? slot.word);
+		const command = normalizeAgentCommand(slot.agentCommand ?? slot.word);
 		const localized = this.opts.agentCommandLabel?.(command)?.trim();
 		if (localized) return localized.replace(/^\/+/, "");
 		return command.startsWith("skill:") ? command.slice("skill:".length) : command;
 	}
 
 	private agentBubbleHint(commandValue: string): string {
-		const command = this.normalizeAgentCommand(commandValue);
+		const command = normalizeAgentCommand(commandValue);
 		const labels = this.opts.labels();
 		if (command === "recall") return labels.agentCommandRecallHint ?? "";
 		if (command === "remember") return labels.agentCommandRememberHint ?? "";
@@ -1636,7 +1619,7 @@ export class SmartInputEngine {
 	}
 
 	private agentIconMarkup(commandValue: string): string {
-		const command = this.normalizeAgentCommand(commandValue);
+		const command = normalizeAgentCommand(commandValue);
 		const paths = command.startsWith("skill:")
 			? '<path d="m13 2-10 12h9l-1 8 10-12h-9z" />'
 			: command === "recall"
@@ -1649,24 +1632,12 @@ export class SmartInputEngine {
 		return `<svg class="inno-smart-agent-mark" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 	}
 
-	private agentRule(command: string): SmartInputRule {
-		return {
-			id: `smart-agent-${command}`,
-			isPreset: true,
-			keyword: `/${command}`,
-			extensions: [],
-			allExtensions: true,
-			excludeExtensions: [],
-			enabled: true,
-		};
-	}
-
-	private createAgentSlot(command: AgentCommandDescriptor | string): Slot {
-		const agentCommand = this.normalizeAgentCommand(command);
+	private createAgentSlot(command: SlashCommandItem | string): Slot {
+		const agentCommand = normalizeAgentCommand(command);
 		return {
 			id: this.nextSlotId++,
 			word: `/${agentCommand}`,
-			rule: this.agentRule(agentCommand),
+			rule: agentRule(agentCommand),
 			files: [],
 			bubbleType: "agent",
 			agentCommand,
@@ -1674,7 +1645,7 @@ export class SmartInputEngine {
 	}
 
 	/** Convert a `技能`/`skill` keyword after the user picks a live skill. */
-	convertAgentKeywordToBubble(kw: KwRange, command: AgentCommandDescriptor | string): Slot | null {
+	convertAgentKeywordToBubble(kw: KwRange, command: SlashCommandItem | string): Slot | null {
 		if (kw.kind !== "agent" || !this.opts.data.getSettings().allowAgentCommands) return null;
 		const previousScrollTop = this.ta.scrollTop;
 		if (this.ta.value.slice(kw.start, kw.end) !== kw.word) return null;
@@ -1691,7 +1662,7 @@ export class SmartInputEngine {
 	}
 
 	/** Replace the current slash-palette draft with one Agent command bubble. */
-	insertAgentCommandAsBubble(command: AgentCommandDescriptor | string, start = 0, end = this.ta.value.length): Slot | null {
+	insertAgentCommandAsBubble(command: SlashCommandItem | string, start = 0, end = this.ta.value.length): Slot | null {
 		if (!this.opts.data.getSettings().enabled || !this.opts.data.getSettings().allowAgentCommands) return null;
 		const value = this.ta.value;
 		const boundedStart = Math.max(0, Math.min(value.length, start));
@@ -1711,13 +1682,13 @@ export class SmartInputEngine {
 	}
 
 	/** Replace an existing skill bubble while keeping its atomic slot identity. */
-	replaceAgentBubbleCommand(slotOrId: Slot | number, command: AgentCommandDescriptor | string): Slot | null {
+	replaceAgentBubbleCommand(slotOrId: Slot | number, command: SlashCommandItem | string): Slot | null {
 		if (!this.opts.data.getSettings().enabled || !this.opts.data.getSettings().allowAgentCommands) return null;
 		const slot = typeof slotOrId === "number"
 			? this.slots.find((entry) => entry.id === slotOrId)
 			: slotOrId;
 		if (!slot || slot.bubbleType !== "agent") return null;
-		const agentCommand = this.normalizeAgentCommand(command);
+		const agentCommand = normalizeAgentCommand(command);
 		if (!agentCommand) return null;
 		const match = tokenRegexFor(slot.id).exec(this.ta.value);
 		if (!match) return null;
@@ -1728,7 +1699,7 @@ export class SmartInputEngine {
 		const selectionEnd = this.ta.selectionEnd ?? selectionStart;
 		slot.agentCommand = agentCommand;
 		slot.word = `/${agentCommand}`;
-		slot.rule = this.agentRule(agentCommand);
+		slot.rule = agentRule(agentCommand);
 		const { token } = this.buildToken(slot);
 		this.ta.value = value.slice(0, start) + token + value.slice(oldEnd);
 		const mapPosition = (position: number): number => {

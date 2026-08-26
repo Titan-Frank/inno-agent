@@ -210,6 +210,22 @@ export function expandInnoSlashCommand(text: string): string | null {
 	return command.buildMessage(args);
 }
 
+/** Recover the slash form from a persisted expanded Inno command. */
+export function collapseInnoSlashCommand(text: string): string | null {
+	const value = text.trim();
+	for (const command of INNO_SLASH_COMMANDS) {
+		if (value === command.buildMessage("")) return `/${command.name}`;
+		const marker = "\u0000";
+		const expanded = command.buildMessage(marker);
+		const prefix = expanded.slice(0, -marker.length);
+		if (value.startsWith(prefix)) {
+			const args = value.slice(prefix.length).trim();
+			if (args) return `/${command.name} ${args}`;
+		}
+	}
+	return null;
+}
+
 export function createInnoExtension(
 	configHolder: ConfigHolder,
 	paths: RuntimePaths,

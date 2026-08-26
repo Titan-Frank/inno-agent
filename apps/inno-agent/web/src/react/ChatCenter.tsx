@@ -57,7 +57,7 @@ import {
 	type PreparedInlineImage,
 } from "./chat/composer-utils.js";
 import { kindFromName } from "./chat/smart-input/kinds.js";
-import type { AgentCommandDescriptor, EngineAttachmentItem } from "./chat/smart-input/engine.js";
+import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
 import type { KwRange } from "./chat/smart-input/rules.js";
 import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
 import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
@@ -608,27 +608,25 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		updateSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
 	}, [updateSmartPanel]);
 
-	const openSmartAgentPicker = useCallback((keyword: KwRange, anchor: HTMLElement) => {
+	const openSmartAgentPanel = useCallback((anchor: HTMLElement, target: Pick<SmartPanelState, "slotId" | "agentKeyword">) => {
 		if (!smartInputEnabled || smartSettings?.allowAgentCommands !== true) return;
 		if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
 		const rect = anchor.getBoundingClientRect();
 		updateSmartPanel({
 			kind: "agent",
 			anchor: { left: rect.left, bottom: rect.bottom },
-			agentKeyword: keyword,
+			...target,
 		});
 	}, [smartInputEnabled, smartSettings?.allowAgentCommands, updateSmartPanel]);
 
+	const openSmartAgentPicker = useCallback((keyword: KwRange, anchor: HTMLElement) => {
+		openSmartAgentPanel(anchor, { agentKeyword: keyword });
+	}, [openSmartAgentPanel]);
+
 	const openSmartAgentBubblePicker = useCallback((slot: { id: number; agentCommand?: string }, anchor: HTMLElement) => {
-		if (!smartInputEnabled || smartSettings?.allowAgentCommands !== true || !slot.agentCommand?.startsWith("skill:")) return;
-		if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
-		const rect = anchor.getBoundingClientRect();
-		updateSmartPanel({
-			kind: "agent",
-			slotId: slot.id,
-			anchor: { left: rect.left, bottom: rect.bottom },
-		});
-	}, [smartInputEnabled, smartSettings?.allowAgentCommands, updateSmartPanel]);
+		if (!slot.agentCommand?.startsWith("skill:")) return;
+		openSmartAgentPanel(anchor, { slotId: slot.id });
+	}, [openSmartAgentPanel]);
 
 	const openSkillPanel = useCallback((skillName: string) => {
 		void skillsStore.selectSkill(skillName);
@@ -1337,7 +1335,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onClose={() => updateSmartPanel(null)}
 			onOpenPanel={updateSmartPanel}
 			agentCommands={slashCommands}
-			onSelectAgentCommand={(command: AgentCommandDescriptor) => {
+			onSelectAgentCommand={(command) => {
 				const current = smartPanelRef.current;
 				if (current?.kind !== "agent") return;
 				if (current.slotId !== undefined) {

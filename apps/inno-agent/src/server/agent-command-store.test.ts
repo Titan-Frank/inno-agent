@@ -26,12 +26,10 @@ describe("Agent command sidecar store", () => {
 		recordSessionAgentCommand(dataDir, "s1", {
 			commandContent: "/recall",
 			expandedContent: "请使用 l3_recall 工具回顾我们之前的对话，总结一下最近学过的重点。",
-			timestamp: 1,
 		});
 		recordSessionAgentCommand(dataDir, "s1", {
 			commandContent: "/recall 最近学了什么？",
 			expandedContent: "请使用 l3_recall 工具检索我们过去的对话，并结合检索结果回答：最近学了什么？",
-			timestamp: 2,
 		});
 
 		const merged = mergeSessionAgentCommands(dataDir, "s1", [
@@ -50,7 +48,6 @@ describe("Agent command sidecar store", () => {
 		const entry = {
 			commandContent: "/wiki",
 			expandedContent: "扩展后的 wiki 指令",
-			timestamp: 1,
 		};
 		recordSessionAgentCommand(dataDir, "s1", entry);
 		recordSessionAgentCommand(dataDir, "s2", entry);

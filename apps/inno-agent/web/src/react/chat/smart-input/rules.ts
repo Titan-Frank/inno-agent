@@ -33,6 +33,23 @@ export function slotChar(id: number): string {
 	return String.fromCharCode(PUA_BASE + id);
 }
 
+export function normalizeAgentCommand(value: string | { name: string }): string {
+	const raw = typeof value === "string" ? value : value.name;
+	return raw.trim().replace(/^\/+/, "");
+}
+
+export function agentRule(command: string): SmartInputRule {
+	return {
+		id: `smart-agent-${command}`,
+		isPreset: true,
+		keyword: `/${command}`,
+		extensions: [],
+		allExtensions: true,
+		excludeExtensions: [],
+		enabled: true,
+	};
+}
+
 // tokenRegexFor runs on every sync for every slot; RegExp compilation is
 // wasted work compared to reusing one instance per slot id.
 const tokenRegexCache = new Map<number, RegExp>();

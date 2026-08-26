@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Check, ListChecks, Plus, RotateCcw, X, Zap } from "lucide-react";
-import type { AgentCommandDescriptor, EngineAttachmentItem, SmartInputEngine } from "./engine.js";
+import type { EngineAttachmentItem, SmartInputEngine } from "./engine.js";
+import type { SlashCommandItem } from "../../../api/commands.js";
 import type { KwRange } from "./rules.js";
 import { KIND_LABEL_KEYS, kindFromName, kindFromRule, nameMatchesRule } from "./kinds.js";
 import type { PendingUpload } from "../composer-utils.js";
@@ -10,6 +11,7 @@ import { FileName } from "../../FileName.js";
 import { FileTypeIcon } from "../../FileTypeIcon.js";
 import { ContextMenu, type ContextMenuItem } from "../../ui/ContextMenu.js";
 import { PopoverSurface } from "../../ui/PopoverSurface.js";
+import { useTitleMarquee } from "../../hooks.js";
 
 /**
  * Floating panels for the smart-input composer: status panel (bound files,
@@ -43,52 +45,14 @@ interface SmartInputOverlayProps {
 	/** Increments when bound files change without changing the slot count. */
 	refreshKey: number;
 	onOpenFilePreview: (path: string) => void;
-	agentCommands: AgentCommandDescriptor[];
-	onSelectAgentCommand: (command: AgentCommandDescriptor) => void;
+	agentCommands: SlashCommandItem[];
+	onSelectAgentCommand: (command: SlashCommandItem) => void;
 	onOpenSkillPanel: (skillName: string) => void;
 }
 
 const AUTO_CLOSE_MS = 260;
 const UNPIN_MOVE_PX = 25;
-const SKILL_TITLE_MARQUEE_SPEED_PX_PER_SECOND = 28;
-const SKILL_TITLE_MARQUEE_END_PADDING_PX = 2;
-
-function useSkillTitleMarquee(name: string, hovered: boolean) {
-	const titleViewportRef = useRef<HTMLSpanElement>(null);
-	const titleMeasureRef = useRef<HTMLSpanElement>(null);
-	const [titleOverflowing, setTitleOverflowing] = useState(false);
-	const [titleShift, setTitleShift] = useState(0);
-
-	useEffect(() => {
-		const viewport = titleViewportRef.current;
-		const measure = titleMeasureRef.current;
-		if (!viewport || !measure) return;
-		const updateTitleOverflow = () => {
-			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
-			setTitleOverflowing(shift > 2);
-			setTitleShift(Math.ceil(shift));
-		};
-		updateTitleOverflow();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateTitleOverflow);
-		observer.observe(viewport);
-		observer.observe(measure);
-		return () => observer.disconnect();
-	}, [name]);
-
-	const marqueeActive = titleOverflowing && hovered;
-	const marqueeShift = titleShift + SKILL_TITLE_MARQUEE_END_PADDING_PX;
-	return {
-		titleViewportRef,
-		titleMeasureRef,
-		titleOverflowing,
-		marqueeActive,
-		marqueeShift,
-		titleMarqueeDuration: Math.max(0.05, marqueeShift / SKILL_TITLE_MARQUEE_SPEED_PX_PER_SECOND),
-	};
-}
-
-type SkillTitleMarqueeState = ReturnType<typeof useSkillTitleMarquee>;
+type SkillTitleMarqueeState = ReturnType<typeof useTitleMarquee<HTMLSpanElement>>;
 
 function SkillNameMarquee({ name, titleState }: { name: string; titleState: SkillTitleMarqueeState }) {
 	const {
@@ -119,10 +83,10 @@ function SkillNameMarquee({ name, titleState }: { name: string; titleState: Skil
 	);
 }
 
-function AgentSkillOption({ command, onSelect }: { command: AgentCommandDescriptor; onSelect: (command: AgentCommandDescriptor) => void }) {
+function AgentSkillOption({ command, onSelect }: { command: SlashCommandItem; onSelect: (command: SlashCommandItem) => void }) {
 	const [hovered, setHovered] = useState(false);
 	const skillName = command.name.startsWith("skill:") ? command.name.slice("skill:".length) : command.name;
-	const titleState = useSkillTitleMarquee(skillName, hovered);
+	const titleState = useTitleMarquee<HTMLSpanElement>(skillName, hovered);
 
 	return (
 		<button

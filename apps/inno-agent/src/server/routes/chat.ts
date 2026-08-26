@@ -182,7 +182,6 @@ function recordAgentCommandIfPresent(dataDir: string, sessionId: string, prompt:
 	recordSessionAgentCommand(dataDir, sessionId, {
 		commandContent: prompt,
 		expandedContent,
-		timestamp: Date.now(),
 	});
 }
 

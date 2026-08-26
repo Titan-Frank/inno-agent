@@ -1,5 +1,6 @@
 import type { SmartInputRule } from "../../../types/settings.js";
 import type { Slot } from "./engine.js";
+import { agentRule, normalizeAgentCommand } from "./rules.js";
 
 export const SMART_BUBBLE_CLIPBOARD_TYPE = "application/x-inno-agent-smart-bubble";
 export const SMART_BUBBLE_CLIPBOARD_VERSION = 1;
@@ -57,23 +58,6 @@ export function clipboardFilesFor(clipboardId: string): Map<string, File> | unde
 	return smartBubbleClipboardFiles.get(clipboardId);
 }
 
-function normalizeAgentCommand(value: string): string | null {
-	const command = value.trim().replace(/^\/+/, "");
-	return command && !/\s/.test(command) ? command : null;
-}
-
-function agentRule(command: string): SmartInputRule {
-	return {
-		id: `smart-agent-${command}`,
-		isPreset: true,
-		keyword: `/${command}`,
-		extensions: [],
-		allExtensions: true,
-		excludeExtensions: [],
-		enabled: true,
-	};
-}
-
 /**
  * Build the copy payload for a selection: the plain-text projection (bubbles
  * replaced by their words) plus per-bubble file descriptors. Pure with respect
@@ -105,7 +89,7 @@ export function buildClipboardPayload(
 		text += value.slice(cursor, start);
 		const isAgent = slot.bubbleType === "agent";
 		const command = isAgent ? normalizeAgentCommand(slot.agentCommand ?? slot.word) : null;
-		if (isAgent && !command) continue;
+		if (isAgent && (!command || /\s/.test(command))) continue;
 		const bubbleStart = text.length;
 		text += slot.word;
 		const files = isAgent ? [] : slot.files.map((file) => {
@@ -164,7 +148,7 @@ export function parseClipboardPayload(
 				const command = bubbleType === "agent"
 					? normalizeAgentCommand(typeof bubble.agentCommand === "string" ? bubble.agentCommand : word)
 					: null;
-				if (bubbleType === "agent" && (!options.allowAgentBubbles || !command || word !== `/${command}`)) return null;
+				if (bubbleType === "agent" && (!options.allowAgentBubbles || !command || /\s/.test(command) || word !== `/${command}`)) return null;
 				const rule = bubbleType === "agent" ? agentRule(command!) : resolveRule(bubble.rule, word);
 				if (!rule) return null;
 				const files = bubbleType === "agent" ? [] : Array.isArray(bubble.files)
