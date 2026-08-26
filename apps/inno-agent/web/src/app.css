@@ -649,6 +649,25 @@ inno-workspace-panel textarea {
 	animation: inno-composer-model-menu-in var(--inno-dur-fast) var(--inno-ease-out) both;
 }
 
+/* Slash palette reuses the model menu treatment; only its anchoring differs. */
+.inno-slash-palette {
+	left: 0;
+	right: 0;
+	z-index: 20;
+	width: auto;
+	max-height: var(--inno-slash-palette-max-height, min(360px, calc(100vh - 24px)));
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	transform-origin: bottom left;
+}
+
+.inno-slash-palette-list {
+	min-height: 0;
+	flex: 1 1 auto;
+	overflow-y: auto;
+}
+
 @keyframes inno-composer-model-menu-in {
 	from {
 		opacity: 0;
@@ -1613,6 +1632,62 @@ inno-workspace-panel textarea {
 	user-select: none;
 }
 
+/* The panel stays in place only when a requested width cannot be applied to
+ * the live layout; this ghost edge follows the pointer until release. */
+.workspace-resize-preview {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: var(--inno-workspace-preview-width);
+	z-index: 999;
+	pointer-events: none;
+}
+
+.workspace-resize-preview::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 50%;
+	width: 7px;
+	height: 38px;
+	transform: translate(-50%, -50%);
+	border: 1px solid color-mix(in srgb, var(--inno-accent) 28%, var(--inno-border));
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--inno-surface) 94%, transparent);
+	box-shadow: 0 2px 10px rgba(31, 35, 40, 0.12), 0 0 0 2px color-mix(in srgb, var(--inno-accent) 5%, transparent);
+}
+
+.workspace-resize-preview::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	transform: translateX(-50%);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--inno-accent) 32%, transparent);
+}
+
+.workspace-resize-preview--limit::before {
+	border-color: color-mix(in srgb, var(--inno-danger) 72%, var(--inno-border));
+	box-shadow: 0 2px 10px rgba(220, 38, 38, 0.16), 0 0 0 2px color-mix(in srgb, var(--inno-danger) 10%, transparent);
+}
+
+.workspace-resize-preview--limit::after {
+	background: var(--inno-danger);
+	box-shadow: 0 0 8px color-mix(in srgb, var(--inno-danger) 42%, transparent);
+}
+
+/* Hide the old edge while the ghost edge is active so the user sees one
+ * unambiguous target position. During a normal resize the real edge remains
+ * visible and the workspace follows the pointer directly. */
+.workspace-resize-preview-active .workspace-resize-handle::after {
+	background: transparent;
+	box-shadow: none;
+}
+
 /* InnoSpark theme: inspired by agent.aiecnu.net's public chat UI. */
 :root[data-theme="innospark"] body {
 	background: var(--inno-background);
@@ -1936,6 +2011,29 @@ button.inno-smart-ref-chip:hover {
 .inno-smart-panel--status.is-single-column {
 	width: min(280px, calc(100vw - 16px));
 }
+.inno-smart-panel--agent {
+	box-sizing: border-box;
+	width: min(420px, calc(100vw - 16px));
+}
+.inno-smart-agent-list {
+	max-height: 260px;
+}
+.inno-smart-agent-skill-title {
+	display: block;
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	position: relative;
+}
+.inno-smart-agent-description {
+	min-width: 0;
+	max-width: 55%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 10.5px;
+	color: var(--inno-text-subtle);
+}
 .inno-smart-panel--status .inno-smart-panel-list {
 	max-height: 180px;
 }
@@ -2150,6 +2248,9 @@ button.inno-smart-ref-chip:hover {
 .inno-smart-kw.is-hot {
 	color: var(--smart-kw, var(--inno-danger));
 }
+.inno-smart-kw-hit.is-agent {
+	--smart-kw: var(--inno-accent);
+}
 .inno-smart-kw-hit {
 	position: absolute;
 	min-width: 0;
@@ -2203,6 +2304,53 @@ button.inno-smart-ref-chip:hover {
 }
 .inno-smart-chip.is-filled {
 	border-style: solid;
+}
+.inno-smart-chip.is-agent {
+	gap: 3px;
+	padding: 0 7px 0 6px;
+	border-color: color-mix(in srgb, var(--smart-bc, #8b5cf6) 60%, transparent);
+	background: color-mix(in srgb, var(--smart-bc, #8b5cf6) 12%, var(--inno-surface));
+	color: color-mix(in srgb, var(--smart-bc, #8b5cf6) 78%, var(--inno-text));
+}
+.inno-smart-chip.is-agent .inno-smart-chip-word {
+	overflow: visible;
+	text-overflow: clip;
+	white-space: nowrap;
+}
+.inno-smart-chip.is-agent[data-agent-hint]::after {
+	content: attr(data-agent-hint);
+	position: absolute;
+	left: 50%;
+	top: calc(100% + 6px);
+	z-index: 80;
+	max-width: 260px;
+	padding: 4px 7px;
+	border: 1px solid var(--inno-border);
+	border-radius: 6px;
+	background: var(--inno-surface-raised);
+	box-shadow: var(--inno-shadow-soft);
+	color: var(--inno-text);
+	font-size: 10.5px;
+	font-weight: 400;
+	line-height: 15px;
+	white-space: normal;
+	text-align: left;
+	transform: translate(-50%, -2px);
+	visibility: hidden;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out), visibility var(--inno-dur-fast);
+}
+.inno-smart-chip.is-agent[data-agent-hint]:hover::after {
+	transform: translate(-50%, 0);
+	visibility: visible;
+	opacity: 1;
+}
+.inno-smart-agent-mark {
+	flex: 0 0 auto;
+	font-size: 10px;
+	line-height: 1;
+	display: block;
 }
 .inno-smart-chip.is-selected {
 	background: color-mix(in srgb, var(--smart-bc, var(--inno-accent)) 18%, var(--inno-selection-bg, rgba(37, 99, 235, 0.16)));

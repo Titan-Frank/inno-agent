@@ -3,11 +3,18 @@ import {
 	canOpenWorkspaceBesideSidebar,
 	CHAT_BASELINE_WIDTH,
 	fitPanelLayout,
+	getMaximumWorkspaceWidth,
 	SIDEBAR_WIDTH,
 	WORKSPACE_QUARTER_MIN_WIDTH,
 } from "./app-layout.js";
 
 describe("fitPanelLayout", () => {
+	it("limits resize previews to the space the current layout can actually use", () => {
+		expect(getMaximumWorkspaceWidth(1_140, true, "quarter")).toBe(340);
+		expect(getMaximumWorkspaceWidth(1_700, false, "half")).toBe(636);
+		expect(getMaximumWorkspaceWidth(2_800, true, "half")).toBe(920);
+	});
+
 	it("keeps the chat baseline when the workspace is resized too wide", () => {
 		expect(fitPanelLayout(1_100, true, "half", 920)).toEqual({
 			sidebarCollapsed: true,
