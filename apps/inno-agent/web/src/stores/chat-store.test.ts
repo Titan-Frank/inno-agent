@@ -361,6 +361,29 @@ describe("ChatStore stream ownership", () => {
 		await sending;
 	});
 
+	it("falls back to a generated request id when crypto.randomUUID is unavailable", async () => {
+		vi.mocked(globalThis.crypto.randomUUID).mockImplementationOnce(() => {
+			throw new Error("randomUUID unavailable");
+		});
+		let generatedRequestId = "";
+		mocks.streamChat.mockImplementation(async function* (_prompt, sessionId, clientRequestId) {
+			generatedRequestId = clientRequestId;
+			yield {
+				eventId: 1,
+				sessionId,
+				turnId: "turn-fallback",
+				clientRequestId,
+				event: { type: "aborted", message: "Stopped", persisted: false },
+			};
+		});
+
+		const store = new ChatStoreImpl();
+		await store.send("hello");
+
+		expect(generatedRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(store.isSending).toBe(false);
+	});
+
 	it("rechecks isSending after the async session-store import", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => { release = resolve; });
