@@ -156,5 +156,6 @@ export interface SmartInputSettings {
 	enabled: boolean;
 	allowDrag: boolean;
 	allowRightClick: boolean;
+	allowAgentCommands: boolean;
 	rules: SmartInputRule[];
 }

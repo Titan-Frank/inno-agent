@@ -43,10 +43,33 @@ function entryIcon(entry: SlashPaletteEntry) {
  */
 export function SlashCommandPalette({ entries, activeIndex, query, onSelect, onActiveChange }: SlashCommandPaletteProps) {
 	const { t } = useTranslation();
+	const paletteRef = useRef<HTMLDivElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
+	const skipMouseScrollRef = useRef(false);
+
+	// Keep the palette above the composer without changing the model menu's
+	// shared visual treatment.
+	useEffect(() => {
+		const palette = paletteRef.current;
+		const composer = palette?.parentElement;
+		if (!palette || !composer) return;
+		const updateHeight = () => {
+			const available = Math.max(160, Math.floor(composer.getBoundingClientRect().top - 32));
+			palette.style.setProperty("--inno-slash-palette-max-height", `${available}px`);
+		};
+		updateHeight();
+		window.addEventListener("resize", updateHeight);
+		return () => {
+			window.removeEventListener("resize", updateHeight);
+		};
+	}, []);
 
 	// Keep the active row in view during keyboard navigation.
 	useEffect(() => {
+		if (skipMouseScrollRef.current) {
+			skipMouseScrollRef.current = false;
+			return;
+		}
 		const list = listRef.current;
 		const active = list?.querySelector<HTMLElement>('[data-active="true"]');
 		active?.scrollIntoView({ block: "nearest" });
@@ -55,11 +78,12 @@ export function SlashCommandPalette({ entries, activeIndex, query, onSelect, onA
 	let lastGroup: SlashPaletteEntry["group"] | null = null;
 	return (
 		<div
-			className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-[var(--inno-border)] bg-[var(--inno-surface)] shadow-lg"
+			ref={paletteRef}
+			className="inno-composer-model-menu inno-slash-palette"
 			role="listbox"
 			aria-label={t("chat.slashPalette.ariaLabel")}
 		>
-			<div ref={listRef} className="max-h-72 overflow-y-auto py-1">
+			<div ref={listRef} className="inno-slash-palette-list py-1">
 				{entries.length === 0 ? (
 					<div className="px-3 py-2 text-xs text-[var(--inno-text-muted)]">
 						{t("chat.slashPalette.empty", { query })}
@@ -80,12 +104,16 @@ export function SlashCommandPalette({ entries, activeIndex, query, onSelect, onA
 									role="option"
 									aria-selected={index === activeIndex}
 									data-active={index === activeIndex}
-									className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm ${
+									className={`inno-composer-model-option ${
 										index === activeIndex
-											? "bg-[var(--inno-accent-soft)] text-[var(--inno-text)]"
-											: "text-[var(--inno-text)] hover:bg-[var(--inno-surface-muted)]"
+											? "is-selected"
+											: ""
 									}`}
-									onMouseEnter={() => onActiveChange(index)}
+									onMouseEnter={() => {
+										if (index === activeIndex) return;
+										skipMouseScrollRef.current = true;
+										onActiveChange(index);
+									}}
 									onClick={() => onSelect(entry)}
 								>
 									<span className="shrink-0 text-[var(--inno-text-muted)]">{entryIcon(entry)}</span>

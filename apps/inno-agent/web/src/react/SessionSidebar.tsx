@@ -37,7 +37,7 @@ import type { WorkspaceMeta } from "../api/workspaces.js";
 import { triggerDownload } from "../api/workspace.js";
 import { exportSessionShowcase } from "../api/sessions.js";
 import type { SessionChannel, SessionMeta } from "../api/sessions.js";
-import { useStoreSnapshot } from "./hooks.js";
+import { useStoreSnapshot, useTitleMarquee } from "./hooks.js";
 import { Spinner } from "./ui/Spinner.js";
 import { ContextMenu, type ContextMenuItem } from "./ui/ContextMenu.js";
 
@@ -50,8 +50,6 @@ const CHANNEL_FILTER_ORDER = ["web", "feishu", "wechat", "cli", "scheduler"] as 
 const WORKSPACE_SORT_STORAGE_KEY = "inno.sidebarWorkspaceSort";
 const WORKSPACE_CUSTOM_ORDER_STORAGE_KEY = "inno.sidebarWorkspaceCustomOrder";
 const PINNED_SESSIONS_STORAGE_KEY = "inno.sidebarPinnedSessions";
-const TITLE_MARQUEE_SPEED_PX_PER_SECOND = 28;
-const TITLE_MARQUEE_END_PADDING_PX = 2;
 
 type WorkspaceSort = "recent" | "oldest" | "nameAsc" | "nameDesc" | "custom";
 
@@ -148,42 +146,7 @@ function menuLabel(icon: ReactNode, label: string) {
 	);
 }
 
-function useTitleMarquee(name: string, hovered: boolean) {
-	const titleViewportRef = useRef<HTMLDivElement>(null);
-	const titleMeasureRef = useRef<HTMLSpanElement>(null);
-	const [titleOverflowing, setTitleOverflowing] = useState(false);
-	const [titleShift, setTitleShift] = useState(0);
-
-	useEffect(() => {
-		const viewport = titleViewportRef.current;
-		const measure = titleMeasureRef.current;
-		if (!viewport || !measure) return;
-		const updateTitleOverflow = () => {
-			const shift = Math.max(0, measure.getBoundingClientRect().width - viewport.clientWidth);
-			setTitleOverflowing(shift > 2);
-			setTitleShift(Math.ceil(shift));
-		};
-		updateTitleOverflow();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateTitleOverflow);
-		observer.observe(viewport);
-		observer.observe(measure);
-		return () => observer.disconnect();
-	}, [name]);
-
-	const marqueeActive = titleOverflowing && hovered;
-	const marqueeShift = titleShift + TITLE_MARQUEE_END_PADDING_PX;
-	return {
-		titleViewportRef,
-		titleMeasureRef,
-		titleOverflowing,
-		marqueeActive,
-		marqueeShift,
-		titleMarqueeDuration: Math.max(0.05, marqueeShift / TITLE_MARQUEE_SPEED_PX_PER_SECOND),
-	};
-}
-
-type TitleMarqueeState = ReturnType<typeof useTitleMarquee>;
+type TitleMarqueeState = ReturnType<typeof useTitleMarquee<HTMLDivElement>>;
 
 function SessionTitleRow({
 	session,
@@ -473,7 +436,7 @@ function SessionCard({
 	const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 	const [hovered, setHovered] = useState(false);
 	const titleChannel = session.origin ?? session.channels[0] ?? "unknown";
-	const titleState = useTitleMarquee(session.name, hovered);
+	const titleState = useTitleMarquee<HTMLDivElement>(session.name, hovered);
 	const menuItems: ContextMenuItem[] = [
 		{
 			label: menuLabel(
@@ -626,7 +589,7 @@ function SimpleSessionRow({
 	const { t } = useTranslation();
 	const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 	const [hovered, setHovered] = useState(false);
-	const titleState = useTitleMarquee(session.name, hovered);
+	const titleState = useTitleMarquee<HTMLDivElement>(session.name, hovered);
 	const menuItems: ContextMenuItem[] = [
 		{
 			label: menuLabel(

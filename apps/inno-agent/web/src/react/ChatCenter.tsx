@@ -18,6 +18,7 @@ import { workspacesStore } from "../stores/workspaces-store.js";
 import { workspaceStore } from "../stores/workspace-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { appStore } from "../stores/app-store.js";
+import { skillsStore } from "../stores/skills-store.js";
 import type { CreateSessionInput } from "../api/sessions.js";
 import { bindSessionWorkspace } from "../api/workspaces.js";
 import { ApiError } from "../api/client.js";
@@ -57,6 +58,7 @@ import {
 } from "./chat/composer-utils.js";
 import { kindFromName } from "./chat/smart-input/kinds.js";
 import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
+import type { KwRange } from "./chat/smart-input/rules.js";
 import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
 import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
 
@@ -72,6 +74,7 @@ const LAST_WS_ID_KEY = "inno.lastWorkspaceId";
 
 interface ChatCenterProps {
 	onOpenPresetPanels: () => void | Promise<void>;
+	onOpenRightPanel: (tab: "notebook" | "profile" | "skills" | "jobs") => void | Promise<void>;
 	onPreviewFile: (minimumWidth: number) => void | Promise<void>;
 }
 
@@ -95,7 +98,7 @@ function rememberWsChoice(mode: WsMode, existingId: string): void {
 const SMART_FILE_PREVIEW_WIDTH = 560;
 const SMART_HOVER_OPEN_MS = 250;
 
-export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProps) {
+export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile }: ChatCenterProps) {
 	const { t } = useTranslation();
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const welcomeLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -131,9 +134,9 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	const [pasteBlocks, setPasteBlocks] = useState<PendingPasteBlock[]>([]);
 
 	// Slash-command palette (Codex-style): opens while the draft is a bare
-	// "/query". App actions (new chat, model picker) run locally; agent
-	// commands come from GET /api/commands and are inserted into the composer —
-	// the backend session expands/dispatches them in session.prompt().
+	// "/query". App actions (new chat, model picker) run locally; Agent
+	// commands come from GET /api/commands and become atomic bubbles when the
+	// feature is enabled, while the backend still receives their slash form.
 	const [slashCommands, setSlashCommands] = useState<SlashCommandItem[]>([]);
 	const [slashActiveIndex, setSlashActiveIndex] = useState(0);
 	const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
@@ -605,6 +608,31 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		updateSmartPanel({ kind, slotId: slot.id, anchor: rectOfChip(chip) });
 	}, [updateSmartPanel]);
 
+	const openSmartAgentPanel = useCallback((anchor: HTMLElement, target: Pick<SmartPanelState, "slotId" | "agentKeyword">) => {
+		if (!smartInputEnabled || smartSettings?.allowAgentCommands !== true) return;
+		if (smartPanelRef.current?.kind === "menu" || document.querySelector(".inno-smart-menu")) return;
+		const rect = anchor.getBoundingClientRect();
+		updateSmartPanel({
+			kind: "agent",
+			anchor: { left: rect.left, bottom: rect.bottom },
+			...target,
+		});
+	}, [smartInputEnabled, smartSettings?.allowAgentCommands, updateSmartPanel]);
+
+	const openSmartAgentPicker = useCallback((keyword: KwRange, anchor: HTMLElement) => {
+		openSmartAgentPanel(anchor, { agentKeyword: keyword });
+	}, [openSmartAgentPanel]);
+
+	const openSmartAgentBubblePicker = useCallback((slot: { id: number; agentCommand?: string }, anchor: HTMLElement) => {
+		if (!slot.agentCommand?.startsWith("skill:")) return;
+		openSmartAgentPanel(anchor, { slotId: slot.id });
+	}, [openSmartAgentPanel]);
+
+	const openSkillPanel = useCallback((skillName: string) => {
+		void skillsStore.selectSkill(skillName);
+		void onOpenRightPanel("skills");
+	}, [onOpenRightPanel]);
+
 	const cancelSmartHoverTimers = useCallback(() => {
 		if (smartHoverTimer.current !== null) {
 			window.clearTimeout(smartHoverTimer.current);
@@ -680,7 +708,9 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 		},
 		onOpenStatusPanel: (slot, chip) => openSmartPanel("status", slot, chip),
 		onOpenFillMenu: (slot, chip) => openSmartPanel("fill", slot, chip),
-		 onBubbleContextMenu: (event, slot, chip) => {
+		onOpenAgentPicker: openSmartAgentPicker,
+		onAgentBubbleClick: openSmartAgentBubblePicker,
+		onBubbleContextMenu: (event, slot, chip) => {
 			// Right-clicking a filled bubble can race with the hover open/close
 			// timers. A context menu is an explicit interaction and must not be
 			// replaced by the hover status panel or dismissed by its timer.
@@ -1027,11 +1057,16 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 			}
 			return;
 		}
-		// Agent command: stage "/name " in the composer so the user can add
-		// arguments; sending goes through the normal chat path, where the
-		// backend session expands skills/templates or runs extension commands.
+		if (smartInputEnabled && smartSettings?.allowAgentCommands === true) {
+			// The slash palette owns the command selection. Replace its bare
+			// `/query` draft with an atomic Agent bubble and leave a normal space
+			// after it for command arguments.
+			if (engineRef.current?.insertAgentCommandAsBubble(entry.name)) return;
+		}
+		// Feature off (or an engine that is not mounted): preserve the existing
+		// behavior and stage "/name " so the user can add arguments.
 		setComposerText(`/${entry.name} `);
-	}, [setComposerText]);
+	}, [engineRef, setComposerText, smartInputEnabled, smartSettings?.allowAgentCommands]);
 
 	const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -1295,18 +1330,29 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 	) : null;
 	const smartOverlayNode = smartInputEnabled ? (
 		<SmartInputOverlay
-				engine={engineRef.current}
-				panel={smartPanel}
-				onClose={() => updateSmartPanel(null)}
-				onOpenPanel={updateSmartPanel}
-				workspaceFiles={workspaceFiles}
-				workspaceFilesLoading={workspaceTreeLoading || (workspaceTree === null && !workspaceTreeError)}
-				attachments={uploads}
-				takeAttachment={takeAttachment}
-				onWorkspaceHighlight={highlightWorkspace}
-				refreshKey={smartPanelRefresh}
-				onOpenFilePreview={openSmartFilePreview}
-			/>
+			engine={engineRef.current}
+			panel={smartPanel}
+			onClose={() => updateSmartPanel(null)}
+			onOpenPanel={updateSmartPanel}
+			agentCommands={slashCommands}
+			onSelectAgentCommand={(command) => {
+				const current = smartPanelRef.current;
+				if (current?.kind !== "agent") return;
+				if (current.slotId !== undefined) {
+					engineRef.current?.replaceAgentBubbleCommand(current.slotId, command);
+					return;
+				}
+				if (current.agentKeyword) engineRef.current?.convertAgentKeywordToBubble(current.agentKeyword, command);
+			}}
+			onOpenSkillPanel={openSkillPanel}
+			workspaceFiles={workspaceFiles}
+			workspaceFilesLoading={workspaceTreeLoading || (workspaceTree === null && !workspaceTreeError)}
+			attachments={uploads}
+			takeAttachment={takeAttachment}
+			onWorkspaceHighlight={highlightWorkspace}
+			refreshKey={smartPanelRefresh}
+			onOpenFilePreview={openSmartFilePreview}
+		/>
 	) : null;
 
 	if (isWelcome) {
@@ -1357,6 +1403,7 @@ export function ChatCenter({ onOpenPresetPanels, onPreviewFile }: ChatCenterProp
 			busyBlocker={busyBlocker}
 			composer={renderComposer(t("chat.composerPlaceholder"))}
 			onOpenAttachment={openChatAttachmentPreview}
+			onOpenSkill={openSkillPanel}
 			wsError={wsError}
 		/>
 		</>

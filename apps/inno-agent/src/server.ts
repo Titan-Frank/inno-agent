@@ -53,6 +53,7 @@ import { handlePresetsRoutes } from "./server/routes/presets.js";
 import { handlePracticeRoutes } from "./server/routes/practice.js";
 import { handleChatRoutes } from "./server/routes/chat.js";
 import { handleCommandsRoutes } from "./server/routes/commands.js";
+import { mergeSessionAgentCommands } from "./server/agent-command-store.js";
 import {
 	mergeChannels,
 	type SessionChannel,
@@ -1026,7 +1027,8 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 			m.role === "user" ? !!m.content : (m.content || m.thinking || (m.tools && m.tools.length > 0)),
 		);
 
-		const firstUser = filtered.find((message) => message.role === "user");
+		const displayMessages = mergeSessionAgentCommands(dataDir, basename(filePath), filtered);
+		const firstUser = displayMessages.find((message) => message.role === "user");
 		const preview = firstUser?.content.trim() ?? "";
 		const name = preview ? (preview.length > 48 ? `${preview.slice(0, 45)}...` : preview) : basename(filePath);
 		const stat = statSync(filePath);
@@ -1041,7 +1043,7 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 				preview,
 				channels: channels.size > 0 ? Array.from(channels) : [],
 			},
-			messages: filtered,
+			messages: displayMessages,
 		};
 	} catch (err) {
 		return null;

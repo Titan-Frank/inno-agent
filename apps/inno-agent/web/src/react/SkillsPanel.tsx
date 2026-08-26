@@ -6,7 +6,7 @@ import { RefreshCw, Upload, Trash2, ChevronLeft, File, FileText, FileType, Folde
 import { skillsStore } from "../stores/skills-store.js";
 import { skillRawUrl } from '../api/skills.js';
 import type { SkillInfo } from "../types/skills.js";
-import type { WorkspaceFileDetail, WorkspaceFileKind } from "../types/workspace.js";
+import type { WorkspaceFileDetail, WorkspaceFileKind, WorkspaceTreeNode } from "../types/workspace.js";
 import { type ArboristNode, toArboristNodes } from "../types/workspace.js";
 import { normalizeMarkdownMath } from "../utils/markdown-math.js";
 import { groupByCategory, matchesQuery } from "../utils/category-grouping.js";
@@ -37,6 +37,15 @@ function nodeIcon(name: string, isDir: boolean, isOpen: boolean) {
 
 function isEditable(kind: WorkspaceFileKind): boolean {
 	return kind === "markdown" || kind === "text";
+}
+
+function findSkillReadme(nodes: WorkspaceTreeNode[]): WorkspaceTreeNode | null {
+	for (const node of nodes) {
+		if (node.type === "file" && node.name.toLowerCase() === "skill.md") return node;
+		const nested = node.children ? findSkillReadme(node.children) : null;
+		if (nested) return nested;
+	}
+	return null;
 }
 
 function langFromName(name: string): string {
@@ -236,7 +245,15 @@ function SkillDetail({ skill, onBack, dndManager }: { skill: SkillInfo; onBack: 
 	}, []);
 
 	useEffect(() => {
-		void skillsStore.selectSkill(skill.name);
+		let cancelled = false;
+		void skillsStore.selectSkill(skill.name).then(async () => {
+			if (cancelled || skillsStore.selectedSkill !== skill.name) return;
+			const readme = findSkillReadme(skillsStore.skillTree ?? []);
+			if (readme) await skillsStore.selectFile(readme.path);
+		});
+		return () => {
+			cancelled = true;
+		};
 	}, [skill.name]);
 
 	const arboristData = useMemo(() => {

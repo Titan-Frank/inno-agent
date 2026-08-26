@@ -11,6 +11,7 @@ import {
 	runPromptStreamingInSession,
 	type PromptRunOutcome,
 } from "../../agent/pi-runner.js";
+import { expandInnoSlashCommand } from "../../agent/inno-extension.js";
 import { questionBridge, type QuestionBridgeResult } from "../../agent/question-bridge.js";
 import {
 	hasCompleteTurnAfterBaseline,
@@ -28,6 +29,7 @@ import {
 	validateChatAttachments,
 } from "../attachments.js";
 import { recordSessionAttachments } from "../attachments-store.js";
+import { recordSessionAgentCommand } from "../agent-command-store.js";
 import { WORKSPACE_IGNORES } from "../file-helpers.js";
 import { json, matchRoute, readBody } from "../http-helpers.js";
 import type {
@@ -172,6 +174,15 @@ function prependImagePathsHint(prompt: string, imagePaths: string[]): string {
 		`[用户本轮上传了 ${imagePaths.length} 张图片，已保存到工作区：\n${list}\n` +
 		`如果需要识别图片中的文字（当前模型可能不支持图片识别），请调用 ocr_image 工具并传入上述路径。]\n\n${prompt}`
 	);
+}
+
+function recordAgentCommandIfPresent(dataDir: string, sessionId: string, prompt: string): void {
+	const expandedContent = expandInnoSlashCommand(prompt);
+	if (!expandedContent) return;
+	recordSessionAgentCommand(dataDir, sessionId, {
+		commandContent: prompt,
+		expandedContent,
+	});
 }
 
 function readSessionBaseline(
@@ -368,6 +379,7 @@ export async function handleChatRoutes(
 		// model or provider rejection); vision turns get the raw prompt so
 		// they aren't steered toward ocr_image.
 		const imageFallbackPrompt = prependImagePathsHint(prompt, imagePaths);
+		recordAgentCommandIfPresent(dataDir, imageSessionId, prompt);
 		// Structured attachments: validate every referenced path against the
 		// target workspace and prepare the model-visible context block. The
 		// persisted prompt text stays untouched (pi-runner appends the block
@@ -595,6 +607,7 @@ export async function handleChatRoutes(
 		}
 		// Accepted — record sidecar metadata for the session-detail merge. Even
 		// if this turn later fails, an unmatched entry is inert.
+		recordAgentCommandIfPresent(dataDir, requestedSessionId, prompt);
 		if (streamAttachments) {
 			recordSessionAttachments(dataDir, requestedSessionId, {
 				promptContent: prompt,

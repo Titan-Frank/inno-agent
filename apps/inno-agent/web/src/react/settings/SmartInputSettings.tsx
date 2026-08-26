@@ -452,6 +452,11 @@ export function SmartInputSettings() {
 							description={t("settings.smartInput.allowRightClickDesc", "附件右键「插入为气泡」")}
 							control={<Switch checked={draft.allowRightClick} disabled={masterDisabled || state.isSaving} onChange={(value) => patchConfig({ allowRightClick: value })} />}
 						/>
+						<SettingsRow
+							label={t("settings.smartInput.allowAgentCommands", "允许 Agent 命令转气泡")}
+							description={t("settings.smartInput.allowAgentCommandsDesc", "输入“技能”或 skill 可选择技能；从 / Agent 命令中选择后生成命令气泡")}
+							control={<Switch checked={draft.allowAgentCommands} disabled={masterDisabled || state.isSaving} onChange={(value) => patchConfig({ allowAgentCommands: value })} />}
+						/>
 					</div>
 				</div>
 			</SettingsCard>

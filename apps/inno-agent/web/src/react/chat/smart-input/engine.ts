@@ -1,9 +1,12 @@
 import type { SmartInputRule } from "../../../types/settings.js";
 import type { AttachmentBinding } from "../../../types/chat.js";
+import type { SlashCommandItem } from "../../../api/commands.js";
 import { KIND_COLORS, activeRules, kindFromName, kindFromRule, nameMatchesRule, sameRuleFormat } from "./kinds.js";
 import {
 	analyzeKeywords,
+	agentRule,
 	buildOutgoing as buildOutgoingPure,
+	normalizeAgentCommand,
 	slotChar,
 	TOKEN_RE,
 	tokenRegexFor,
@@ -59,12 +62,18 @@ export interface Slot {
 	word: string;
 	rule: SmartInputRule;
 	files: BoundFile[];
+	/** File bubbles are the legacy/default kind; Agent bubbles carry commands. */
+	bubbleType?: "file" | "agent";
+	/** Command without the leading slash, e.g. `recall` or `skill:lesson-plan`. */
+	agentCommand?: string;
 	/** Last badge count — only re-pop when the number changes. */
 	_bc?: number;
 	/** Spawned this sync — play the materialize animation once. */
 	_spawn?: boolean;
 	/** Measured token width from buildToken — avoids a DOM probe per render. */
 	_w?: number;
+	/** `insertAgentCommandAsBubble` added a command-argument separator space. */
+	_agentSpacer?: boolean;
 }
 
 export interface EngineAttachmentItem {
@@ -84,6 +93,8 @@ export interface EngineCallbacks {
 	onSlotsSnapshot: (snapshot: EngineSnapshot) => void;
 	onOpenStatusPanel: (slot: Slot, anchor: HTMLElement) => void;
 	onOpenFillMenu: (slot: Slot, anchor: HTMLElement) => void;
+	onOpenAgentPicker?: (keyword: KwRange, anchor: HTMLElement) => void;
+	onAgentBubbleClick?: (slot: Slot, anchor: HTMLElement) => void;
 	onBubbleContextMenu: (event: MouseEvent, slot: Slot, anchor: HTMLElement) => void;
 	onBubbleClose?: (slot: Slot, anchor: HTMLElement) => void;
 	/** Filled-chip hover — drives the 250ms hover-open of the status panel. */
@@ -92,7 +103,7 @@ export interface EngineCallbacks {
 }
 
 export interface EngineData {
-	getSettings: () => { enabled: boolean; allowDrag: boolean; allowRightClick: boolean };
+	getSettings: () => { enabled: boolean; allowDrag: boolean; allowRightClick: boolean; allowAgentCommands: boolean };
 	getRules: () => SmartInputRule[];
 	takeAttachment: (path: string) => EngineAttachmentItem | undefined;
 	returnAttachment: (item: EngineAttachmentItem) => void;
@@ -107,6 +118,8 @@ export interface SmartInputEngineOptions {
 	mirror: HTMLElement;
 	hitLayer: HTMLElement;
 	labels: () => EngineLabels;
+	/** Localized human-readable label for a command bubble. */
+	agentCommandLabel?: (command: string) => string;
 	data: EngineData;
 	callbacks: EngineCallbacks;
 }
@@ -375,7 +388,9 @@ export class SmartInputEngine {
 	}
 
 	private parseClipboardPayload(raw: string): SmartBubbleClipboardPayload | null {
-		return parseClipboardPayload(raw, (rule, word) => this.clipboardRule(rule, word));
+		return parseClipboardPayload(raw, (rule, word) => this.clipboardRule(rule, word), {
+			allowAgentBubbles: this.opts.data.getSettings().allowAgentCommands,
+		});
 	}
 
 	private clipboardRule(raw: unknown, word: string): SmartInputRule {
@@ -415,7 +430,15 @@ export class SmartInputEngine {
 		let cursor = 0;
 		for (const bubble of payload.bubbles) {
 			inserted += payload.text.slice(cursor, bubble.start);
-			const slot: Slot = { id: this.nextSlotId++, word: bubble.word, rule: bubble.rule, files: [] };
+			const slot: Slot = {
+				id: this.nextSlotId++,
+				word: bubble.word,
+				rule: bubble.rule,
+				files: [],
+				...(bubble.bubbleType === "agent"
+					? { bubbleType: "agent" as const, agentCommand: bubble.agentCommand }
+					: {}),
+			};
 			for (const file of bubble.files) {
 				const isWorkspace = file.source === "workspace";
 				const localFile = !isWorkspace && file.cacheKey ? cachedFiles?.get(file.cacheKey) : undefined;
@@ -513,6 +536,10 @@ export class SmartInputEngine {
 
 	private activeRules(): SmartInputRule[] {
 		return activeRules(this.opts.data.getRules());
+	}
+
+	private agentKeywords(): string[] {
+		return this.opts.data.getSettings().allowAgentCommands ? ["技能", "skill"] : [];
 	}
 
 	/**
@@ -633,7 +660,7 @@ export class SmartInputEngine {
 			return;
 		}
 
-		const { kws, slots } = analyzeKeywords(value, this.activeRules(), alive);
+		const { kws, slots } = analyzeKeywords(value, this.activeRules(), alive, this.agentKeywords());
 		this.renderedKeywords = kws;
 		this.renderedSlots = slots;
 		this.renderMirror(value, kws, slots);
@@ -763,7 +790,11 @@ export class SmartInputEngine {
 		// NBSPs are internal caret padding only. TOKEN_RE deliberately excludes
 		// ordinary spaces, so a user-entered space after the bubble stays outside
 		// the token and cannot stretch it.
-		const chipWidth = Math.max(36, this.probeWidth(slot.word, true));
+		const chipText = slot.bubbleType === "agent" ? this.agentDisplayName(slot) : slot.word;
+		// Agent chips also contain a small command icon. Reserve its width so the
+		// human-readable skill/command label is never clipped by the token span.
+		const iconWidth = slot.bubbleType === "agent" ? 16 : 0;
+		const chipWidth = Math.max(36, this.probeWidth(chipText, true) + iconWidth);
 		const targetWidth = chipWidth + BUBBLE_SEAM_PX * 2;
 		const coreWidth = this.probeWidth(core, false);
 		const spaceWidth = this.probeWidth("\u00A0", false) || 4.6;
@@ -791,17 +822,32 @@ export class SmartInputEngine {
 			for (const current of currentSpans()) current.classList.toggle("is-hot", hot);
 		};
 		button.type = "button";
-		button.className = "inno-smart-kw-hit";
+		button.className = `inno-smart-kw-hit${kw.kind === "agent" ? " is-agent" : ""}`;
+		button.dataset.smartKwStart = String(kw.start);
+		button.dataset.smartKwEnd = String(kw.end);
 		const spanRect = span.getBoundingClientRect();
 		button.style.left = `${span.offsetLeft}px`;
 		button.style.top = `${span.offsetTop}px`;
 		button.style.width = `${spanRect.width}px`;
 		button.style.height = `${spanRect.height}px`;
-		button.title = this.opts.labels().kwHitTitle;
-		button.addEventListener("click", () => this.toBubble(kw));
+		button.title = kw.kind === "agent"
+			? (this.opts.labels().agentKwHitTitle ?? this.opts.labels().kwHitTitle)
+			: this.opts.labels().kwHitTitle;
 		button.addEventListener("mouseenter", () => setHot(true));
 		button.addEventListener("mouseleave", () => setHot(false));
-
+		if (kw.kind === "agent") {
+			button.addEventListener("click", () => this.opts.callbacks.onOpenAgentPicker?.(kw, button));
+			return button;
+		}
+		button.addEventListener("click", () => {
+			const slot = this.toBubble(kw);
+			if (!slot) return;
+			// `toBubble` synchronously rebuilds the hit layer, so the original
+			// keyword button is detached by the time the conversion completes.
+			// Anchor the workspace-file picker to the newly-created live bubble.
+			const chip = this.hit.querySelector<HTMLElement>(`.inno-smart-chip[data-slot-id="${slot.id}"]`);
+			if (chip) this.opts.callbacks.onOpenFillMenu(slot, chip);
+		});
 		// Drag-dwell: hover 1s while dragging a compatible file → auto-convert
 		// and bind the in-hand file.
 		let dwellTimer: number | null = null;
@@ -1082,7 +1128,10 @@ export class SmartInputEngine {
 	}
 
 	private canMergeSlots(source: Slot, target: Slot): boolean {
-		return source.id !== target.id && sameRuleFormat(source.rule, target.rule);
+		return source.id !== target.id
+			&& (source.bubbleType ?? "file") === "file"
+			&& (target.bubbleType ?? "file") === "file"
+			&& sameRuleFormat(source.rule, target.rule);
 	}
 
 	private ruleAccepts(rule: SmartInputRule, name: string): boolean {
@@ -1382,8 +1431,11 @@ export class SmartInputEngine {
 
 	private makeSlotChip(span: HTMLElement, slot: Slot, selected: boolean): HTMLElement {
 		const chip = document.createElement("div");
+		const isAgent = slot.bubbleType === "agent";
+		const displayWord = isAgent ? this.agentDisplayName(slot) : slot.word;
+		const agentHint = isAgent ? this.agentBubbleHint(slot.agentCommand ?? slot.word) : "";
 		const count = slot.files.length;
-		chip.className = `inno-smart-chip ${count ? "is-filled" : "is-empty"}`;
+		chip.className = `inno-smart-chip ${isAgent ? "is-agent is-filled inno-smart-agent-surface" : count ? "is-filled" : "is-empty"}`;
 		if (selected) chip.classList.add("is-selected");
 		if (slot._spawn) {
 			chip.classList.add("is-spawn");
@@ -1399,7 +1451,7 @@ export class SmartInputEngine {
 		}
 		const mergeLabel = this.opts.labels().mergeBubbleHint;
 		if (mergeLabel) chip.dataset.mergeLabel = mergeLabel;
-		chip.style.setProperty("--smart-bc", KIND_COLORS[this.kindOfRule(slot.rule)]);
+		chip.style.setProperty("--smart-bc", isAgent ? "#8b5cf6" : KIND_COLORS[this.kindOfRule(slot.rule)]);
 		// The token span reserves the exact inline width. The visible chip follows
 		// that span on every sync, so its position always comes from text layout.
 		const spanRect = span.getBoundingClientRect();
@@ -1407,7 +1459,15 @@ export class SmartInputEngine {
 		chip.style.left = `${span.offsetLeft + BUBBLE_SEAM_PX}px`;
 		chip.style.top = `${span.offsetTop + (span.offsetHeight - 20) / 2}px`;
 		chip.style.width = `${bubbleWidth}px`;
-		chip.innerHTML = `<span class="inno-smart-chip-word">${this.escape(slot.word)}</span>`;
+		chip.innerHTML = isAgent
+			? `${this.agentIconMarkup(slot.agentCommand ?? slot.word)}<span class="inno-smart-chip-word">${this.escape(displayWord)}</span>`
+			: `<span class="inno-smart-chip-word">${this.escape(slot.word)}</span>`;
+		if (isAgent) {
+			if (agentHint) {
+				chip.title = agentHint;
+			}
+			chip.setAttribute("aria-label", agentHint ? `${displayWord}：${agentHint}` : displayWord);
+		}
 
 		// Pointer dragging chooses a new caret position in the mirror. The token
 		// is moved in the textarea value, then the normal mirror layout rebuilds it.
@@ -1429,6 +1489,19 @@ export class SmartInputEngine {
 			this.removeSlot(slot);
 		});
 		chip.appendChild(remove);
+		chip.addEventListener("contextmenu", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
+		});
+
+		if (isAgent) {
+			chip.addEventListener("click", (event) => {
+				if (this.consumeSuppressedBubbleClick(slot.id, event)) return;
+				this.opts.callbacks.onAgentBubbleClick?.(slot, chip);
+			});
+			return chip;
+		}
 
 		if (count > 0) {
 			const badge = document.createElement("span");
@@ -1453,12 +1526,6 @@ export class SmartInputEngine {
 				this.opts.callbacks.onOpenFillMenu(slot, chip);
 			});
 		}
-		chip.addEventListener("contextmenu", (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			this.opts.callbacks.onBubbleContextMenu(event, slot, chip);
-		});
-
 		// Drop-to-bind (+drop-ok/drop-bad feedback).
 		let dropOkTimer: number | null = null;
 		const clearDropHint = () => {
@@ -1535,8 +1602,119 @@ export class SmartInputEngine {
 
 	// ── slot operations ─────────────────────────────────────────────────────
 
+	private agentDisplayName(slot: Slot): string {
+		const command = normalizeAgentCommand(slot.agentCommand ?? slot.word);
+		const localized = this.opts.agentCommandLabel?.(command)?.trim();
+		if (localized) return localized.replace(/^\/+/, "");
+		return command.startsWith("skill:") ? command.slice("skill:".length) : command;
+	}
+
+	private agentBubbleHint(commandValue: string): string {
+		const command = normalizeAgentCommand(commandValue);
+		const labels = this.opts.labels();
+		if (command === "recall") return labels.agentCommandRecallHint ?? "";
+		if (command === "remember") return labels.agentCommandRememberHint ?? "";
+		if (command === "wiki") return labels.agentCommandWikiHint ?? "";
+		return "";
+	}
+
+	private agentIconMarkup(commandValue: string): string {
+		const command = normalizeAgentCommand(commandValue);
+		const paths = command.startsWith("skill:")
+			? '<path d="m13 2-10 12h9l-1 8 10-12h-9z" />'
+			: command === "recall"
+				? '<path d="M3 12a9 9 0 1 0 3-7.7" /><path d="M3 4v5h5" />'
+				: command === "remember"
+					? '<path d="M6 3h12v18l-6-3-6 3V5a2 2 0 0 1 2-2Z" /><path d="M12 8v6M9 11h6" />'
+					: command === "wiki"
+						? '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />'
+						: '<circle cx="12" cy="12" r="8" />';
+		return `<svg class="inno-smart-agent-mark" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+	}
+
+	private createAgentSlot(command: SlashCommandItem | string): Slot {
+		const agentCommand = normalizeAgentCommand(command);
+		return {
+			id: this.nextSlotId++,
+			word: `/${agentCommand}`,
+			rule: agentRule(agentCommand),
+			files: [],
+			bubbleType: "agent",
+			agentCommand,
+		};
+	}
+
+	/** Convert a `技能`/`skill` keyword after the user picks a live skill. */
+	convertAgentKeywordToBubble(kw: KwRange, command: SlashCommandItem | string): Slot | null {
+		if (kw.kind !== "agent" || !this.opts.data.getSettings().allowAgentCommands) return null;
+		const previousScrollTop = this.ta.scrollTop;
+		if (this.ta.value.slice(kw.start, kw.end) !== kw.word) return null;
+		const slot = this.createAgentSlot(command);
+		slot._agentSpacer = false;
+		this.slots.push(slot);
+		const { token } = this.buildToken(slot);
+		this.ta.value = this.ta.value.slice(0, kw.start) + token + this.ta.value.slice(kw.end);
+		this.ta.setSelectionRange(kw.start + token.length, kw.start + token.length);
+		this.ta.focus({ preventScroll: true });
+		this.sync();
+		this.restoreScrollTop(previousScrollTop);
+		return slot;
+	}
+
+	/** Replace the current slash-palette draft with one Agent command bubble. */
+	insertAgentCommandAsBubble(command: SlashCommandItem | string, start = 0, end = this.ta.value.length): Slot | null {
+		if (!this.opts.data.getSettings().enabled || !this.opts.data.getSettings().allowAgentCommands) return null;
+		const value = this.ta.value;
+		const boundedStart = Math.max(0, Math.min(value.length, start));
+		const boundedEnd = Math.max(boundedStart, Math.min(value.length, end));
+		const suffixSpace = boundedEnd === value.length && !value.endsWith(" ") ? " " : "";
+		const slot = this.createAgentSlot(command);
+		slot._agentSpacer = suffixSpace.length > 0;
+		this.slots.push(slot);
+		const { token } = this.buildToken(slot);
+		const inserted = token + suffixSpace;
+		this.ta.value = value.slice(0, boundedStart) + inserted + value.slice(boundedEnd);
+		const caret = boundedStart + inserted.length;
+		this.ta.focus({ preventScroll: true });
+		this.ta.setSelectionRange(caret, caret);
+		this.sync();
+		return slot;
+	}
+
+	/** Replace an existing skill bubble while keeping its atomic slot identity. */
+	replaceAgentBubbleCommand(slotOrId: Slot | number, command: SlashCommandItem | string): Slot | null {
+		if (!this.opts.data.getSettings().enabled || !this.opts.data.getSettings().allowAgentCommands) return null;
+		const slot = typeof slotOrId === "number"
+			? this.slots.find((entry) => entry.id === slotOrId)
+			: slotOrId;
+		if (!slot || slot.bubbleType !== "agent") return null;
+		const agentCommand = normalizeAgentCommand(command);
+		if (!agentCommand) return null;
+		const match = tokenRegexFor(slot.id).exec(this.ta.value);
+		if (!match) return null;
+		const start = match.index;
+		const oldEnd = start + match[0].length;
+		const value = this.ta.value;
+		const selectionStart = this.ta.selectionStart ?? oldEnd;
+		const selectionEnd = this.ta.selectionEnd ?? selectionStart;
+		slot.agentCommand = agentCommand;
+		slot.word = `/${agentCommand}`;
+		slot.rule = agentRule(agentCommand);
+		const { token } = this.buildToken(slot);
+		this.ta.value = value.slice(0, start) + token + value.slice(oldEnd);
+		const mapPosition = (position: number): number => {
+			if (position <= start) return position;
+			if (position >= oldEnd) return position - (oldEnd - start) + token.length;
+			return start + token.length;
+		};
+		this.ta.focus({ preventScroll: true });
+		this.ta.setSelectionRange(mapPosition(selectionStart), mapPosition(selectionEnd));
+		this.sync();
+		return slot;
+	}
+
 	toBubble(kw: KwRange): Slot | null {
-		if (!this.opts.data.getSettings().enabled) return null;
+		if (!this.opts.data.getSettings().enabled || kw.kind === "agent") return null;
 		const previousScrollTop = this.ta.scrollTop;
 		const slot: Slot = { id: this.nextSlotId++, word: kw.word, rule: kw.rule, files: [] };
 		this.slots.push(slot);
@@ -1556,13 +1734,18 @@ export class SmartInputEngine {
 		if (match) {
 			const start = match.index;
 			const end = start + match[0].length;
-			const nextValue = value.slice(0, start) + slot.word + value.slice(end);
+			// Agent command bubbles are disposable command tokens. Unlike file
+			// keyword bubbles, deleting one must not restore `技能`, `skill`, or
+			// the original slash command text.
+			const replacement = slot.bubbleType === "agent" ? "" : slot.word;
+			const removalEnd = slot.bubbleType === "agent" && slot._agentSpacer && value[end] === " " ? end + 1 : end;
+			const nextValue = value.slice(0, start) + replacement + value.slice(removalEnd);
 			const mapPosition = (position: number): number => {
 				if (position <= start) return position;
-				if (position >= end) return position - (end - start) + slot.word.length;
-				return start + slot.word.length;
+				if (position >= removalEnd) return position - (removalEnd - start) + replacement.length;
+				return start + replacement.length;
 			};
-			const selectionStart = this.ta.selectionStart ?? end;
+			const selectionStart = this.ta.selectionStart ?? removalEnd;
 			const selectionEnd = this.ta.selectionEnd ?? selectionStart;
 			this.ta.value = nextValue;
 			this.ta.focus();
@@ -1664,7 +1847,6 @@ export class SmartInputEngine {
 		this.bindFileToSlot(slot, { name, path, source: "workspace" });
 	}
 
-	/** Bind a staged OS file that is not in the attachment row. */
 	/**
 	 * Bind every file from one native drop. Files that do not match the bubble
 	 * rule stay visible in the loose attachment row so a mixed-format drop never
@@ -1913,7 +2095,12 @@ export class SmartInputEngine {
 		document.body.classList.add("inno-smart-dragging");
 		for (const chip of Array.from(this.hit.querySelectorAll<HTMLElement>(".inno-smart-chip"))) {
 			const slot = this.slots.find((entry) => entry.id === Number(chip.dataset.slotId));
-			if (slot && files.some((file) => this.ruleAccepts(slot.rule, file.name))) chip.classList.add("is-drag-match");
+			// Agent bubbles are command selectors, not file-drop targets. Their
+			// synthetic all-format rule would otherwise make them look like a
+			// matching file bubble and trigger the drag breathing animation.
+			if (slot?.bubbleType !== "agent" && slot && files.some((file) => this.ruleAccepts(slot.rule, file.name))) {
+				chip.classList.add("is-drag-match");
+			}
 		}
 	}
 

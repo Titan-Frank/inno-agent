@@ -150,6 +150,15 @@ export function App() {
 		appStore.setWorkspaceMode("half");
 	}, [ensureWindowForPanel]);
 
+	const openRightPanel = useCallback(async (tab: Exclude<RightPanelTab, "preview">) => {
+		if (appStore.workspaceMode === "collapsed") {
+			const result = await ensureWindowForPanel("right", appStore.workspaceWidth, "quarter");
+			if (result === "busy") return;
+		}
+		appStore.setRightPanelTab(tab);
+		if (appStore.workspaceMode === "collapsed") appStore.setWorkspaceMode("quarter");
+	}, [ensureWindowForPanel]);
+
 	const openSidebar = useCallback(() => {
 		void (async () => {
 			const result = await ensureWindowForPanel("left");
@@ -183,7 +192,7 @@ export function App() {
 				style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
 			>
 				<SessionSidebar collapsed={app.sidebarCollapsed} onOpen={openSidebar} />
-				<ChatCenter onOpenPresetPanels={openPresetPanels} onPreviewFile={openFilePreview} />
+				<ChatCenter onOpenPresetPanels={openPresetPanels} onOpenRightPanel={openRightPanel} onPreviewFile={openFilePreview} />
 				<WorkspacePanel
 					activeTab={app.rightPanelTab}
 					mode={app.workspaceMode}

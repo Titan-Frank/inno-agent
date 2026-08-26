@@ -49,6 +49,19 @@ describe("analyzeKeywords", () => {
 		const disabled = { ...rule("pdf"), enabled: false };
 		expect(analyzeKeywords("看pdf", [disabled], new Set()).kws).toHaveLength(0);
 	});
+
+	it("marks 技能 and skill as Agent picker keywords without nesting slash commands", () => {
+		const { kws } = analyzeKeywords(
+			"/skill:existing 技能 skill",
+			[rule("pdf")],
+			new Set(),
+			["技能", "skill"],
+		);
+		expect(kws.map((hit) => ({ word: hit.word, kind: hit.kind }))).toEqual([
+			{ word: "技能", kind: "agent" },
+			{ word: "skill", kind: "agent" },
+		]);
+	});
 });
 
 describe("buildOutgoing", () => {
