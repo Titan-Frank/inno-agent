@@ -50,7 +50,7 @@ All commands are run from the repo root and use `npm --workspace` under the hood
 npm run build
 
 # Build frontend only
-npm run web:build
+npm --workspace inno-agent-web run build
 
 # Start HTTP server (serves API + web/dist on port 3000)
 npm run server -- --home ./runtime --workspace ./workspace --port 3000
