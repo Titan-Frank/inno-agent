@@ -10,6 +10,10 @@ export interface SessionMessageSummary {
 	role: "user" | "assistant";
 	content: string;
 	timestamp: number;
+	/** PI session-tree entry backing this visible message. User entry IDs let
+	 * the Web UI branch immediately before a question when it is edited. */
+	entryId?: string;
+	parentEntryId?: string | null;
 	thinking?: string;
 	tools?: Array<{
 		toolCallId: string;
@@ -50,4 +54,28 @@ export type SessionQuestionMetadata = Record<string, PersistedQuestion>;
 
 export function mergeChannels(a: SessionChannel[], b: SessionChannel[]): SessionChannel[] {
 	return Array.from(new Set([...a, ...b])).sort();
+}
+
+/**
+ * Select the currently active path from PI's append-only session tree.
+ *
+ * Branching never deletes abandoned entries: a replacement turn is appended
+ * later with its parent pointing to the entry before the edited question. The
+ * newest entry is the persisted leaf, so walking its parent chain gives the
+ * only history that should be rendered and sent back to the learner.
+ */
+export function selectActiveSessionEntries(entries: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+	const treeEntries = entries.filter((entry) => entry.type !== "session" && typeof entry.id === "string");
+	const leaf = treeEntries.at(-1);
+	if (!leaf) return entries;
+
+	const byId = new Map(treeEntries.map((entry) => [entry.id as string, entry]));
+	const activeIds = new Set<string>();
+	let current: Record<string, unknown> | undefined = leaf;
+	while (current && typeof current.id === "string" && !activeIds.has(current.id)) {
+		activeIds.add(current.id);
+		current = typeof current.parentId === "string" ? byId.get(current.parentId) : undefined;
+	}
+
+	return entries.filter((entry) => entry.type === "session" || (typeof entry.id === "string" && activeIds.has(entry.id)));
 }

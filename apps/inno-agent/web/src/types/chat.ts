@@ -2,6 +2,10 @@ export interface ChatMessage {
 	role: "user" | "assistant";
 	content: string;
 	timestamp: number;
+	/** PI session-tree entry backing a persisted message. Used to branch the
+	 * active conversation immediately before an edited user turn. */
+	entryId?: string;
+	parentEntryId?: string | null;
 	thinking?: string;
 	tools?: ChatToolRecord[];
 	channel?: string;

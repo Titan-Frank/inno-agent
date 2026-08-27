@@ -3,8 +3,10 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
 	applyWorkspaceCwd,
+	branchSessionBeforeUserMessage,
 	createNewSession,
 	getCurrentSessionId,
+	SessionEditError,
 	switchSessionFile,
 } from "../../agent/pi-runner.js";
 import { streamRegistry } from "../../chat/stream-registry.js";
@@ -429,6 +431,60 @@ export async function handleSessionsRoutes(
 			readSessionTopicMetadata(),
 		);
 		json(res, 200, summary);
+		return true;
+	}
+
+	const branchBeforeMessageMatch = matchRoute("POST", method, url, "/api/sessions/:id/branch-before-message");
+	if (branchBeforeMessageMatch) {
+		const sessionPath = sessionFileFromId(join(dataDir, "sessions"), decodeURIComponent(branchBeforeMessageMatch.id));
+		if (!sessionPath || !existsSync(sessionPath)) {
+			json(res, 404, { error: "Session not found" });
+			return true;
+		}
+		const sessionId = basename(sessionPath);
+		if (streamRegistry.getActiveForSession(sessionId)) {
+			json(res, 409, { error: "Cannot edit a message while the session is generating" });
+			return true;
+		}
+		const body = await readBody(req) as Record<string, unknown>;
+		const entryId = typeof body.entryId === "string" ? body.entryId.trim() : "";
+		if (!entryId) {
+			json(res, 400, { error: "Missing message entryId" });
+			return true;
+		}
+		const parsed = parseSessionFile(sessionPath);
+		if (!parsed?.messages.some((message) => message.role === "user" && message.entryId === entryId)) {
+			json(res, 404, { error: "Message entry not found", code: "entry_not_found" });
+			return true;
+		}
+
+		// An abandoned branch may own a restored question card. Release it before
+		// queueing the branch operation. Its persisted UI metadata is removed only
+		// after the session branch succeeds.
+		releaseQueueFromQuestionBlockedTurn(sessionId);
+
+		try {
+			const branched = await runQueueOpWithTimeout(
+				req,
+				res,
+				(signal) => branchSessionBeforeUserMessage(sessionPath, entryId, { signal }),
+			);
+			if (branched === null) return true;
+			const questions = readSessionQuestionMetadata();
+			if (questions[sessionId]) {
+				const nextQuestions = { ...questions };
+				delete nextQuestions[sessionId];
+				writeSessionQuestionMetadata(nextQuestions);
+			}
+			json(res, 200, { sessionId, ...branched, sessionRevision: sessionRevision(sessionPath) });
+		} catch (err) {
+			if (err instanceof SessionEditError) {
+				const status = err.code === "entry_not_found" ? 404 : 409;
+				json(res, status, { error: err.message, code: err.code });
+				return true;
+			}
+			throw err;
+		}
 		return true;
 	}
 

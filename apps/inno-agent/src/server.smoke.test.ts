@@ -66,7 +66,7 @@ beforeAll(async () => {
 	port = await getFreePort();
 	child = spawn(
 		process.execPath,
-		["--import", "tsx", SERVER_ENTRY, "--home", home, "--workspace", workspace, "--port", String(port)],
+		["--import", "tsx", SERVER_ENTRY, "--home", home, "--data-dir", join(home, "data"), "--workspace", workspace, "--port", String(port)],
 		{ cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
 	);
 	child.stdout?.on("data", (chunk) => (childLog += chunk));
@@ -145,6 +145,48 @@ describe("server smoke", () => {
 		const res = await api("/api/sessions/no-such-session.jsonl");
 		expect(res.status).toBe(404);
 	});
+
+	it("editing a user message branches before it and hides the abandoned replies", async () => {
+		const sessionId = "edit-branch-smoke.jsonl";
+		const sessionDir = join(home, "data", "sessions");
+		mkdirSync(sessionDir, { recursive: true });
+		const timestamp = new Date().toISOString();
+		const assistant = (text: string) => ({
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "openai-completions",
+			provider: "dummy",
+			model: "dummy-model",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		const entries = [
+			{ type: "session", version: 3, id: "edit-branch-smoke", timestamp, cwd: workspace },
+			{ type: "message", id: "setup-user", parentId: null, timestamp, message: { role: "user", content: [{ type: "text", text: "Test my arithmetic" }], timestamp: Date.now() } },
+			{ type: "message", id: "arithmetic-question", parentId: "setup-user", timestamp, message: assistant("36 / (9 - 3) * 2 = ?") },
+			{ type: "message", id: "answer-12", parentId: "arithmetic-question", timestamp, message: { role: "user", content: [{ type: "text", text: "12" }], timestamp: Date.now() } },
+			{ type: "message", id: "choice-question", parentId: "answer-12", timestamp, message: assistant("Correct. Which option is an equation?") },
+		];
+		writeFileSync(join(sessionDir, sessionId), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf-8");
+
+		const branched = await fetch(`http://127.0.0.1:${port}/api/sessions/${sessionId}/branch-before-message`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ entryId: "answer-12" }),
+		});
+		const branchedBody = await branched.json() as { error?: string };
+		expect(branched.status, branchedBody.error).toBe(200);
+
+		const detail = await api(`/api/sessions/${sessionId}`);
+		expect(detail.status).toBe(200);
+		const body = (await detail.json()) as { messages: Array<{ role: string; content: string; entryId?: string }> };
+		expect(body.messages.map((message) => message.content)).toEqual([
+			"Test my arithmetic",
+			"36 / (9 - 3) * 2 = ?",
+		]);
+		expect(body.messages.some((message) => message.entryId === "answer-12")).toBe(false);
+	}, 60_000);
 
 	it("POST /api/sessions/:id/archive + unarchive round-trips", async () => {
 		const archive = await fetch(`http://127.0.0.1:${port}/api/sessions/some-session.jsonl/archive`, { method: "POST" });

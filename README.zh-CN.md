@@ -43,6 +43,7 @@ Inno Agent 是服务于单个学习者的长期学习伙伴。它把长期学习
 - 🧪 **练习实验室**——工作区级 Web 终端(xterm.js over WebSocket),运行记录可被 agent 读取。
 - 🎯 **简单模式 + 预设**——面向非技术用户的一键预设工作区(教案、PPT 制作、情景讲解)。
 - 🧩 **技能系统 + 内容中心**——从远程 hub(GitHub 仓库或自建 bundle 服务)浏览、导入技能与预设。
+- ✏️ **对话分支编辑**——重新编辑已发送的纯文本 Web 消息，并从该节点重新生成后续对话；旧分支不会进入当前模型上下文。
 - 🔌 **可插拔模型供应商**——任意 `openai-completions` 或 `anthropic-messages` 端点(Anthropic、OpenAI、DeepSeek、Ollama、本地模型),UI 内实时切换。
 - 🌍 **国际化与主题**——中/英文界面,四套主题。
 - 🛡️ **可选系统级沙箱**——通过 [pi-sandbox](https://github.com/carderne/pi-sandbox) 管控 bash/文件操作;可选 `pi-subagents` 子代理。

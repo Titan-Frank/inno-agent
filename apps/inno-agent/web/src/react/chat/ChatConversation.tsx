@@ -36,6 +36,7 @@ interface ChatConversationProps {
 	composer: ReactNode;
 	onOpenAttachment: (file: AttachmentRef) => void;
 	onOpenSkill: (skillName: string) => void;
+	onEditMessage: (message: ChatMessage) => void;
 	wsError: string;
 }
 
@@ -52,6 +53,7 @@ export function ChatConversation({
 	composer,
 	onOpenAttachment,
 	onOpenSkill,
+	onEditMessage,
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
@@ -110,6 +112,7 @@ export function ChatConversation({
 											resolveAttachmentUrl={resolveAttachmentUrl}
 											onOpenAttachment={onOpenAttachment}
 											onOpenSkill={onOpenSkill}
+											onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
 										/>
 									</div>
 								);

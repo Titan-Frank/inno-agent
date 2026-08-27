@@ -91,6 +91,15 @@ export class QueueTaskCancelledError extends Error {
 	}
 }
 
+export type SessionEditErrorCode = "entry_not_found" | "not_user_message" | "not_active_branch";
+
+export class SessionEditError extends Error {
+	constructor(public readonly code: SessionEditErrorCode, message: string) {
+		super(message);
+		this.name = "SessionEditError";
+	}
+}
+
 export function isQueueTaskCancelled(err: unknown): boolean {
 	return err instanceof QueueTaskCancelledError;
 }
@@ -1077,6 +1086,42 @@ export async function switchSessionFile(sessionPath: string, opts?: { signal?: A
 	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
 	await enqueue(async () => {
 		await switchToSession(sessionPath);
+	}, opts);
+}
+
+/**
+ * Move a persisted session to the entry immediately before a user message.
+ * PI sessions are append-only trees, so the abandoned answer remains available
+ * in the JSONL audit trail but leaves the active branch and model context. A
+ * custom marker persists the new leaf before the replacement prompt arrives.
+ */
+export async function branchSessionBeforeUserMessage(
+	sessionPath: string,
+	entryId: string,
+	opts?: { signal?: AbortSignal },
+): Promise<{ replacedEntryId: string; branchMarkerId: string }> {
+	if (!_runtime) throw new Error("Session not initialized. Call initSession() first.");
+	return enqueue(async () => {
+		await switchToSession(sessionPath);
+		const session = getSession();
+		const manager = session.sessionManager;
+		const entry = manager.getEntry(entryId);
+		if (!entry) throw new SessionEditError("entry_not_found", "Message entry not found");
+		if (entry.type !== "message" || entry.message.role !== "user") {
+			throw new SessionEditError("not_user_message", "Only user messages can be edited");
+		}
+		if (!manager.getBranch().some((candidate) => candidate.id === entryId)) {
+			throw new SessionEditError("not_active_branch", "Message is not on the active conversation branch");
+		}
+
+		if (entry.parentId) manager.branch(entry.parentId);
+		else manager.resetLeaf();
+		const branchMarkerId = manager.appendCustomEntry("inno_edit_branch", {
+			replacedEntryId: entryId,
+			editedAt: new Date().toISOString(),
+		});
+		session.agent.state.messages = manager.buildSessionContext().messages;
+		return { replacedEntryId: entryId, branchMarkerId };
 	}, opts);
 }
 

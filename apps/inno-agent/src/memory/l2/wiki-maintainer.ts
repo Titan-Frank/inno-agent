@@ -360,7 +360,7 @@ export function getSourcePagePath(entry: Pick<ManifestEntry, "title" | "id">, so
 	const filename = sourceIdentity
 		? `${sourceSummarySlugFromIdentity(sourceIdentity)}.md`
 		: sourcePageFilename(entry.title, entry.id);
-	return join("wiki", "sources", filename);
+	return wikiPathJoin("wiki", "sources", filename);
 }
 
 /**

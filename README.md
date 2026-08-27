@@ -53,6 +53,7 @@ These constraints keep the memory layers, scheduler, and channels simple enough 
 - 🧪 **Practice Lab** — workspace-scoped web terminal (xterm.js over WebSocket) with run records the agent can read.
 - 🎯 **Simple Mode + presets** — one-click preset workspaces (lesson plan, PPT creation, scenario explain) for non-technical users.
 - 🧩 **Skill system + content hub** — browse and import skills/presets from a remote hub (GitHub repo or self-hosted bundle service).
+- ✏️ **Conversation branch editing** — edit a previously sent plain-text Web message and regenerate from that point without keeping the abandoned branch in the active model context.
 - 🔌 **Pluggable providers** — any `openai-completions` or `anthropic-messages` endpoint (Anthropic, OpenAI, DeepSeek, Ollama, local models); switch models live in the UI.
 - 🌍 **i18n & themes** — Chinese/English UI, four themes.
 - 🎬 **Session replay showcase** — export any real session (button or CLI) and replay it in a standalone site built from the real product UI, with streaming messages, workspace/notebook/profile panels, and generated artifacts.

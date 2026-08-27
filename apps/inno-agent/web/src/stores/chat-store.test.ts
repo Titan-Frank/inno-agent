@@ -361,6 +361,45 @@ describe("ChatStore stream ownership", () => {
 		await sending;
 	});
 
+	it("falls back to a generated request id when crypto.randomUUID is unavailable", async () => {
+		vi.mocked(globalThis.crypto.randomUUID).mockImplementationOnce(() => {
+			throw new Error("randomUUID unavailable");
+		});
+		let generatedRequestId = "";
+		mocks.streamChat.mockImplementation(async function* (_prompt, sessionId, clientRequestId) {
+			generatedRequestId = clientRequestId;
+			yield {
+				eventId: 1,
+				sessionId,
+				turnId: "turn-fallback",
+				clientRequestId,
+				event: { type: "aborted", message: "Stopped", persisted: false },
+			};
+		});
+
+		const store = new ChatStoreImpl();
+		await store.send("hello");
+
+		expect(generatedRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(store.isSending).toBe(false);
+	});
+
+	it("removes the edited user turn and every later message from the active branch", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{ role: "assistant", content: "36 / (9 - 3) * 2 = ?", timestamp: 1, entryId: "question" },
+			{ role: "user", content: "12", timestamp: 2, entryId: "answer-12", parentEntryId: "question" },
+			{ role: "assistant", content: "Correct. Which option is an equation?", timestamp: 3, entryId: "choice" },
+			{ role: "user", content: "8", timestamp: 4, entryId: "appended-8", parentEntryId: "choice" },
+		], "session.jsonl");
+
+		expect(store.branchBefore("answer-12")).toBe(true);
+		expect(store.messages).toEqual([
+			{ role: "assistant", content: "36 / (9 - 3) * 2 = ?", timestamp: 1, entryId: "question" },
+		]);
+		expect(store.pendingQuestion).toBeNull();
+	});
+
 	it("rechecks isSending after the async session-store import", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => { release = resolve; });

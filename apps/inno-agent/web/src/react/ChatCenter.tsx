@@ -19,13 +19,13 @@ import { workspaceStore } from "../stores/workspace-store.js";
 import { settingsStore } from "../stores/settings-store.js";
 import { appStore } from "../stores/app-store.js";
 import { skillsStore } from "../stores/skills-store.js";
-import type { CreateSessionInput } from "../api/sessions.js";
+import { branchSessionBeforeMessage, type CreateSessionInput } from "../api/sessions.js";
 import { bindSessionWorkspace } from "../api/workspaces.js";
 import { ApiError } from "../api/client.js";
 import type { PresetMeta } from "../types/presets.js";
 import { arrayBufferToBase64 } from "../api/uploads.js";
 import { uploadWorkspaceFileWithProgress } from "../api/workspace.js";
-import type { AttachmentRef } from "../types/chat.js";
+import type { AttachmentRef, ChatMessage } from "../types/chat.js";
 import { fetchPresetList, readCachedPresets, removeCachedPreset } from "../utils/preset-cache.js";
 import { useStoreSnapshot } from "./hooks.js";
 import { ChatComposer } from "./chat/ChatComposer.js";
@@ -104,6 +104,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	const welcomeLayoutRef = useRef<HTMLDivElement | null>(null);
 	const resizeFrameRef = useRef<number | null>(null);
 	const draftRef = useRef("");
+	const editTargetRef = useRef<{ sessionId: string; entryId: string } | null>(null);
 	const [draftValue, setDraftValue] = useState(draftRef.current);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -408,6 +409,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 
 	useEffect(() => {
 		shouldStickToBottomRef.current = true;
+		editTargetRef.current = null;
 	}, [sessions.currentSessionId]);
 
 	const markUserScrollGesture = useCallback(() => {
@@ -946,6 +948,18 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 							: ""
 				);
 
+				const editTarget = editTargetRef.current;
+				if (editTarget && editTarget.sessionId === targetSessionId) {
+					if (!chatStore.messages.some((message) => message.entryId === editTarget.entryId && message.role === "user")) {
+						throw new Error(t("chat.editTargetMissing"));
+					}
+					await branchSessionBeforeMessage(editTarget.sessionId, editTarget.entryId);
+					if (!chatStore.branchBefore(editTarget.entryId)) throw new Error(t("chat.editTargetMissing"));
+					editTargetRef.current = null;
+				} else if (editTarget) {
+					editTargetRef.current = null;
+				}
+
 				resetComposer();
 				engine?.postSendCleanup();
 				setUploads((current) => current.filter((entry) => entry.status === "failed"));
@@ -990,6 +1004,19 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			resizeInput();
 		}
 	}, [resizeInput]);
+
+	const handleEditMessage = useCallback((message: ChatMessage) => {
+		if (chat.isSending || isUploading) return;
+		const sessionId = sessions.currentSessionId;
+		if (!sessionId || !message.entryId) return;
+		const content = message.content.trim();
+		if (!content) return;
+		const currentDraft = inputRef.current?.value ?? draftRef.current;
+		if (currentDraft.trim() && currentDraft.trim() !== content && !window.confirm(t("chat.replaceDraftConfirm"))) return;
+		editTargetRef.current = { sessionId, entryId: message.entryId };
+		setComposerText(content);
+		showSmartToast(t("chat.editLoaded"));
+	}, [chat.isSending, isUploading, sessions.currentSessionId, setComposerText, showSmartToast, t]);
 
 	const slashQuery = slashQueryFromDraft(draftValue);
 	const slashPaletteOpen = slashQuery !== null && slashDismissedFor !== draftValue && !chat.isSending;
@@ -1404,6 +1431,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			composer={renderComposer(t("chat.composerPlaceholder"))}
 			onOpenAttachment={openChatAttachmentPreview}
 			onOpenSkill={openSkillPanel}
+			onEditMessage={handleEditMessage}
 			wsError={wsError}
 		/>
 		</>
