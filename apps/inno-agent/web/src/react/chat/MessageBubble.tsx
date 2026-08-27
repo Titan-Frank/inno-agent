@@ -472,12 +472,12 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 		);
 		return (
 			<motion.div
-				className="flex flex-col items-end"
+				className="flex justify-end"
 				initial={{ opacity: 0, y: 12 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.25, ease: "easeOut" }}
 			>
-				<div className="inno-message w-fit whitespace-pre-wrap break-words rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]" style={{ maxWidth: "min(70%, 38rem)" }}>
+				<div className="inno-message group relative w-fit whitespace-pre-wrap break-words rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]" style={{ maxWidth: "min(70%, 38rem)" }}>
 					{showChannel && message.channel ? (
 						<div className="mb-1 flex justify-end"><ChannelBadge channel={message.channel} /></div>
 					) : null}
@@ -507,19 +507,18 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 					) : (
 						message.content.trim()
 					)}
+					{canEdit ? (
+						<button
+							type="button"
+							className="absolute -bottom-2 -right-2 inline-flex items-center justify-center rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] p-1 text-[var(--inno-text-subtle)] opacity-0 shadow-sm transition-opacity duration-150 hover:text-[var(--inno-text)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--inno-accent)] group-hover:opacity-100"
+							title={t("chat.editAndResend")}
+							aria-label={t("chat.editAndResend")}
+							onClick={() => onEdit?.(message)}
+						>
+							<Pencil size={12} />
+						</button>
+					) : null}
 				</div>
-				{canEdit ? (
-					<button
-						type="button"
-						className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--inno-text-subtle)] transition-colors hover:bg-[var(--inno-surface-muted)] hover:text-[var(--inno-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--inno-accent)]"
-						title={t("chat.editAndResend")}
-						aria-label={t("chat.editAndResend")}
-						onClick={() => onEdit?.(message)}
-					>
-						<Pencil size={11} />
-						<span>{t("chat.editAndResend")}</span>
-					</button>
-				) : null}
 			</motion.div>
 		);
 	}

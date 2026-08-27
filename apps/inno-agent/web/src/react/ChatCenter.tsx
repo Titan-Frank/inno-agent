@@ -1001,9 +1001,14 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		if (el) {
 			el.value = text;
 			el.focus();
+			// Programmatic value assignment fires no input event, and while smart
+			// input is enabled the textarea's own text is transparent — without an
+			// explicit sync the mirror stays stale and the draft renders invisible
+			// until the next click/selection.
+			engineRef.current?.syncNow();
 			resizeInput();
 		}
-	}, [resizeInput]);
+	}, [engineRef, resizeInput]);
 
 	const handleEditMessage = useCallback((message: ChatMessage) => {
 		if (chat.isSending || isUploading) return;
