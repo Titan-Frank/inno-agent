@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -12,7 +13,7 @@ describe("Agent command sidecar store", () => {
 	let dataDir: string;
 
 	beforeEach(() => {
-		dataDir = mkdtempSync(join("/tmp", "inno-agent-command-store-"));
+		dataDir = mkdtempSync(join(tmpdir(), "inno-agent-command-store-"));
 		mkdirSync(join(dataDir, "sessions"), { recursive: true });
 		resetAgentCommandStoreForTests();
 	});

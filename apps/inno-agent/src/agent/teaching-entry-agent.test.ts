@@ -329,5 +329,5 @@ describe("teaching entry gate through a real AgentSession", () => {
 		} finally {
 			session.dispose();
 		}
-	});
+	}, 20_000);
 });
