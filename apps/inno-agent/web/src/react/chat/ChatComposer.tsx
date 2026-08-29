@@ -39,7 +39,6 @@ export interface ChatComposerProps {
 	hitRef: RefObject<HTMLDivElement | null>;
 	chatIsSending: boolean;
 	canReconnect: boolean;
-	lastUserPrompt: string | null;
 	isUploading: boolean;
 	hasSendableContent: boolean;
 	hasPendingQuestion: boolean;
@@ -64,7 +63,6 @@ export interface ChatComposerProps {
 	onSend: () => void;
 	onStop: () => void;
 	onReconnect: () => void;
-	onRetry: () => void;
 	/** Slash-command palette rendered above the composer (ChatCenter owns its state). */
 	slashPalette?: ReactNode;
 }
@@ -90,7 +88,6 @@ export function ChatComposer({
 	hitRef,
 	chatIsSending,
 	canReconnect,
-	lastUserPrompt,
 	isUploading,
 	hasSendableContent,
 	hasPendingQuestion,
@@ -115,7 +112,6 @@ export function ChatComposer({
 	onSend,
 	onStop,
 	onReconnect,
-	onRetry,
 	slashPalette,
 }: ChatComposerProps) {
 	const { t } = useTranslation();
@@ -523,17 +519,6 @@ export function ChatComposer({
 						</>
 					) : (
 						<>
-							{lastUserPrompt ? (
-								<button
-									type="button"
-									className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
-									title={t("chat.retryLast")}
-									disabled={isUploading}
-									onClick={onRetry}
-								>
-									<RotateCcw size={16} />
-								</button>
-							) : null}
 							<button
 								type="button"
 								className={`inno-composer-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${sendDisabled ? "is-disabled" : ""}`}

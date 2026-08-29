@@ -38,6 +38,8 @@ interface ChatConversationProps {
 	onOpenAttachment: (file: AttachmentRef) => void;
 	onOpenSkill: (skillName: string) => void;
 	onEditMessage: (message: ChatMessage) => void;
+	canRetry: boolean;
+	onRetry: () => void;
 	wsError: string;
 }
 
@@ -56,6 +58,8 @@ export function ChatConversation({
 	onOpenAttachment,
 	onOpenSkill,
 	onEditMessage,
+	canRetry,
+	onRetry,
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
@@ -116,6 +120,8 @@ export function ChatConversation({
 											onOpenAttachment={onOpenAttachment}
 											onOpenSkill={onOpenSkill}
 											onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
+											showRetry={canRetry && index === chat.messages.length - 1}
+											onRetry={onRetry}
 										/>
 									</div>
 								);

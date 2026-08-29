@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("react-i18next", () => ({
@@ -66,4 +66,48 @@ describe("MessageBubble edit and resend", () => {
 
 		expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
 	});
+
+	it("shows the sent-message time and copies the original content", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		const previousClipboard = navigator.clipboard;
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText },
+		});
+
+		try {
+			const timestamp = new Date(2026, 7, 30, 22, 35).getTime();
+			render(<MessageBubble message={{ ...plainUserMessage, timestamp }} />);
+
+			expect(screen.getByText("22:35")).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "common.copy" }));
+
+			await waitFor(() => {
+				expect(writeText).toHaveBeenCalledWith(plainUserMessage.content);
+			});
+		} finally {
+			Object.defineProperty(navigator, "clipboard", {
+				configurable: true,
+				value: previousClipboard,
+			});
+		}
+	});
+
+	it("shows copy, time, and retry actions for the last assistant message", () => {
+		const onRetry = vi.fn();
+		const timestamp = new Date(2026, 7, 30, 22, 35).getTime();
+		render(
+			<MessageBubble
+				message={{ role: "assistant", content: "answer", timestamp }}
+				showRetry
+				onRetry={onRetry}
+			/>,
+		);
+
+		expect(screen.getByText("22:35")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "common.copy" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "chat.retryLast" }));
+		expect(onRetry).toHaveBeenCalledTimes(1);
+	});
+
 });

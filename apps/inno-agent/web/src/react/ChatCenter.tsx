@@ -1352,7 +1352,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			hitRef={hitRef}
 			chatIsSending={chat.isSending}
 			canReconnect={chat.canReconnect}
-			lastUserPrompt={chat.lastUserPrompt}
 			isUploading={isUploading}
 			hasSendableContent={hasSendableContent}
 			hasPendingQuestion={Boolean(chat.pendingQuestion)}
@@ -1377,7 +1376,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onSend={handleSend}
 			onStop={handleStop}
 			onReconnect={handleReconnect}
-			onRetry={handleRetry}
 			slashPalette={slashPaletteOpen ? (
 				<SlashCommandPalette
 					entries={slashEntries}
@@ -1492,6 +1490,8 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onOpenAttachment={openChatAttachmentPreview}
 			onOpenSkill={openSkillPanel}
 			onEditMessage={handleEditMessage}
+			canRetry={Boolean(chat.lastUserPrompt) && !chat.isSending && !chat.pendingQuestion && !isUploading}
+			onRetry={handleRetry}
 			wsError={wsError}
 		/>
 		</>

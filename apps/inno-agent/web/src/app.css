@@ -384,6 +384,93 @@ inno-workspace-panel textarea {
 	display: block;
 }
 
+.inno-message-wrap {
+	margin-bottom: 30px;
+}
+
+.inno-assistant-message {
+	margin-bottom: 30px;
+}
+
+.inno-message-actions {
+	position: absolute;
+	top: calc(100% + 2px);
+	right: 0;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 28px;
+	color: var(--inno-text-muted);
+	font-size: 12px;
+	line-height: 18px;
+	font-variant-numeric: tabular-nums;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transform: translateY(-2px);
+	transition: opacity var(--inno-dur-fast) var(--inno-ease-out), transform var(--inno-dur-fast) var(--inno-ease-out), visibility var(--inno-dur-fast);
+}
+
+.inno-message-wrap:hover .inno-message-actions,
+.inno-message-wrap:focus-within .inno-message-actions,
+.inno-assistant-message:hover .inno-message-actions,
+.inno-assistant-message:focus-within .inno-message-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+	transform: translateY(0);
+}
+
+.inno-assistant-message .inno-message-actions {
+	right: auto;
+	left: 0;
+}
+
+.inno-message-action {
+	display: inline-flex;
+	width: 28px;
+	height: 28px;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+	touch-action: manipulation;
+	transition: color var(--inno-dur-fast) var(--inno-ease-out), background-color var(--inno-dur-fast) var(--inno-ease-out);
+}
+
+@media (pointer: coarse) {
+	.inno-message-wrap {
+		margin-bottom: 36px;
+	}
+
+	.inno-assistant-message {
+		margin-bottom: 36px;
+	}
+
+	.inno-message-actions {
+		min-height: 32px;
+	}
+
+	.inno-message-action {
+		width: 32px;
+		height: 32px;
+	}
+}
+
+.inno-message-action:hover {
+	background: var(--inno-surface-muted);
+	color: var(--inno-text);
+}
+
+.inno-message-action:focus-visible {
+	outline: none;
+	box-shadow: var(--inno-ring);
+}
+
 /* The streaming bubble splits the reply into a memoized stable region and a
    live tail, each rendered as its own markdown-artifact. Each artifact carries
    p-4 padding, so without correction the junction would show 2rem of vertical
@@ -1801,12 +1888,19 @@ inno-workspace-panel textarea {
 	box-shadow: none;
 }
 
-:root[data-theme="innospark"] .justify-end > .inno-message {
+:root[data-theme="innospark"] .justify-end .inno-user-message {
+	border-radius: 16px 16px 0 16px;
 	border-color: transparent;
 	background: var(--inno-accent-soft);
 }
 
 :root[data-theme="innospark"] .justify-start > .inno-message:has(markdown-artifact) {
+	border-color: transparent;
+	background: transparent;
+	box-shadow: none;
+}
+
+:root[data-theme="innospark"] .justify-start > .inno-assistant-message {
 	border-color: transparent;
 	background: transparent;
 	box-shadow: none;
