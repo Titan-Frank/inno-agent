@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp, FlaskConical, Keyboard } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SmartInputRule, SmartInputSettings } from "../../types/settings.js";
 import { PopoverSurface } from "../ui/PopoverSurface.js";
@@ -24,12 +25,43 @@ export function SmartInputControl({
 }: SmartInputControlProps) {
 	const { t } = useTranslation();
 	const smartInputRef = useRef<HTMLDivElement | null>(null);
+	const smartInputTriggerRef = useRef<HTMLButtonElement | null>(null);
+	const smartInputPanelRef = useRef<HTMLDivElement | null>(null);
 	const [smartInputMenuOpen, setSmartInputMenuOpen] = useState(false);
+	const [smartInputMenuPosition, setSmartInputMenuPosition] = useState({ left: 8, top: 8 });
+
+	const repositionSmartInputMenu = useCallback(() => {
+		if (!smartInputMenuOpen) return;
+		const trigger = smartInputTriggerRef.current;
+		const panel = smartInputPanelRef.current;
+		if (!trigger || !panel) return;
+
+		const margin = 8;
+		const triggerRect = trigger.getBoundingClientRect();
+		const panelRect = panel.getBoundingClientRect();
+		const width = panel.offsetWidth || panelRect.width;
+		const height = panel.offsetHeight || panelRect.height;
+		const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+		const preferredLeft = compact ? triggerRect.left - width - margin : triggerRect.left;
+		const left = Math.max(margin, Math.min(preferredLeft, maxLeft));
+		const aboveSpace = triggerRect.top - margin;
+		const belowSpace = window.innerHeight - triggerRect.bottom - margin;
+		const openAbove = aboveSpace >= height || aboveSpace >= belowSpace;
+		const preferredTop = openAbove
+			? triggerRect.top - height - margin
+			: triggerRect.bottom + margin;
+		const maxTop = Math.max(margin, window.innerHeight - height - margin);
+		const top = Math.max(margin, Math.min(preferredTop, maxTop));
+
+		setSmartInputMenuPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
+	}, [compact, smartInputMenuOpen]);
 
 	useEffect(() => {
 		if (!smartInputMenuOpen) return;
 		const onPointerDown = (event: PointerEvent) => {
-			if (!smartInputRef.current?.contains(event.target as Node)) setSmartInputMenuOpen(false);
+			const target = event.target as Node;
+			if (smartInputRef.current?.contains(target) || smartInputPanelRef.current?.contains(target)) return;
+			setSmartInputMenuOpen(false);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Escape") setSmartInputMenuOpen(false);
@@ -41,6 +73,22 @@ export function SmartInputControl({
 			window.removeEventListener("keydown", onKeyDown);
 		};
 	}, [smartInputMenuOpen]);
+
+	useLayoutEffect(() => {
+		if (!smartInputMenuOpen) return;
+		repositionSmartInputMenu();
+		const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(repositionSmartInputMenu);
+		for (const target of [smartInputTriggerRef.current, smartInputPanelRef.current]) {
+			if (target) resizeObserver?.observe(target);
+		}
+		window.addEventListener("resize", repositionSmartInputMenu);
+		document.addEventListener("scroll", repositionSmartInputMenu, true);
+		return () => {
+			resizeObserver?.disconnect();
+			window.removeEventListener("resize", repositionSmartInputMenu);
+			document.removeEventListener("scroll", repositionSmartInputMenu, true);
+		};
+	}, [repositionSmartInputMenu, smartInputMenuOpen]);
 
 	const rules = smartInputSettings?.rules ?? [];
 	const enabledRuleCount = rules.filter((rule) => rule.enabled).length;
@@ -58,6 +106,7 @@ export function SmartInputControl({
 		<div ref={smartInputRef} className={`inno-workspace-smart-input ${compact ? "inno-composer-smart-input" : ""}`}>
 			<button
 				type="button"
+				ref={smartInputTriggerRef}
 				className={compact
 					? "inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
 					: "inno-workspace-switcher-trigger inno-workspace-smart-input-trigger"}
@@ -75,8 +124,22 @@ export function SmartInputControl({
 					</>
 				)}
 			</button>
-			{smartInputMenuOpen ? (
-				<PopoverSurface className="inno-workspace-switcher-menu inno-workspace-smart-input-panel" role="dialog" aria-label={t("settings.smartInput.title", "便捷输入")}>
+			{smartInputMenuOpen && typeof document !== "undefined" ? createPortal(
+				<PopoverSurface
+					ref={smartInputPanelRef}
+					className="inno-workspace-switcher-menu inno-workspace-smart-input-panel"
+					role="dialog"
+					aria-label={t("settings.smartInput.title", "便捷输入")}
+					style={{
+						position: "fixed",
+						left: smartInputMenuPosition.left,
+						top: smartInputMenuPosition.top,
+						right: "auto",
+						bottom: "auto",
+						zIndex: 100,
+						transformOrigin: compact ? "bottom right" : "bottom left",
+					}}
+				>
 					<div className="inno-workspace-smart-input-panel-head">
 						<div className="min-w-0">
 							<div className="inno-workspace-smart-input-panel-title">{t("settings.smartInput.master", "便捷输入")} <span className="inno-smart-beta">Beta</span></div>
@@ -152,7 +215,8 @@ export function SmartInputControl({
 						<FlaskConical size={14} aria-hidden="true" />
 						<span>{t("settings.smartInput.openSettings", "打开实验室中的便捷输入设置")}</span>
 					</button>
-				</PopoverSurface>
+				</PopoverSurface>,
+				document.body,
 			) : null}
 		</div>
 	);
