@@ -508,7 +508,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.25, ease: "easeOut" }}
 			>
-				<div className="inno-message-wrap inno-message-wrap--user group relative w-fit max-w-full" style={{ maxWidth: "min(70%, 38rem)" }}>
+				<div className="inno-message-wrap group relative w-fit max-w-full" style={{ maxWidth: "min(70%, 38rem)" }}>
 					<div className="inno-message inno-user-message whitespace-pre-wrap break-words rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
 						{showChannel && message.channel ? (
 							<div className="mb-1 flex justify-end"><ChannelBadge channel={message.channel} /></div>
@@ -583,7 +583,6 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 
 	return (
 		<motion.div
-			key={`assistant-message-${message.timestamp}`}
 			className="flex justify-start"
 			initial={{ opacity: 0, y: 12 }}
 			animate={{ opacity: 1, y: 0 }}

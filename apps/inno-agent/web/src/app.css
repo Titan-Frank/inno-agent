@@ -380,10 +380,6 @@ inno-workspace-panel textarea {
 	white-space: pre-wrap;
 }
 
-.inno-message markdown-artifact {
-	display: block;
-}
-
 .inno-message-wrap {
 	margin-bottom: 30px;
 }
@@ -469,15 +465,6 @@ inno-workspace-panel textarea {
 .inno-message-action:focus-visible {
 	outline: none;
 	box-shadow: var(--inno-ring);
-}
-
-/* The streaming bubble splits the reply into a memoized stable region and a
-   live tail, each rendered as its own markdown-artifact. Each artifact carries
-   p-4 padding, so without correction the junction would show 2rem of vertical
-   space where a single artifact would show a 1rem paragraph margin. Pull the
-   second artifact up by 1rem to make the split seam invisible. */
-.inno-streaming-blocks markdown-artifact + markdown-artifact {
-	margin-top: -1rem;
 }
 
 .inno-composer {
@@ -1892,12 +1879,6 @@ inno-workspace-panel textarea {
 	border-radius: 16px 16px 0 16px;
 	border-color: transparent;
 	background: var(--inno-accent-soft);
-}
-
-:root[data-theme="innospark"] .justify-start > .inno-message:has(markdown-artifact) {
-	border-color: transparent;
-	background: transparent;
-	box-shadow: none;
 }
 
 :root[data-theme="innospark"] .justify-start > .inno-assistant-message {
