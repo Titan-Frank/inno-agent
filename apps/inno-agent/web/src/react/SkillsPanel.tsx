@@ -16,6 +16,7 @@ import { Spinner } from "./ui/Spinner.js";
 import { LazyCodeEditor } from "./LazyCodeEditor.js";
 import { LazyMarkdownEditor } from "./LazyMarkdownEditor.js";
 import { FileName } from "./FileName.js";
+import { DEFAULT_UPLOAD_MAX_LABEL, getOversizedFiles } from "../utils/upload-limits.js";
 import "@earendil-works/pi-web-ui";
 
 /* ---------- helpers (same as WorkspaceBrowser) ---------- */
@@ -481,6 +482,7 @@ function SkillLibraryModal({ onClose }: { onClose: () => void }) {
 export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 	const { t } = useTranslation();
 	const uploadRef = useRef<HTMLInputElement | null>(null);
+	const [uploadError, setUploadError] = useState("");
 	const state = useStoreSnapshot(skillsStore, () => ({
 		skills: skillsStore.skills,
 		selectedSkill: skillsStore.selectedSkill,
@@ -498,6 +500,12 @@ export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 	function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
 		const file = event.target.files?.[0];
 		if (!file) return;
+		if (getOversizedFiles([file]).length > 0) {
+			setUploadError(t("skills.uploadTooLarge", "文件超过 {{limit}} 上限，未上传。", { limit: DEFAULT_UPLOAD_MAX_LABEL }));
+			event.target.value = "";
+			return;
+		}
+		setUploadError("");
 		void skillsStore.upload(file);
 		event.target.value = "";
 	}
@@ -544,6 +552,7 @@ export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 						</button>
 					</div>
 				</div>
+				{uploadError ? <div className="border-b border-[var(--inno-border)] bg-[var(--inno-danger-bg)] px-4 py-2 text-xs text-[var(--inno-danger)]" role="alert">{uploadError}</div> : null}
 
 				{/* Search (visible when there's anything to search through) */}
 				{state.skills.length > 0 ? (

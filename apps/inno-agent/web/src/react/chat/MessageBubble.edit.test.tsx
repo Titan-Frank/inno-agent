@@ -31,7 +31,7 @@ describe("MessageBubble edit and resend", () => {
 		expect(onEdit).toHaveBeenCalledWith(plainUserMessage);
 	});
 
-	it("does not offer text-only editing when the original message has attachments", () => {
+	it("offers a file message for editing", () => {
 		const message: ChatMessage = {
 			...plainUserMessage,
 			attachments: {
@@ -40,9 +40,23 @@ describe("MessageBubble edit and resend", () => {
 			},
 		};
 
-		render(<MessageBubble message={message} onEdit={vi.fn()} />);
+		const onEdit = vi.fn();
+		render(<MessageBubble message={message} onEdit={onEdit} />);
 
-		expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
+		expect(onEdit).toHaveBeenCalledWith(message);
+	});
+
+	it("offers an expanded skill message for editing", () => {
+		const message: ChatMessage = {
+			...plainUserMessage,
+			content: '<skill name="lesson-plan" location="/tmp/lesson-plan/SKILL.md">\n# Lesson Plan\n</skill>',
+		};
+		const onEdit = vi.fn();
+		render(<MessageBubble message={message} onEdit={onEdit} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
+		expect(onEdit).toHaveBeenCalledWith(message);
 	});
 
 	it("does not offer editing for a transient message without a persisted entry id", () => {

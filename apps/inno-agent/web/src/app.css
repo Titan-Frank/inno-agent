@@ -2667,12 +2667,11 @@ body.inno-smart-dragging .inno-smart-kw-hit::before {
 	100% { transform: scale(1); }
 }
 
-/* ── Smart input toast (auto-dismissing, bottom-center) ── */
+/* ── Smart input toast (auto-dismissing, centered in the chat area) ── */
 .inno-smart-toast {
-	position: fixed;
+	position: absolute;
 	left: 50%;
-	bottom: 108px;
-	transform: translateX(-50%);
+  top: 30px;
 	z-index: 70;
 	max-width: min(420px, calc(100vw - 48px));
 	padding: 6px 14px;
@@ -2681,10 +2680,17 @@ body.inno-smart-dragging .inno-smart-kw-hit::before {
 	background: var(--inno-surface-raised);
 	color: var(--inno-text);
 	font-size: 12px;
+	transform: translateX(-50%);
 	box-shadow: var(--inno-shadow-soft);
-	animation: inno-smart-panel-in var(--inno-dur-ui) var(--inno-ease-out);
+	animation: inno-smart-toast-in var(--inno-dur-ui) var(--inno-ease-out);
 	pointer-events: none;
 }
+
+@keyframes inno-smart-toast-in {
+	from { opacity: 0; transform: translate(-50%, -4px); }
+	to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .inno-smart-toast.is-error {
 	border-color: var(--inno-danger-border);
 	background: color-mix(in srgb, var(--inno-danger-bg) 60%, var(--inno-surface-raised));

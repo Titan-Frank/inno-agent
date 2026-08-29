@@ -33,6 +33,7 @@ interface ChatConversationProps {
 	onPauseAutoScroll: () => void;
 	questionHint: ReactNode;
 	busyBlocker: ReactNode;
+	smartToast: ReactNode;
 	composer: ReactNode;
 	onOpenAttachment: (file: AttachmentRef) => void;
 	onOpenSkill: (skillName: string) => void;
@@ -50,6 +51,7 @@ export function ChatConversation({
 	onPauseAutoScroll,
 	questionHint,
 	busyBlocker,
+	smartToast,
 	composer,
 	onOpenAttachment,
 	onOpenSkill,
@@ -73,7 +75,8 @@ export function ChatConversation({
 	);
 
 	return (
-		<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
+		<section className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
+			{smartToast}
 			<div className="conversation-stage relative flex-1 min-h-0">
 				<div
 					ref={scrollRef}

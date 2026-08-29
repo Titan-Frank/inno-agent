@@ -375,6 +375,7 @@
 		"reload": "重新加载",
 		"upload": "上传",
 		"uploading": "上传中…",
+		"uploadTooLarge": "文件超过 {{limit}} 上限，未上传。",
 		"package": "默认包格式：",
 		"packageDesc": "ZIP 包内需包含 SKILL.md 文件。",
 		"empty": "暂无技能",
@@ -754,6 +755,7 @@
 		"emptySessionHint": "在下方输入消息，开始新的对话。",
 		"uploadFiles": "上传文件到工作区",
 		"uploadHint": "请先选择已有工作区或开始对话后再上传文件",
+		"uploadTooLarge": "有 {{count}} 个文件超过 {{limit}} 上限，未添加。",
 		"attachImage": "添加图片",
 		"attachImageViaOcr": "添加图片（当前模型将通过 OCR 处理）",
 		"selectModel": "选择模型",
@@ -970,7 +972,8 @@
 		"fileSelectionOnly": "请选择文件（文件夹不可选）",
 		"deleteSelected": "删除已选文件",
 		"uploadSkill": "上传技能包 (.zip/.md) 到 .skills",
-		"dropToUpload": "拖放文件以上传"
+		"dropToUpload": "拖放文件以上传",
+		"uploadTooLarge": "有 {{count}} 个文件超过 {{limit}} 上限，未上传。"
 	},
 	"categories": {
 		"教学辅导": "教学辅导",

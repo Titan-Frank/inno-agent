@@ -22,6 +22,7 @@ import { useStoreSnapshot } from "./hooks.js";
 import { ContextMenu, type ContextMenuItem } from "./ui/ContextMenu.js";
 import { FileName } from "./FileName.js";
 import { buildDragFilePanel, hiddenDragImage } from "./chat/smart-input/drag-utils.js";
+import { DEFAULT_UPLOAD_MAX_LABEL, getOversizedFiles } from "../utils/upload-limits.js";
 import "@earendil-works/pi-web-ui";
 
 // Heavy office renderers are lazy-loaded so docx-preview / xlsx stay off the
@@ -866,6 +867,7 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 	const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
 	const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[] } | null>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
+	const [uploadError, setUploadError] = useState("");
 	const [multiSelectMode, setMultiSelectMode] = useState(false);
 	const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
@@ -1086,6 +1088,19 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 
 	/* --- Upload handlers --- */
 
+	const filterUploadFiles = useCallback((files: File[]): File[] => {
+		const oversized = getOversizedFiles(files);
+		if (oversized.length > 0) {
+			setUploadError(t("files.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未上传。", {
+				count: oversized.length,
+				limit: DEFAULT_UPLOAD_MAX_LABEL,
+			}));
+		} else {
+			setUploadError("");
+		}
+		return files.filter((file) => !oversized.includes(file));
+	}, [t]);
+
 	const selectedParentPath = useCallback(() => {
 		const sel = treeRef.current?.selectedNodes?.[0];
 		if (!sel) return "";
@@ -1095,12 +1110,12 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 	const handleSkillUploadChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
 		const files = e.target.files;
 		if (files?.length) {
-			for (const file of Array.from(files)) {
+			for (const file of filterUploadFiles(Array.from(files))) {
 				void workspaceStore.uploadSkillPackage(file);
 			}
 			e.target.value = "";
 		}
-	}, []);
+	}, [filterUploadFiles]);
 
 	/** Only true when dragging files from OS (not internal react-dnd tree drags) */
 	const isExternalFileDrag = useCallback((e: DragEvent) => {
@@ -1124,9 +1139,10 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 		e.preventDefault();
 		setIsDragOver(false);
 		if (e.dataTransfer.files?.length) {
-			void workspaceStore.uploadFiles(selectedParentPath(), e.dataTransfer.files);
+			const files = filterUploadFiles(Array.from(e.dataTransfer.files));
+			if (files.length > 0) void workspaceStore.uploadFiles(selectedParentPath(), files);
 		}
-	}, [selectedParentPath, isExternalFileDrag]);
+	}, [selectedParentPath, isExternalFileDrag, filterUploadFiles]);
 
 	/* --- Toolbar button helpers --- */
 	const busy = state.isMutating || state.isLoadingTree;
@@ -1169,6 +1185,7 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 					</button>
 					<input ref={skillUploadRef} type="file" multiple accept=".zip,application/zip,.md,text/markdown" className="hidden" onChange={handleSkillUploadChange} />
 				</div>
+				{uploadError ? <div className="border-b border-[var(--inno-border)] bg-[var(--inno-danger-bg)] px-3 py-2 text-xs text-[var(--inno-danger)]" role="alert">{uploadError}</div> : null}
 
 				{multiSelectMode ? (
 					<div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--inno-border)] bg-[var(--inno-accent-soft)] px-2">

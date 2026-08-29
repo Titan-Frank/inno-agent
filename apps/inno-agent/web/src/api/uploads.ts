@@ -1,4 +1,5 @@
 import { apiFetch } from "./client.js";
+import { assertUploadSize } from "../utils/upload-limits.js";
 
 export interface RawUploadResult {
 	fileName: string;
@@ -19,6 +20,7 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
 }
 
 export async function uploadRawFile(file: File): Promise<RawUploadResult> {
+	assertUploadSize(file);
 	const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
 	return apiFetch<RawUploadResult>("/api/l2/raw/upload", {
 		method: "POST",

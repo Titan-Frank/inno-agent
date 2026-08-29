@@ -443,7 +443,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	onOpenAttachment?: AttachmentOpenHandler;
 	/** Open the right-side skill detail panel for a sent skill bubble. */
 	onOpenSkill?: (skillName: string) => void;
-	/** Restore a persisted plain Web user message and branch from that turn. */
+	/** Restore a persisted Web user message and branch from that turn. */
 	onEdit?: (message: ChatMessage) => void;
 }) {
 	const { t } = useTranslation();
@@ -465,9 +465,8 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 		const canEdit = Boolean(
 			onEdit
 			&& message.entryId
-			&& message.content.trim()
+			&& (message.content.trim() || hasAttachments)
 			&& !message.images?.length
-			&& !hasAttachments
 			&& (!message.channel || message.channel === "web"),
 		);
 		return (
