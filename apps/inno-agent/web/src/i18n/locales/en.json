@@ -375,7 +375,6 @@
 		"reload": "Reload",
 		"upload": "Upload",
 		"uploading": "Uploading…",
-		"uploadTooLarge": "The file exceeds the {{limit}} limit and was not uploaded.",
 		"package": "Default package:",
 		"packageDesc": "ZIP must contain a SKILL.md file.",
 		"empty": "No skills yet",

@@ -95,6 +95,21 @@ function formatSize(size = 0): string {
 	return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/**
+ * OS file drags expose their files differently across browsers and drag
+ * phases. During dragover, `dataTransfer.files` can be empty while the file
+ * entries are still available through `dataTransfer.items`.
+ */
+function filesFromDataTransfer(dataTransfer: DataTransfer | null | undefined): File[] {
+	if (!dataTransfer) return [];
+	const files = Array.from(dataTransfer.files ?? []);
+	if (files.length > 0) return files;
+	return Array.from(dataTransfer.items ?? [])
+		.filter((item) => item.kind === "file")
+		.map((item) => item.getAsFile())
+		.filter((file): file is File => file !== null);
+}
+
 function nodeIcon(name: string, isDir: boolean, isOpen: boolean) {
 	if (isDir) return isOpen ? <FolderOpen size={14} /> : <Folder size={14} />;
 	const lower = name.toLowerCase();
@@ -868,6 +883,7 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 	const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[] } | null>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [uploadError, setUploadError] = useState("");
+	const uploadErrorTimerRef = useRef<number | null>(null);
 	const [multiSelectMode, setMultiSelectMode] = useState(false);
 	const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
@@ -1086,20 +1102,40 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 		exit: exitMultiSelect,
 	}), [multiSelectMode, selectedFileIdSet, selectedFiles, toggleSelectedFile, addSelectedFile, exitMultiSelect]);
 
+	useEffect(() => () => {
+		if (uploadErrorTimerRef.current !== null) window.clearTimeout(uploadErrorTimerRef.current);
+	}, []);
+
 	/* --- Upload handlers --- */
+	const showUploadError = useCallback((message: string) => {
+		if (uploadErrorTimerRef.current !== null) window.clearTimeout(uploadErrorTimerRef.current);
+		setUploadError(message);
+		uploadErrorTimerRef.current = window.setTimeout(() => {
+			uploadErrorTimerRef.current = null;
+			setUploadError("");
+		}, 2200);
+	}, []);
+
+	const clearUploadError = useCallback(() => {
+		if (uploadErrorTimerRef.current !== null) {
+			window.clearTimeout(uploadErrorTimerRef.current);
+			uploadErrorTimerRef.current = null;
+		}
+		setUploadError("");
+	}, []);
 
 	const filterUploadFiles = useCallback((files: File[]): File[] => {
 		const oversized = getOversizedFiles(files);
 		if (oversized.length > 0) {
-			setUploadError(t("files.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未上传。", {
+			showUploadError(t("files.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未上传。", {
 				count: oversized.length,
 				limit: DEFAULT_UPLOAD_MAX_LABEL,
 			}));
 		} else {
-			setUploadError("");
+			clearUploadError();
 		}
 		return files.filter((file) => !oversized.includes(file));
-	}, [t]);
+	}, [clearUploadError, showUploadError, t]);
 
 	const selectedParentPath = useCallback(() => {
 		const sel = treeRef.current?.selectedNodes?.[0];
@@ -1119,30 +1155,50 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 
 	/** Only true when dragging files from OS (not internal react-dnd tree drags) */
 	const isExternalFileDrag = useCallback((e: DragEvent) => {
-		return e.dataTransfer.types.includes("Files");
+		return Array.from(e.dataTransfer?.types ?? []).includes("Files")
+			|| Array.from(e.dataTransfer?.items ?? []).some((item) => item.kind === "file");
 	}, []);
 
 	const handleDragOver = useCallback((e: DragEvent) => {
 		if (!isExternalFileDrag(e)) return;
 		e.preventDefault();
+		e.dataTransfer.dropEffect = "copy";
+		const oversized = getOversizedFiles(filesFromDataTransfer(e.dataTransfer));
+		if (oversized.length > 0) {
+			if (uploadErrorTimerRef.current !== null) {
+				window.clearTimeout(uploadErrorTimerRef.current);
+				uploadErrorTimerRef.current = null;
+			}
+			setUploadError(t("files.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未上传。", {
+				count: oversized.length,
+				limit: DEFAULT_UPLOAD_MAX_LABEL,
+			}));
+		} else if (uploadError) {
+			clearUploadError();
+		}
 		setIsDragOver(true);
-	}, [isExternalFileDrag]);
+	}, [clearUploadError, isExternalFileDrag, t, uploadError]);
 
 	const handleDragLeave = useCallback((e: DragEvent) => {
 		if (!isExternalFileDrag(e)) return;
 		e.preventDefault();
 		setIsDragOver(false);
-	}, [isExternalFileDrag]);
+		clearUploadError();
+	}, [clearUploadError, isExternalFileDrag]);
 
 	const handleDrop = useCallback((e: DragEvent) => {
 		if (!isExternalFileDrag(e)) return;
 		e.preventDefault();
+		e.stopPropagation();
 		setIsDragOver(false);
-		if (e.dataTransfer.files?.length) {
-			const files = filterUploadFiles(Array.from(e.dataTransfer.files));
+		const droppedFiles = filesFromDataTransfer(e.dataTransfer);
+		if (droppedFiles.length > 0) {
+			const files = filterUploadFiles(droppedFiles);
 			if (files.length > 0) void workspaceStore.uploadFiles(selectedParentPath(), files);
+		} else {
+			clearUploadError();
 		}
-	}, [selectedParentPath, isExternalFileDrag, filterUploadFiles]);
+	}, [clearUploadError, selectedParentPath, isExternalFileDrag, filterUploadFiles]);
 
 	/* --- Toolbar button helpers --- */
 	const busy = state.isMutating || state.isLoadingTree;
@@ -1154,7 +1210,7 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 				className={`inno-workspace-card relative flex min-h-0 flex-col overflow-hidden rounded-lg transition-opacity duration-200 ${isDragOver ? "border-[var(--inno-accent)] bg-[var(--inno-accent-soft)]" : ""} ${sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
-				onDrop={handleDrop}
+				onDropCapture={handleDrop}
 			>
 				{/* Toolbar */}
 				<div className="flex h-10 items-center gap-1 border-b border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2">
@@ -1255,7 +1311,9 @@ export function WorkspaceBrowser({ onPreviewFile, dndManager }: { onPreviewFile?
 				{/* Drag overlay */}
 				{isDragOver && (
 					<div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-[var(--inno-accent-soft)]">
-						<div className="rounded-lg bg-[var(--inno-surface)] px-4 py-2 text-xs font-medium text-[var(--inno-accent)] shadow-sm">{t("files.dropToUpload", "Drop files to upload")}</div>
+						<div className={`rounded-lg bg-[var(--inno-surface)] px-4 py-2 text-xs font-medium shadow-sm ${uploadError ? "text-[var(--inno-danger)]" : "text-[var(--inno-accent)]"}`}>
+							{uploadError || t("files.dropToUpload", "Drop files to upload")}
+						</div>
 					</div>
 				)}
 			</aside>

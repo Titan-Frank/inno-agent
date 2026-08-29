@@ -553,16 +553,17 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
 		smartToastTimer.current = window.setTimeout(() => setSmartToast(null), 2200);
 	}, []);
+	const notifyUploadLimitExceeded = useCallback((count: number) => {
+		showSmartToast(t("chat.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未添加。", {
+			count,
+			limit: DEFAULT_UPLOAD_MAX_LABEL,
+		}), true);
+	}, [showSmartToast, t]);
 	const filterUploadFiles = useCallback((files: File[]): File[] => {
 		const oversized = getOversizedFiles(files);
-		if (oversized.length > 0) {
-			showSmartToast(t("chat.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未添加。", {
-				count: oversized.length,
-				limit: DEFAULT_UPLOAD_MAX_LABEL,
-			}), true);
-		}
+		if (oversized.length > 0) notifyUploadLimitExceeded(oversized.length);
 		return files.filter((file) => file.size <= DEFAULT_UPLOAD_MAX_BYTES);
-	}, [showSmartToast, t]);
+	}, [notifyUploadLimitExceeded]);
 	const saveSmartInput = useCallback((next: SmartInputSettings) => {
 		void settingsStore.saveSmartInput(next).catch(() => {
 			showSmartToast(t("settings.smartInput.saveFailed", "便捷输入设置保存失败"), true);
@@ -748,6 +749,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			if (smartPanelRef.current?.slotId === slot.id) updateSmartPanel(null);
 		},
 		onChipHover: handleChipHover,
+		onUploadLimitExceeded: notifyUploadLimitExceeded,
 		onWorkspaceHighlight: highlightWorkspace,
 	});
 

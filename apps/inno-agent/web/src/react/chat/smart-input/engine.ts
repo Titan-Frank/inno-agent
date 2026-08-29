@@ -29,6 +29,7 @@ import {
 	type DropMatchState,
 	type FlowAtom,
 } from "./drag-utils.js";
+import { getOversizedFiles } from "../../../utils/upload-limits.js";
 
 /**
  * SmartInputEngine — imperative port of the v76 prototype's three-layer
@@ -99,6 +100,7 @@ export interface EngineCallbacks {
 	onBubbleClose?: (slot: Slot, anchor: HTMLElement) => void;
 	/** Filled-chip hover — drives the 250ms hover-open of the status panel. */
 	onChipHover?: (slot: Slot, anchor: HTMLElement, entering: boolean) => void;
+	onUploadLimitExceeded?: (count: number) => void;
 	onWorkspaceHighlight: (paths: string[] | null) => void;
 }
 
@@ -1853,7 +1855,9 @@ export class SmartInputEngine {
 	 * loses the rejected files.
 	 */
 	bindLocalFiles(slot: Slot, files: File[]): void {
-		this.bindAttachmentFiles(slot, files.map((file) => this.localAttachmentItem(file)));
+		const oversized = getOversizedFiles(files);
+		if (oversized.length > 0) this.opts.callbacks.onUploadLimitExceeded?.(oversized.length);
+		this.bindAttachmentFiles(slot, files.filter((file) => !oversized.includes(file)).map((file) => this.localAttachmentItem(file)));
 	}
 
 	/** Bind a mixed in-page batch, returning mismatches to the loose row. */

@@ -375,7 +375,6 @@
 		"reload": "重新加载",
 		"upload": "上传",
 		"uploading": "上传中…",
-		"uploadTooLarge": "文件超过 {{limit}} 上限，未上传。",
 		"package": "默认包格式：",
 		"packageDesc": "ZIP 包内需包含 SKILL.md 文件。",
 		"empty": "暂无技能",
