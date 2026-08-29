@@ -1334,7 +1334,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			modelState={modelState}
 			modelOptions={modelOptions}
 			currentModel={currentModel}
-			smartInputControl={!isWelcome && !simpleMode ? (
+			smartInputControl={((isWelcome && simpleMode) || (!isWelcome && !simpleMode)) ? (
 				<SmartInputControl
 					smartInputSettings={smartSettings}
 					onToggleSmartInput={toggleSmartInput}
