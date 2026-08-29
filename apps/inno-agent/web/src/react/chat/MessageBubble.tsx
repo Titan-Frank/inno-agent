@@ -588,7 +588,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.25, ease: "easeOut" }}
 		>
-			<div className={`inno-message inno-assistant-message group relative min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-visible rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
+			<div className={`inno-message inno-assistant-message group relative min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-visible px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
 				{showChannel && message.channel ? (
 					<div className="mb-1"><ChannelBadge channel={message.channel} /></div>
 				) : null}
@@ -624,9 +624,6 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 					>
 						{copied ? <Check size={14} /> : <Copy size={14} />}
 					</button>
-					{messageTime ? (
-						<time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time>
-					) : null}
 					{showRetry && onRetry ? (
 						<button
 							type="button"
@@ -637,6 +634,9 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 						>
 							<RotateCcw size={14} />
 						</button>
+					) : null}
+					{messageTime ? (
+						<time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time>
 					) : null}
 				</div>
 			</div>

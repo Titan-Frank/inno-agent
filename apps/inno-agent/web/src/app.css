@@ -384,7 +384,14 @@ inno-workspace-panel textarea {
 	margin-bottom: 30px;
 }
 
-.inno-assistant-message {
+.inno-message.inno-assistant-message,
+.inno-message.inno-streaming-blocks {
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+.inno-message.inno-assistant-message {
 	margin-bottom: 30px;
 }
 
@@ -1879,12 +1886,6 @@ inno-workspace-panel textarea {
 	border-radius: 16px 16px 0 16px;
 	border-color: transparent;
 	background: var(--inno-accent-soft);
-}
-
-:root[data-theme="innospark"] .justify-start > .inno-assistant-message {
-	border-color: transparent;
-	background: transparent;
-	box-shadow: none;
 }
 
 :root[data-theme="innospark"] .justify-start > details.inno-message {
