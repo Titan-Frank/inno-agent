@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { X, AlertTriangle, FileCode2, History, BookmarkPlus, BookOpen, Pencil, TerminalSquare } from "lucide-react";
+import { X, AlertTriangle, FileCode2, History, BookmarkPlus, BookOpen, Check, Copy, Pencil, RotateCcw, TerminalSquare } from "lucide-react";
 import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
@@ -351,6 +351,13 @@ function shouldCollapseAssistantContent(content: string): boolean {
 	return content.split(/\r\n|\r|\n/).length > LONG_ASSISTANT_LINES;
 }
 
+function formatMessageTime(timestamp: number): string {
+	if (!Number.isFinite(timestamp)) return "";
+	const date = new Date(timestamp);
+	if (Number.isNaN(date.getTime())) return "";
+	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function AssistantContent({ content }: { content: string }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
@@ -433,7 +440,7 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onOpenSkill, onEdit }: {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onOpenSkill, onEdit, showRetry, onRetry }: {
 	message: ChatMessage;
 	showChannel?: boolean;
 	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
@@ -443,11 +450,16 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	onOpenAttachment?: AttachmentOpenHandler;
 	/** Open the right-side skill detail panel for a sent skill bubble. */
 	onOpenSkill?: (skillName: string) => void;
-	/** Restore a persisted plain Web user message and branch from that turn. */
+	/** Restore a persisted Web user message and branch from that turn. */
 	onEdit?: (message: ChatMessage) => void;
+	/** Show the retry action in this message's action row. */
+	showRetry?: boolean;
+	onRetry?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+	const [copied, setCopied] = useState(false);
+	const copyResetTimerRef = useRef<number | null>(null);
 	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
 		const questionnaire = answeredQuestionnaireFromTool(tool);
 		return questionnaire ? [{ tool, questionnaire }] : [];
@@ -455,6 +467,26 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	const hasAnsweredQuestionnaire = answeredQuestionnaires.length > 0;
 	const answeredToolCallIds = new Set(answeredQuestionnaires.map((view) => view.tool.toolCallId));
 	const regularTools = (message.tools ?? []).filter((tool) => !answeredToolCallIds.has(tool.toolCallId));
+	const messageTime = formatMessageTime(message.timestamp);
+
+	useEffect(() => () => {
+		if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current);
+	}, []);
+
+	const copyMessage = async () => {
+		if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
+		try {
+			await navigator.clipboard.writeText(message.content);
+			setCopied(true);
+			if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current);
+			copyResetTimerRef.current = window.setTimeout(() => {
+				copyResetTimerRef.current = null;
+				setCopied(false);
+			}, 1600);
+		} catch {
+			// Clipboard access can be denied by the browser; leave the action quiet.
+		}
+	};
 
 	if (message.role === "user") {
 		const skillMessage = collapseSkillMessage(message.content);
@@ -465,9 +497,8 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 		const canEdit = Boolean(
 			onEdit
 			&& message.entryId
-			&& message.content.trim()
+			&& (message.content.trim() || hasAttachments)
 			&& !message.images?.length
-			&& !hasAttachments
 			&& (!message.channel || message.channel === "web"),
 		);
 		return (
@@ -477,47 +508,74 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.25, ease: "easeOut" }}
 			>
-				<div className="inno-message group relative w-fit whitespace-pre-wrap break-words rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]" style={{ maxWidth: "min(70%, 38rem)" }}>
-					{showChannel && message.channel ? (
-						<div className="mb-1 flex justify-end"><ChannelBadge channel={message.channel} /></div>
-					) : null}
-					{message.images?.length ? (
-						<div className="mb-2 flex flex-wrap gap-1.5">
-							{message.images.map((img, i) => (
-								<img
-									key={i}
-									src={img.previewUrl}
-									alt="attached"
-									className="max-h-48 max-w-full cursor-zoom-in rounded object-contain"
-									onClick={() => setLightboxSrc(img.previewUrl)}
-								/>
-							))}
-						</div>
-					) : null}
-					{lightboxSrc ? <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} /> : null}
-					{message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0) ? (
-						<UserAttachmentContent
-							content={message.content.trim()}
-							attachments={message.attachments}
-							resolveUrl={resolveAttachmentUrl}
-							onOpenFile={onOpenAttachment}
-						/>
-					) : agentCommandMessage ? (
-						<AgentCommandMessageContent {...agentCommandMessage} onOpenSkill={onOpenSkill} />
-					) : (
-						message.content.trim()
-					)}
-					{canEdit ? (
+				<div className="inno-message-wrap group relative w-fit max-w-full" style={{ maxWidth: "min(70%, 38rem)" }}>
+					<div className="inno-message inno-user-message whitespace-pre-wrap break-words rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]">
+						{showChannel && message.channel ? (
+							<div className="mb-1 flex justify-end"><ChannelBadge channel={message.channel} /></div>
+						) : null}
+						{message.images?.length ? (
+							<div className="mb-2 flex flex-wrap gap-1.5">
+								{message.images.map((img, i) => (
+									<img
+										key={i}
+										src={img.previewUrl}
+										alt="attached"
+										className="max-h-48 max-w-full cursor-zoom-in rounded object-contain"
+										onClick={() => setLightboxSrc(img.previewUrl)}
+									/>
+								))}
+							</div>
+						) : null}
+						{lightboxSrc ? <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} /> : null}
+						{message.attachments && (message.attachments.bindings.length > 0 || message.attachments.loose.length > 0) ? (
+							<UserAttachmentContent
+								content={message.content.trim()}
+								attachments={message.attachments}
+								resolveUrl={resolveAttachmentUrl}
+								onOpenFile={onOpenAttachment}
+							/>
+						) : agentCommandMessage ? (
+							<AgentCommandMessageContent {...agentCommandMessage} onOpenSkill={onOpenSkill} />
+						) : (
+							message.content.trim()
+						)}
+					</div>
+					<div className="inno-message-actions">
+						{messageTime ? (
+							<time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time>
+						) : null}
+						{canEdit ? (
+							<button
+								type="button"
+								className="inno-message-action"
+								title={t("chat.editAndResend")}
+								aria-label={t("chat.editAndResend")}
+								onClick={() => onEdit?.(message)}
+							>
+								<Pencil size={13} />
+							</button>
+						) : null}
 						<button
 							type="button"
-							className="absolute -bottom-2 -right-2 inline-flex items-center justify-center rounded-full border border-[var(--inno-border)] bg-[var(--inno-surface)] p-1 text-[var(--inno-text-subtle)] opacity-0 shadow-sm transition-opacity duration-150 hover:text-[var(--inno-text)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--inno-accent)] group-hover:opacity-100"
-							title={t("chat.editAndResend")}
-							aria-label={t("chat.editAndResend")}
-							onClick={() => onEdit?.(message)}
+							className="inno-message-action"
+							title={copied ? t("common.copied") : t("common.copy")}
+							aria-label={copied ? t("common.copied") : t("common.copy")}
+							onClick={() => { void copyMessage(); }}
 						>
-							<Pencil size={12} />
+							{copied ? <Check size={14} /> : <Copy size={14} />}
 						</button>
-					) : null}
+						{showRetry && onRetry ? (
+							<button
+								type="button"
+								className="inno-message-action"
+								title={t("chat.retryLast")}
+								aria-label={t("chat.retryLast")}
+								onClick={onRetry}
+							>
+								<RotateCcw size={14} />
+							</button>
+						) : null}
+					</div>
 				</div>
 			</motion.div>
 		);
@@ -530,7 +588,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.25, ease: "easeOut" }}
 		>
-			<div className={`inno-message min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-hidden rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
+			<div className={`inno-message inno-assistant-message group relative min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-visible px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
 				{showChannel && message.channel ? (
 					<div className="mb-1"><ChannelBadge channel={message.channel} /></div>
 				) : null}
@@ -556,6 +614,31 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 						<ErrorBlock error={message.error} />
 					</div>
 				) : null}
+				<div className="inno-message-actions">
+					<button
+						type="button"
+						className="inno-message-action"
+						title={copied ? t("common.copied") : t("common.copy")}
+						aria-label={copied ? t("common.copied") : t("common.copy")}
+						onClick={() => { void copyMessage(); }}
+					>
+						{copied ? <Check size={14} /> : <Copy size={14} />}
+					</button>
+					{showRetry && onRetry ? (
+						<button
+							type="button"
+							className="inno-message-action"
+							title={t("chat.retryLast")}
+							aria-label={t("chat.retryLast")}
+							onClick={onRetry}
+						>
+							<RotateCcw size={14} />
+						</button>
+					) : null}
+					{messageTime ? (
+						<time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time>
+					) : null}
+				</div>
 			</div>
 		</motion.div>
 	);

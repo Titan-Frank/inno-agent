@@ -33,10 +33,13 @@ interface ChatConversationProps {
 	onPauseAutoScroll: () => void;
 	questionHint: ReactNode;
 	busyBlocker: ReactNode;
+	smartToast: ReactNode;
 	composer: ReactNode;
 	onOpenAttachment: (file: AttachmentRef) => void;
 	onOpenSkill: (skillName: string) => void;
 	onEditMessage: (message: ChatMessage) => void;
+	canRetry: boolean;
+	onRetry: () => void;
 	wsError: string;
 }
 
@@ -50,10 +53,13 @@ export function ChatConversation({
 	onPauseAutoScroll,
 	questionHint,
 	busyBlocker,
+	smartToast,
 	composer,
 	onOpenAttachment,
 	onOpenSkill,
 	onEditMessage,
+	canRetry,
+	onRetry,
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
@@ -73,7 +79,8 @@ export function ChatConversation({
 	);
 
 	return (
-		<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
+		<section className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--inno-chat-bg)]">
+			{smartToast}
 			<div className="conversation-stage relative flex-1 min-h-0">
 				<div
 					ref={scrollRef}
@@ -113,6 +120,8 @@ export function ChatConversation({
 											onOpenAttachment={onOpenAttachment}
 											onOpenSkill={onOpenSkill}
 											onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
+											showRetry={canRetry && index === chat.messages.length - 1}
+											onRetry={onRetry}
 										/>
 									</div>
 								);

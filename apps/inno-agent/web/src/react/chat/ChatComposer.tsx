@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type CompositionEvent as ReactCompositionEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Paperclip, X, ArrowUp, Square, RotateCcw, Image, ScrollText, Check, ChevronDown, ChevronUp, Settings2, HardDriveUpload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Spinner } from "../ui/Spinner.js";
@@ -38,7 +39,6 @@ export interface ChatComposerProps {
 	hitRef: RefObject<HTMLDivElement | null>;
 	chatIsSending: boolean;
 	canReconnect: boolean;
-	lastUserPrompt: string | null;
 	isUploading: boolean;
 	hasSendableContent: boolean;
 	hasPendingQuestion: boolean;
@@ -63,7 +63,6 @@ export interface ChatComposerProps {
 	onSend: () => void;
 	onStop: () => void;
 	onReconnect: () => void;
-	onRetry: () => void;
 	/** Slash-command palette rendered above the composer (ChatCenter owns its state). */
 	slashPalette?: ReactNode;
 }
@@ -89,7 +88,6 @@ export function ChatComposer({
 	hitRef,
 	chatIsSending,
 	canReconnect,
-	lastUserPrompt,
 	isUploading,
 	hasSendableContent,
 	hasPendingQuestion,
@@ -114,12 +112,13 @@ export function ChatComposer({
 	onSend,
 	onStop,
 	onReconnect,
-	onRetry,
 	slashPalette,
 }: ChatComposerProps) {
 	const { t } = useTranslation();
 	const modelPickerRef = useRef<HTMLDivElement | null>(null);
+	const attachTriggerRef = useRef<HTMLDivElement | null>(null);
 	const attachMenuRef = useRef<HTMLDivElement | null>(null);
+	const [attachMenuPosition, setAttachMenuPosition] = useState({ left: 8, top: 8 });
 	const [osFileDragOver, setOsFileDragOver] = useState(false);
 	const currentModelLabel = currentModel?.name || currentModel?.id || modelState.defaultModel || t("chat.modelUnavailable");
 
@@ -142,7 +141,9 @@ export function ChatComposer({
 	useEffect(() => {
 		if (!attachMenuOpen) return;
 		const handlePointerDown = (event: PointerEvent) => {
-			if (!attachMenuRef.current?.contains(event.target as Node)) onCloseAttachMenu();
+			const target = event.target as Node;
+			if (attachTriggerRef.current?.contains(target) || attachMenuRef.current?.contains(target)) return;
+			onCloseAttachMenu();
 		};
 		const handleKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Escape") onCloseAttachMenu();
@@ -154,6 +155,32 @@ export function ChatComposer({
 			window.removeEventListener("keydown", handleKeyDown);
 		};
 	}, [attachMenuOpen, onCloseAttachMenu]);
+
+	const repositionAttachMenu = useCallback(() => {
+		const trigger = attachTriggerRef.current;
+		const menu = attachMenuRef.current;
+		if (!trigger || !menu) return;
+		const triggerRect = trigger.getBoundingClientRect();
+		const menuRect = menu.getBoundingClientRect();
+		const width = menuRect.width || Math.min(220, Math.max(0, window.innerWidth - 16));
+		const height = menuRect.height || 264;
+		const maxLeft = Math.max(8, window.innerWidth - width - 8);
+		const maxTop = Math.max(8, window.innerHeight - height - 8);
+		const left = Math.max(8, Math.min(triggerRect.right - width, maxLeft));
+		const top = Math.max(8, Math.min(triggerRect.top - height - 8, maxTop));
+		setAttachMenuPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
+	}, []);
+
+	useLayoutEffect(() => {
+		if (!attachMenuOpen) return;
+		repositionAttachMenu();
+		window.addEventListener("resize", repositionAttachMenu);
+		document.addEventListener("scroll", repositionAttachMenu, true);
+		return () => {
+			window.removeEventListener("resize", repositionAttachMenu);
+			document.removeEventListener("scroll", repositionAttachMenu, true);
+		};
+	}, [attachMenuOpen, repositionAttachMenu, workspaceFiles.length]);
 
 	const isOsFileDrag = (event: ReactDragEvent<HTMLElement>): boolean =>
 		Array.from(event.dataTransfer?.types ?? []).includes("Files");
@@ -304,7 +331,7 @@ export function ChatComposer({
 	);
 
 	const renderAttachMenu = () => (
-		<div ref={attachMenuRef} className="inno-composer-model-picker relative shrink-0">
+		<div ref={attachTriggerRef} className="inno-composer-model-picker relative shrink-0">
 			<button
 				type="button"
 				className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
@@ -316,8 +343,14 @@ export function ChatComposer({
 			>
 				{isUploading ? <Spinner size={16} /> : <Paperclip size={16} />}
 			</button>
-			{attachMenuOpen ? (
-				<div className="inno-composer-model-menu inno-smart-attach-menu" role="menu" aria-label={t("chat.uploadFiles")}>
+			{attachMenuOpen && typeof document !== "undefined" ? createPortal(
+				<div
+					ref={attachMenuRef}
+					className="inno-composer-model-menu inno-smart-attach-menu"
+					role="menu"
+					aria-label={t("chat.uploadFiles")}
+					style={{ position: "fixed", left: attachMenuPosition.left, top: attachMenuPosition.top, right: "auto", bottom: "auto", zIndex: 100 }}
+				>
 					<button
 						type="button"
 						role="menuitem"
@@ -355,7 +388,8 @@ export function ChatComposer({
 							</span>
 						</button>
 					))}
-				</div>
+				</div>,
+				document.body,
 			) : null}
 		</div>
 	);
@@ -485,17 +519,6 @@ export function ChatComposer({
 						</>
 					) : (
 						<>
-							{lastUserPrompt ? (
-								<button
-									type="button"
-									className="inno-composer-action inno-icon-button flex h-9 w-9 shrink-0 rounded-full disabled:opacity-50"
-									title={t("chat.retryLast")}
-									disabled={isUploading}
-									onClick={onRetry}
-								>
-									<RotateCcw size={16} />
-								</button>
-							) : null}
 							<button
 								type="button"
 								className={`inno-composer-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${sendDisabled ? "is-disabled" : ""}`}

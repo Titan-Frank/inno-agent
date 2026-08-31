@@ -1,5 +1,5 @@
 import type { SmartInputRule } from "../../../types/settings.js";
-import type { AttachmentBinding } from "../../../types/chat.js";
+import type { AttachmentBinding, AttachmentRef } from "../../../types/chat.js";
 import type { SlashCommandItem } from "../../../api/commands.js";
 import { KIND_COLORS, activeRules, kindFromName, kindFromRule, nameMatchesRule, sameRuleFormat } from "./kinds.js";
 import {
@@ -29,6 +29,7 @@ import {
 	type DropMatchState,
 	type FlowAtom,
 } from "./drag-utils.js";
+import { getOversizedFiles } from "../../../utils/upload-limits.js";
 
 /**
  * SmartInputEngine — imperative port of the v76 prototype's three-layer
@@ -99,6 +100,7 @@ export interface EngineCallbacks {
 	onBubbleClose?: (slot: Slot, anchor: HTMLElement) => void;
 	/** Filled-chip hover — drives the 250ms hover-open of the status panel. */
 	onChipHover?: (slot: Slot, anchor: HTMLElement, entering: boolean) => void;
+	onUploadLimitExceeded?: (count: number) => void;
 	onWorkspaceHighlight: (paths: string[] | null) => void;
 }
 
@@ -1853,7 +1855,9 @@ export class SmartInputEngine {
 	 * loses the rejected files.
 	 */
 	bindLocalFiles(slot: Slot, files: File[]): void {
-		this.bindAttachmentFiles(slot, files.map((file) => this.localAttachmentItem(file)));
+		const oversized = getOversizedFiles(files);
+		if (oversized.length > 0) this.opts.callbacks.onUploadLimitExceeded?.(oversized.length);
+		this.bindAttachmentFiles(slot, files.filter((file) => !oversized.includes(file)).map((file) => this.localAttachmentItem(file)));
 	}
 
 	/** Bind a mixed in-page batch, returning mismatches to the loose row. */
@@ -1930,6 +1934,97 @@ export class SmartInputEngine {
 		this.ta.focus();
 		this.ta.setSelectionRange(caret + token.length, caret + token.length);
 		this.sync();
+	}
+
+	/**
+	 * Rehydrate persisted file bindings after a user message enters edit mode.
+	 * The session stores the visible text and attachment metadata separately;
+	 * this puts the metadata back into atomic bubbles at the recorded word
+	 * occurrences so the next send produces the same structured payload.
+	 * Bindings whose word no longer exists are returned for the loose row.
+	 */
+	restoreBindings(bindings: AttachmentBinding[]): AttachmentRef[] {
+		if (bindings.length === 0) return [];
+
+		// Editing normally starts from a plain value, but clear any in-progress
+		// bubbles as a safety net when the user edits while a draft is present.
+		if (this.slots.length > 0) {
+			this.restoreAllTokens();
+			for (const slot of this.slots) this.returnFilesToAttachments(slot);
+			this.slots = [];
+		}
+
+		const value = this.ta.value;
+		const findOccurrence = (needle: string, occurrence: number): number => {
+			if (!needle) return -1;
+			const target = Math.max(0, Math.floor(occurrence));
+			let from = 0;
+			for (let index = 0; index <= target; index++) {
+				const found = value.indexOf(needle, from);
+				if (found === -1) return -1;
+				if (index === target) return found;
+				from = found + needle.length;
+			}
+			return -1;
+		};
+
+		const placements: Array<{ start: number; end: number; binding: AttachmentBinding }> = [];
+		const unplaced: AttachmentRef[] = [];
+		for (const binding of bindings) {
+			const start = findOccurrence(binding.word, binding.wordIndex);
+			if (start === -1 || binding.files.length === 0) {
+				unplaced.push(...binding.files);
+				continue;
+			}
+			placements.push({ start, end: start + binding.word.length, binding });
+		}
+		placements.sort((a, b) => a.start - b.start || a.end - b.end);
+
+		const ruleFor = (word: string): SmartInputRule => this.opts.data.getRules().find((rule) => rule.keyword === word) ?? ({
+			id: `restored-${word}`,
+			isPreset: false,
+			keyword: word,
+			extensions: [],
+			allExtensions: true,
+			excludeExtensions: [],
+			enabled: true,
+		} satisfies SmartInputRule);
+		const fileName = (path: string): string => path.split("/").pop() ?? path;
+
+		let nextValue = "";
+		let cursor = 0;
+		for (const placement of placements) {
+			if (placement.start < cursor) {
+				unplaced.push(...placement.binding.files);
+				continue;
+			}
+			nextValue += value.slice(cursor, placement.start);
+			const slot: Slot = {
+				id: this.nextSlotId++,
+				word: placement.binding.word,
+				rule: ruleFor(placement.binding.word),
+				files: [],
+			};
+			for (const file of placement.binding.files) {
+				slot.files.push({
+					uid: this.nextFileId++,
+					name: fileName(file.path),
+					path: file.path,
+					source: "workspace",
+					state: "workspace",
+					pct: 100,
+				});
+			}
+			this.slots.push(slot);
+			nextValue += this.buildToken(slot).token;
+			cursor = placement.end;
+		}
+		nextValue += value.slice(cursor);
+		this.ta.value = nextValue;
+		this.ta.focus({ preventScroll: true });
+		this.ta.setSelectionRange(nextValue.length, nextValue.length);
+		this.sync();
+		return unplaced;
 	}
 
 	// ── token atomicity ─────────────────────────────────────────────────────

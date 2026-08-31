@@ -2,8 +2,7 @@ import "./app.css";
 import "./agent-command-bubbles.css";
 import "./i18n/index.js";
 import "./stores/theme-store.js";
-// Register <markdown-block> explicitly — QuestionDialog depends on it and must not
-// rely on pi-web-ui's side-effect import chain (ChatCenter → MarkdownArtifact → mini-lit).
+// Register <markdown-block> explicitly — QuestionDialog depends on it.
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 
 import { Component, StrictMode, type ErrorInfo, type ReactNode } from "react";

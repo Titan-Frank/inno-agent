@@ -754,6 +754,7 @@
 		"emptySessionHint": "Type a message below to start the conversation.",
 		"uploadFiles": "Upload files to workspace",
 		"uploadHint": "Select an existing workspace or start a conversation before uploading files",
+		"uploadTooLarge": "{{count}} file(s) exceed the {{limit}} limit and were not added.",
 		"attachImage": "Attach image",
 		"attachImageViaOcr": "Attach image (the current model will use OCR)",
 		"selectModel": "Select model",
@@ -970,7 +971,8 @@
 		"fileSelectionOnly": "Select files (folders cannot be selected)",
 		"deleteSelected": "Delete selected files",
 		"uploadSkill": "Upload skill package (.zip/.md) to .skills",
-		"dropToUpload": "Drop files to upload"
+		"dropToUpload": "Drop files to upload",
+		"uploadTooLarge": "{{count}} file(s) exceed the {{limit}} limit and were not uploaded."
 	},
 	"categories": {
 		"教学辅导": "Teaching & Tutoring",

@@ -32,7 +32,6 @@ export function ModeSegmentedControl({
 				onClick={() => selectMode(true)}
 				disabled={togglingMode}
 				aria-pressed={simpleMode}
-				title={simpleMode ? t("mode.currentSimpleClickNormal") : t("mode.switchToSimple")}
 				className={`inno-mode-segmented-control__option ${simpleMode ? "is-active" : ""}`.trim()}
 			>
 				<WandSparkles size={14} strokeWidth={1.8} aria-hidden="true" />
@@ -43,7 +42,6 @@ export function ModeSegmentedControl({
 				onClick={() => selectMode(false)}
 				disabled={togglingMode}
 				aria-pressed={!simpleMode}
-				title={!simpleMode ? t("mode.currentNormalClickSimple") : t("mode.switchToNormal")}
 				className={`inno-mode-segmented-control__option ${!simpleMode ? "is-active" : ""}`.trim()}
 			>
 				<SlidersHorizontal size={14} strokeWidth={1.8} aria-hidden="true" />

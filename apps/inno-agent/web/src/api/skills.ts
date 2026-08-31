@@ -1,4 +1,5 @@
 import { apiFetch } from "./client.js";
+import { assertUploadSize } from "../utils/upload-limits.js";
 import type { SkillInfo, SkillLibraryItem } from "../types/skills.js";
 import type { WorkspaceTreeNode, WorkspaceFileDetail } from "../types/workspace.js";
 
@@ -18,6 +19,7 @@ export async function importSkillFromLibrary(name: string): Promise<SkillInfo> {
 }
 
 export async function uploadSkill(file: File): Promise<SkillInfo> {
+	assertUploadSize(file);
 	const dataBase64 = await new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => {

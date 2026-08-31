@@ -9,7 +9,6 @@ import {
 	type KeyboardEvent,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
-import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { InnoModelInfo, SmartInputSettings } from "../types/settings.js";
 import { chatStore } from "../stores/chat-store.js";
@@ -44,6 +43,7 @@ import {
 import { fetchSlashCommands, type SlashCommandItem } from "../api/commands.js";
 import { WorkspaceContext } from "./chat/WorkspaceContext.js";
 import type { WorkspaceChoice } from "./WorkspaceSwitcher.js";
+import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_MAX_LABEL, getOversizedFiles } from "../utils/upload-limits.js";
 import {
 	flattenWorkspaceFiles,
 	isLargeTextPaste,
@@ -61,6 +61,8 @@ import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
 import type { KwRange } from "./chat/smart-input/rules.js";
 import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
 import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
+import { collapseSkillMessage } from "./chat/skill-message-collapse.js";
+import { parseAgentCommandMessage } from "./chat/agent-command-message.js";
 
 type PresetRefreshStatus = "success" | "error";
 
@@ -97,6 +99,17 @@ function rememberWsChoice(mode: WsMode, existingId: string): void {
 
 const SMART_FILE_PREVIEW_WIDTH = 560;
 const SMART_HOVER_OPEN_MS = 250;
+
+function pendingUploadsFromRefs(refs: AttachmentRef[]): PendingUpload[] {
+	const seen = new Set<string>();
+	return refs.flatMap((file) => {
+		if (!file.path || seen.has(file.path)) return [];
+		seen.add(file.path);
+		// Sent files already live in the session workspace, regardless of whether
+		// they originally came from the workspace or a local upload.
+		return [workspacePendingUpload(file.path)];
+	});
+}
 
 export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile }: ChatCenterProps) {
 	const { t } = useTranslation();
@@ -540,6 +553,17 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		if (smartToastTimer.current !== null) window.clearTimeout(smartToastTimer.current);
 		smartToastTimer.current = window.setTimeout(() => setSmartToast(null), 2200);
 	}, []);
+	const notifyUploadLimitExceeded = useCallback((count: number) => {
+		showSmartToast(t("chat.uploadTooLarge", "有 {{count}} 个文件超过 {{limit}} 上限，未添加。", {
+			count,
+			limit: DEFAULT_UPLOAD_MAX_LABEL,
+		}), true);
+	}, [showSmartToast, t]);
+	const filterUploadFiles = useCallback((files: File[]): File[] => {
+		const oversized = getOversizedFiles(files);
+		if (oversized.length > 0) notifyUploadLimitExceeded(oversized.length);
+		return files.filter((file) => file.size <= DEFAULT_UPLOAD_MAX_BYTES);
+	}, [notifyUploadLimitExceeded]);
 	const saveSmartInput = useCallback((next: SmartInputSettings) => {
 		void settingsStore.saveSmartInput(next).catch(() => {
 			showSmartToast(t("settings.smartInput.saveFailed", "便捷输入设置保存失败"), true);
@@ -725,6 +749,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			if (smartPanelRef.current?.slotId === slot.id) updateSmartPanel(null);
 		},
 		onChipHover: handleChipHover,
+		onUploadLimitExceeded: notifyUploadLimitExceeded,
 		onWorkspaceHighlight: highlightWorkspace,
 	});
 
@@ -1015,13 +1040,43 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		const sessionId = sessions.currentSessionId;
 		if (!sessionId || !message.entryId) return;
 		const content = message.content.trim();
-		if (!content) return;
+		const attachments = message.attachments;
+		const bindingFiles = attachments?.bindings.flatMap((binding) => binding.files) ?? [];
+		const hasAttachments = bindingFiles.length > 0 || Boolean(attachments?.loose.length);
+		if (!content && !hasAttachments) return;
+		const collapsedSkill = collapseSkillMessage(content);
+		const command = collapsedSkill
+			? { command: `skill:${collapsedSkill.skillName}`, args: collapsedSkill.args }
+			: parseAgentCommandMessage(content);
+		const editableText = command ? (command.args ? ` ${command.args}` : "") : content;
 		const currentDraft = inputRef.current?.value ?? draftRef.current;
-		if (currentDraft.trim() && currentDraft.trim() !== content && !window.confirm(t("chat.replaceDraftConfirm"))) return;
+		if (currentDraft.trim() && currentDraft.trim() !== editableText.trim() && !window.confirm(t("chat.replaceDraftConfirm"))) return;
 		editTargetRef.current = { sessionId, entryId: message.entryId };
-		setComposerText(content);
+		setInlineImages([]);
+		setPasteBlocks([]);
+
+		if (command) {
+			setComposerText(editableText);
+			const engine = engineRef.current;
+			const useAgentBubble = Boolean(engine && smartInputEnabled && smartSettings?.allowAgentCommands === true);
+			if (!useAgentBubble || !engine || !engine.insertAgentCommandAsBubble(command.command, 0, 0)) {
+				setComposerText(`/${command.command}${command.args ? ` ${command.args}` : ""}`);
+			}
+		} else {
+			setComposerText(content);
+			const engine = smartInputEnabled ? engineRef.current : null;
+			const unplacedBindings = engine?.restoreBindings(attachments?.bindings ?? []) ?? bindingFiles;
+			const looseFiles = engine ? [...(attachments?.loose ?? []), ...unplacedBindings] : [...bindingFiles, ...(attachments?.loose ?? [])];
+			setUploads(pendingUploadsFromRefs(looseFiles));
+		}
+
+		if (command) {
+			// Agent command bubbles cannot own files, so keep any unusual mixed
+			// command/file message editable by returning every file to the loose row.
+			setUploads(pendingUploadsFromRefs([...bindingFiles, ...(attachments?.loose ?? [])]));
+		}
 		showSmartToast(t("chat.editLoaded"));
-	}, [chat.isSending, isUploading, sessions.currentSessionId, setComposerText, showSmartToast, t]);
+	}, [chat.isSending, isUploading, sessions.currentSessionId, setComposerText, showSmartToast, smartInputEnabled, smartSettings?.allowAgentCommands, t]);
 
 	const slashQuery = slashQueryFromDraft(draftValue);
 	const slashPaletteOpen = slashQuery !== null && slashDismissedFor !== draftValue && !chat.isSending;
@@ -1140,16 +1195,17 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	}, []);
 
 	const addImageFiles = useCallback((files: File[]) => {
-		files.forEach((file) => {
+		filterUploadFiles(files).forEach((file) => {
 			void prepareInlineImage(file).then((prepared) => setInlineImages((prev) => [...prev, prepared]));
 		});
-	}, []);
+	}, [filterUploadFiles]);
 
 	const addLocalFiles = useCallback((files: File[]) => {
-		if (files.length === 0) return;
+		const accepted = filterUploadFiles(files);
+		if (accepted.length === 0) return;
 		setWsError("");
-		setUploads((current) => [...current, ...files.map(localPendingUpload)]);
-	}, []);
+		setUploads((current) => [...current, ...accepted.map(localPendingUpload)]);
+	}, [filterUploadFiles]);
 
 	const showPasteInTextField = useCallback((blockId: number) => {
 		const el = inputRef.current;
@@ -1278,7 +1334,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			modelState={modelState}
 			modelOptions={modelOptions}
 			currentModel={currentModel}
-			smartInputControl={!isWelcome && !simpleMode ? (
+			smartInputControl={((isWelcome && simpleMode) || (!isWelcome && !simpleMode)) ? (
 				<SmartInputControl
 					smartInputSettings={smartSettings}
 					onToggleSmartInput={toggleSmartInput}
@@ -1296,7 +1352,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			hitRef={hitRef}
 			chatIsSending={chat.isSending}
 			canReconnect={chat.canReconnect}
-			lastUserPrompt={chat.lastUserPrompt}
 			isUploading={isUploading}
 			hasSendableContent={hasSendableContent}
 			hasPendingQuestion={Boolean(chat.pendingQuestion)}
@@ -1321,7 +1376,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onSend={handleSend}
 			onStop={handleStop}
 			onReconnect={handleReconnect}
-			onRetry={handleRetry}
 			slashPalette={slashPaletteOpen ? (
 				<SlashCommandPalette
 					entries={slashEntries}
@@ -1356,9 +1410,8 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 
 	const questionHint = chat.pendingQuestion ? <QuestionHint scrollRef={scrollRef} /> : null;
 	const busyBlocker = <BusyBlocker busyBlocker={sessions.busyBlocker} />;
-	const smartToastNode = smartToast && typeof document !== "undefined" ? createPortal(
-		<div className={`inno-smart-toast ${smartToast.error ? "is-error" : ""}`} role="status">{smartToast.message}</div>,
-		document.body,
+	const smartToastNode = smartToast ? (
+		<div className={`inno-smart-toast ${smartToast.error ? "is-error" : ""}`} role="status">{smartToast.message}</div>
 	) : null;
 	const smartOverlayNode = smartInputEnabled ? (
 		<SmartInputOverlay
@@ -1390,7 +1443,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	if (isWelcome) {
 		return (
 			<>
-			{smartToastNode}
 			{smartOverlayNode}
 			<ChatWelcome
 				welcomeLayoutRef={welcomeLayoutRef}
@@ -1399,6 +1451,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 				onToggleMode={toggleMode}
 				questionHint={questionHint}
 				busyBlocker={busyBlocker}
+				smartToast={smartToastNode}
 				composer={renderComposer(t("chat.welcomePlaceholder"))}
 				workspaceContext={workspaceContext}
 				presets={presets}
@@ -1421,7 +1474,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 
 	return (
 		<>
-		{smartToastNode}
 		{smartOverlayNode}
 		<ChatConversation
 			chat={chat}
@@ -1433,10 +1485,13 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onPauseAutoScroll={pauseAutoScroll}
 			questionHint={questionHint}
 			busyBlocker={busyBlocker}
+			smartToast={smartToastNode}
 			composer={renderComposer(t("chat.composerPlaceholder"))}
 			onOpenAttachment={openChatAttachmentPreview}
 			onOpenSkill={openSkillPanel}
 			onEditMessage={handleEditMessage}
+			canRetry={Boolean(chat.lastUserPrompt) && !chat.isSending && !chat.pendingQuestion && !isUploading}
+			onRetry={handleRetry}
 			wsError={wsError}
 		/>
 		</>

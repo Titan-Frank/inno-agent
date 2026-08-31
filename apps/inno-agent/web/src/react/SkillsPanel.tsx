@@ -544,7 +544,6 @@ export function SkillsPanel({ dndManager }: { dndManager: DragDropManager }) {
 						</button>
 					</div>
 				</div>
-
 				{/* Search (visible when there's anything to search through) */}
 				{state.skills.length > 0 ? (
 					<div className="flex items-center gap-2 border-b border-[var(--inno-border)] px-3 py-2">

@@ -292,6 +292,31 @@ describe("SmartInputEngine token editing", () => {
 		expect(openedAnchorIsChip).toBe(true);
 	});
 
+	it("rehydrates persisted file bindings at their recorded word occurrence", () => {
+		const { engine, textarea, hitLayer } = makeEngine("请阅读 pdf 和 pdf");
+		engine.attach();
+
+		const unplaced = engine.restoreBindings([{
+			word: "pdf",
+			wordIndex: 1,
+			files: [{ path: "slides.pdf", kind: "pdf", source: "upload" }],
+		}]);
+
+		expect(unplaced).toEqual([]);
+		expect(engine.slots).toHaveLength(1);
+		expect(engine.slots[0]?.files[0]).toMatchObject({
+			name: "slides.pdf",
+			path: "slides.pdf",
+			state: "workspace",
+		});
+		expect(engine.buildOutgoing()).toMatchObject({
+			visibleText: "请阅读 pdf 和 pdf",
+			readyBindings: [{ word: "pdf", wordIndex: 1, files: [{ path: "slides.pdf" }] }],
+		});
+		expect(textarea.value).not.toBe("请阅读 pdf 和 pdf");
+		expect(hitLayer.querySelector(".inno-smart-chip")).not.toBeNull();
+	});
+
 	it("opens the skill picker for 技能 and deletes the selected command as one bubble", () => {
 		let keyword: KwRange | null = null;
 		const { engine, textarea, hitLayer } = makeEngine(

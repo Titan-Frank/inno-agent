@@ -12,6 +12,7 @@ import {
 	inlineWorkspaceHtml,
 } from "../api/workspace.js";
 import type { WorkspaceFileDetail, WorkspaceTree } from "../types/workspace.js";
+import { DEFAULT_UPLOAD_MAX_BYTES, getOversizedFiles, UploadLimitError } from "../utils/upload-limits.js";
 
 export interface StreamingWorkspacePreview {
 	id: string;
@@ -306,11 +307,19 @@ class WorkspaceStoreImpl extends EventEmitter<WorkspaceStoreEvents> {
 	}
 
 	async uploadFiles(parentPath: string, fileList: FileList | File[]): Promise<void> {
+		const files = Array.from(fileList);
+		const oversized = getOversizedFiles(files);
+		if (oversized.length > 0) {
+			this.isMutating = false;
+			this.error = new UploadLimitError(oversized[0].name).message;
+			this.emit("change", undefined);
+			return;
+		}
 		this.isMutating = true;
 		this.emit("change", undefined);
 		try {
 			const items: Array<{ path: string; dataBase64: string }> = [];
-			for (const file of Array.from(fileList)) {
+			for (const file of files) {
 				const buffer = await file.arrayBuffer();
 				const bytes = new Uint8Array(buffer);
 				let binary = "";
@@ -331,6 +340,12 @@ class WorkspaceStoreImpl extends EventEmitter<WorkspaceStoreEvents> {
 
 	/** Install a skill package (.zip / .md) into the workspace's private `.skills` dir. */
 	async uploadSkillPackage(file: File): Promise<void> {
+		if (file.size > DEFAULT_UPLOAD_MAX_BYTES) {
+			this.isMutating = false;
+			this.error = new UploadLimitError(file.name).message;
+			this.emit("change", undefined);
+			return;
+		}
 		this.isMutating = true;
 		this.error = "";
 		this.emit("change", undefined);

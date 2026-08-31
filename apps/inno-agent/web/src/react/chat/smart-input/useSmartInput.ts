@@ -22,6 +22,7 @@ export interface UseSmartInputOptions {
 	onBubbleContextMenu: EngineCallbacks["onBubbleContextMenu"];
 	onBubbleClose?: EngineCallbacks["onBubbleClose"];
 	onChipHover?: EngineCallbacks["onChipHover"];
+	onUploadLimitExceeded?: EngineCallbacks["onUploadLimitExceeded"];
 	onWorkspaceHighlight: EngineCallbacks["onWorkspaceHighlight"];
 }
 
@@ -105,6 +106,7 @@ export function useSmartInput(options: UseSmartInputOptions) {
 				onBubbleContextMenu: (...args) => optionsRef.current.onBubbleContextMenu(...args),
 				onBubbleClose: (...args) => optionsRef.current.onBubbleClose?.(...args),
 				onChipHover: (...args) => optionsRef.current.onChipHover?.(...args),
+				onUploadLimitExceeded: (...args) => optionsRef.current.onUploadLimitExceeded?.(...args),
 				onWorkspaceHighlight: (paths) => optionsRef.current.onWorkspaceHighlight(paths),
 			},
 		});
