@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { Check } from "lucide-react";
@@ -159,6 +159,29 @@ export function QuestionDialog({ pending }: { pending: PendingQuestion }) {
 	// 每个 tab 的自定义文字草稿，提升到外层避免切换 tab 丢失
 	const [customDrafts, setCustomDrafts] = useState<Map<number, string>>(new Map());
 
+	// Keep the card at its tallest observed height across question tabs.
+	// The dialog sits at the bottom of the conversation, so any height change
+	// (switching to a taller/shorter question, hovering preview options)
+	// triggers the stick-to-bottom pin and visibly shifts the viewport
+	// mid-interaction — the same mechanism as the streaming-bubble watermark.
+	const heightWatermarkRef = useRef(0);
+	const cardObserverRef = useRef<ResizeObserver | null>(null);
+	const cardRef = useCallback((el: HTMLDivElement | null) => {
+		cardObserverRef.current?.disconnect();
+		cardObserverRef.current = null;
+		if (!el) return;
+		heightWatermarkRef.current = 0;
+		el.style.minHeight = "";
+		const observer = new ResizeObserver(() => {
+			const height = el.offsetHeight;
+			if (height > heightWatermarkRef.current) heightWatermarkRef.current = height;
+			const minHeight = `${heightWatermarkRef.current}px`;
+			if (el.style.minHeight !== minHeight) el.style.minHeight = minHeight;
+		});
+		observer.observe(el);
+		cardObserverRef.current = observer;
+	}, []);
+
 	const handleAnswer = useCallback(
 		(a: QuestionAnswer) => {
 			setAnswers((prev) => {
@@ -228,7 +251,7 @@ export function QuestionDialog({ pending }: { pending: PendingQuestion }) {
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.3, ease: "easeOut" }}
 		>
-			<div className="w-full max-w-[36.5rem] rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
+			<div ref={cardRef} className="w-full max-w-[36.5rem] rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-surface)] px-4 py-3 shadow-sm">
 				{questions.length > 1 ? (
 					<div className="mb-3 flex gap-1">
 						{questions.map((q, i) => (
