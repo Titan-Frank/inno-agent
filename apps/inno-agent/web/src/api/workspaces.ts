@@ -1,4 +1,5 @@
 import { apiFetch } from "./client.js";
+import { arrayBufferToBase64 } from "./uploads.js";
 
 export interface WorkspaceMeta {
 	id: string;
@@ -23,6 +24,15 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Work
 	return apiFetch<WorkspaceMeta>("/api/workspaces", {
 		method: "POST",
 		body: JSON.stringify(input),
+	});
+}
+
+/** Import a workspace from a .zip archive (e.g. an exported preset workspace bundle). */
+export async function importWorkspaceZip(file: File, name?: string): Promise<WorkspaceMeta> {
+	const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+	return apiFetch<WorkspaceMeta>("/api/workspaces/import", {
+		method: "POST",
+		body: JSON.stringify({ fileName: file.name, dataBase64, name }),
 	});
 }
 

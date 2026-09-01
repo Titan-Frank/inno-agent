@@ -2,6 +2,7 @@ import { EventEmitter } from "./event-emitter.js";
 import {
 	createWorkspace,
 	deleteWorkspace,
+	importWorkspaceZip,
 	listWorkspaces,
 	renameWorkspace,
 	type CreateWorkspaceInput,
@@ -41,6 +42,13 @@ class WorkspacesStoreImpl extends EventEmitter<WorkspacesStoreEvents> {
 
 	async create(input: CreateWorkspaceInput): Promise<WorkspaceMeta> {
 		const ws = await createWorkspace(input);
+		this.workspaces = [...this.workspaces, ws];
+		this.emit("change", undefined);
+		return ws;
+	}
+
+	async importFromZip(file: File): Promise<WorkspaceMeta> {
+		const ws = await importWorkspaceZip(file);
 		this.workspaces = [...this.workspaces, ws];
 		this.emit("change", undefined);
 		return ws;

@@ -361,6 +361,27 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		}
 	}, [activeWorkspaceId, chat.isSending, isUploading, isWelcome, sessions.currentSessionId, t, workspaces.list]);
 
+	// Import a workspace from a .zip archive: upload first, then route the
+	// freshly created workspace through the normal selection flow (welcome
+	// draft state or session binding).
+	const handleWorkspaceImport = useCallback(async (file: File) => {
+		setWsError("");
+		if (!isWelcome && !sessions.currentSessionId) return;
+		if (chat.isSending || isUploading) {
+			setWsError(t("chat.workspaceBusy"));
+			return;
+		}
+		setIsSwitchingWorkspace(true);
+		try {
+			const ws = await workspacesStore.importFromZip(file);
+			await handleWorkspaceChange({ kind: "workspace", workspaceId: ws.id });
+		} catch (error) {
+			setWsError(error instanceof Error ? error.message : t("chat.workspaceSwitchFailed"));
+		} finally {
+			setIsSwitchingWorkspace(false);
+		}
+	}, [chat.isSending, handleWorkspaceChange, isUploading, isWelcome, sessions.currentSessionId, t]);
+
 	const tempWorkspaceId = workspaces.list.find((workspace) => workspace.isTemp)?.id;
 	const uploadWorkspaceId: string | undefined | null = isWelcome
 		? (simpleMode || wsMode === "temp"
@@ -1400,6 +1421,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 				busy={isSwitchingWorkspace}
 				disabled={isUploading || Boolean(chat.pendingQuestion)}
 				onChange={handleWorkspaceChange}
+				onImport={handleWorkspaceImport}
 				smartInputSettings={smartSettings}
 				onToggleSmartInput={toggleSmartInput}
 				onToggleSmartInputRule={toggleSmartInputRule}

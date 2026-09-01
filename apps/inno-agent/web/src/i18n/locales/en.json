@@ -6,6 +6,7 @@
 		"searchPlaceholder": "Search workspaces",
 		"newWorkspace": "New workspace",
 		"newWorkspacePlaceholder": "Enter a workspace name",
+		"importWorkspace": "Import workspace",
 		"tempWorkspace": "Use temporary workspace",
 		"tempWorkspaceLabel": "Temporary workspace",
 		"noResults": "No workspaces found",
