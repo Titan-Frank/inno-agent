@@ -1007,7 +1007,10 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 				}
 
 				resetComposer();
-				engine?.postSendCleanup();
+				// Creating a session can remount the composer (welcome → chat), so
+				// the engine captured before the async work may no longer own the
+				// visible mirror. Clean up the currently mounted engine instead.
+				engineRef.current?.postSendCleanup();
 				setUploads((current) => current.filter((entry) => entry.status === "failed"));
 				setInlineImages([]);
 				setWsError("");
