@@ -69,7 +69,7 @@ import { applyRuntimeEnvironment, parseRuntimeArgs, resolveRuntimePaths } from "
 import { installProcessFallbacks } from "./utils/process-fallback.js";
 import { questionBridge } from "./agent/question-bridge.js";
 import { streamRegistry } from "./chat/stream-registry.js";
-import { DEFAULT_WORKSPACE_ID, WorkspaceRegistry } from "./workspace/workspace-registry.js";
+import { DEFAULT_WORKSPACE_ID, WorkspaceRegistry, type WorkspaceMeta } from "./workspace/workspace-registry.js";
 import type { RemoteContentSource } from "./content-source/index.js";
 import { ContentHubCatalog } from "./content-source/catalog-service.js";
 import { RunRecordStore } from "./terminal/run-record-store.js";
@@ -693,6 +693,120 @@ function installSkillMarkdown(fileName: string, data: Buffer, targetRoot: string
 	ensureDir(skillDir);
 	writeText(join(skillDir, "SKILL.md"), skill.content);
 	return { name: skill.name, filePath: join(skillDir, "SKILL.md") };
+}
+
+// ---------------------------------------------------------------------------
+// Workspace zip import
+// ---------------------------------------------------------------------------
+
+/** Entries that are archive noise, not workspace content. */
+function isImportNoise(name: string): boolean {
+	return name === "__MACOSX" || name === ".DS_Store" || name.startsWith("._");
+}
+
+/**
+ * Locate the actual content root inside an extracted workspace archive:
+ * a single top-level folder (the common "folder zipped by Finder" shape) or
+ * the extract dir itself when files sit at the archive root. Returns null
+ * when the archive has no importable content.
+ */
+function findWorkspaceContentRoot(extractDir: string): string | null {
+	const entries = readdirSync(extractDir, { withFileTypes: true })
+		.filter((entry) => !isImportNoise(entry.name));
+	if (entries.length === 0) return null;
+	if (entries.length === 1 && entries[0].isDirectory()) {
+		const nested = join(extractDir, entries[0].name);
+		const inner = readdirSync(nested, { withFileTypes: true })
+			.filter((entry) => !isImportNoise(entry.name));
+		return inner.length > 0 ? nested : null;
+	}
+	return extractDir;
+}
+
+/**
+ * Recursively copy imported content into the new workspace directory.
+ * File-by-file (not cpSync) for robustness against asar-unpacked paths in
+ * Electron packaged builds. `preset.json` is hub metadata, not content —
+ * it only contributes the default workspace name and is not copied.
+ */
+function copyWorkspaceImportContents(sourceDir: string, targetDir: string): void {
+	ensureDir(targetDir);
+	for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+		if (isImportNoise(entry.name) || entry.name === "preset.json") continue;
+		const source = join(sourceDir, entry.name);
+		const target = join(targetDir, entry.name);
+		if (entry.isDirectory()) {
+			copyWorkspaceImportContents(source, target);
+		} else if (entry.isFile()) {
+			writeFileSync(target, readFileSync(source));
+		}
+	}
+}
+
+/**
+ * Import a workspace from a zip archive (e.g. an exported preset workspace
+ * bundle). Extraction reuses the skill-zip validation (no absolute paths or
+ * `..` entries), then a fresh workspace is created and seeded with the
+ * archive's content. Workspace name precedence: explicit `name` →
+ * `preset.json` name → top-level folder name → zip file name.
+ */
+function importWorkspaceZip(fileName: string, data: Buffer, name?: string): WorkspaceMeta {
+	const fallbackName = basename(fileName, extname(fileName)).trim() || "导入的工作区";
+	const tempRoot = join(tmpdir(), `inno-ws-import-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	const zipPath = join(tempRoot, "workspace.zip");
+	const extractDir = join(tempRoot, "extract");
+	ensureDir(extractDir);
+	writeFileSync(zipPath, data);
+
+	try {
+		validateZipEntries(zipPath);
+		if (process.platform === "win32") {
+			const ps = `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+				`[System.IO.Compression.ZipFile]::ExtractToDirectory(` +
+				`'${zipPath.replace(/'/g, "''")}', '${extractDir.replace(/'/g, "''")}')`;
+			const unzipResult = spawnSync("powershell.exe", ["-NoProfile", "-Command", ps], { encoding: "utf-8" });
+			if (unzipResult.status !== 0) {
+				throw new Error((unzipResult.stderr || "").trim() || "Unable to unzip workspace archive");
+			}
+		} else {
+			const unzipResult = spawnSync("/usr/bin/unzip", ["-qq", "-o", zipPath, "-d", extractDir], { encoding: "utf-8" });
+			if (unzipResult.status !== 0) {
+				throw new Error((unzipResult.stderr || "").trim() || "Unable to unzip workspace archive");
+			}
+		}
+
+		const contentRoot = findWorkspaceContentRoot(extractDir);
+		if (!contentRoot) {
+			throw new Error("The archive does not contain any importable files");
+		}
+
+		// A bundled preset.json contributes the default display name.
+		let presetName = "";
+		const presetJsonPath = join(contentRoot, "preset.json");
+		if (existsSync(presetJsonPath) && statSync(presetJsonPath).isFile()) {
+			try {
+				const meta = JSON.parse(readFileSync(presetJsonPath, "utf-8")) as { name?: unknown };
+				if (typeof meta.name === "string") presetName = meta.name.trim();
+			} catch {
+				// Malformed preset.json is ignored — it is optional metadata.
+			}
+		}
+
+		const wsName = name?.trim()
+			|| presetName
+			|| (contentRoot !== extractDir ? basename(contentRoot).trim() : "")
+			|| fallbackName;
+		const ws = workspaceRegistry.createWorkspace({ name: wsName });
+		const destDir = workspaceRegistry.resolveWorkspaceDir(ws.id);
+		if (!destDir) {
+			throw new Error(`Failed to resolve workspace dir for ${ws.id}`);
+		}
+		copyWorkspaceImportContents(contentRoot, destDir);
+		logger.info({ workspaceId: ws.id, fileName }, "imported workspace from zip archive");
+		return ws;
+	} finally {
+		rmSync(tempRoot, { recursive: true, force: true });
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,7 +1492,7 @@ const server = createServer(async (req, res) => {
 		// --- Workspace API + registry + session binding (extracted to server/routes/workspaces.ts) ---
 		if (await handleWorkspacesRoutes(req, res, method, url, {
 			workspaceRegistry, dataDir, paths,
-			installSkillZip, installSkillMarkdown, scheduleSkillsReload,
+			installSkillZip, installSkillMarkdown, scheduleSkillsReload, importWorkspaceZip,
 			sessionFileFromId, releaseQueueFromQuestionBlockedTurn, runQueueOpWithTimeout,
 		})) return;
 

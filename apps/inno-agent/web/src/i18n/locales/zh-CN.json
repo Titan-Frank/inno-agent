@@ -6,6 +6,7 @@
 		"searchPlaceholder": "搜索工作区",
 		"newWorkspace": "新建工作区",
 		"newWorkspacePlaceholder": "输入工作区名称",
+		"importWorkspace": "导入工作区",
 		"tempWorkspace": "使用临时工作区",
 		"tempWorkspaceLabel": "临时工作区",
 		"noResults": "没有找到工作区",

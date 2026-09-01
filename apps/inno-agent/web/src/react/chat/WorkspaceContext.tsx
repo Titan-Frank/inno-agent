@@ -11,6 +11,8 @@ interface WorkspaceContextProps {
 	busy?: boolean;
 	disabled?: boolean;
 	onChange: (choice: WorkspaceChoice) => void;
+	/** Import a workspace from a .zip archive picked via the menu action. */
+	onImport?: (file: File) => void;
 	smartInputSettings?: SmartInputSettings;
 	onToggleSmartInput: () => void;
 	onToggleSmartInputRule: (ruleId: string) => void;
@@ -27,6 +29,7 @@ export function WorkspaceContext({
 	busy = false,
 	disabled = false,
 	onChange,
+	onImport,
 	smartInputSettings,
 	onToggleSmartInput,
 	onToggleSmartInputRule,
@@ -43,6 +46,7 @@ export function WorkspaceContext({
 				busy={busy}
 				disabled={disabled}
 				onChange={onChange}
+				onImport={onImport}
 			/>
 			<SmartInputControl
 				smartInputSettings={smartInputSettings}

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, ChevronUp, Folder, Plus, Search, X, Ban, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Folder, FolderInput, Plus, Search, X, Ban, LoaderCircle } from "lucide-react";
 import type { WorkspaceMeta } from "../api/workspaces.js";
 import { PopoverSurface } from "./ui/PopoverSurface.js";
 
@@ -23,6 +23,8 @@ interface WorkspaceSwitcherProps {
 	disabled?: boolean;
 	className?: string;
 	onChange: (choice: WorkspaceChoice) => void;
+	/** Import a workspace from a .zip archive picked via the menu action. */
+	onImport?: (file: File) => void;
 }
 
 /**
@@ -39,11 +41,13 @@ export function WorkspaceSwitcher({
 	disabled = false,
 	className = "",
 	onChange,
+	onImport,
 }: WorkspaceSwitcherProps) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const searchRef = useRef<HTMLInputElement | null>(null);
 	const createInputRef = useRef<HTMLInputElement | null>(null);
+	const importInputRef = useRef<HTMLInputElement | null>(null);
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [creating, setCreating] = useState(false);
@@ -116,6 +120,21 @@ export function WorkspaceSwitcher({
 		if (!name) return;
 		choose({ kind: "new", name });
 		setDraftName("");
+	};
+
+	const pickImportArchive = () => {
+		// Close the popover first: the native file dialog blocks the main
+		// thread, and the outside-pointer-down listener would otherwise fire
+		// on the dialog itself.
+		close();
+		importInputRef.current?.click();
+	};
+
+	const handleImportFile = (event: ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		// Reset so picking the same archive twice still fires change.
+		event.target.value = "";
+		if (file && onImport) onImport(file);
 	};
 
 	return (
@@ -229,6 +248,12 @@ export function WorkspaceSwitcher({
 								<span className="inno-workspace-action-icon" aria-hidden="true"><Plus size={15} /></span>
 								<span>{t("workspace.newWorkspace")}</span>
 							</button>
+							{onImport ? (
+								<button type="button" className="inno-workspace-action" role="menuitem" onClick={pickImportArchive}>
+									<span className="inno-workspace-action-icon" aria-hidden="true"><FolderInput size={15} /></span>
+									<span>{t("workspace.importWorkspace")}</span>
+								</button>
+							) : null}
 							<button
 								type="button"
 								className={`inno-workspace-action ${resolvedKind === "temp" ? "is-selected" : ""}`}
@@ -243,6 +268,15 @@ export function WorkspaceSwitcher({
 						</>
 					)}
 				</PopoverSurface>
+			) : null}
+			{onImport ? (
+				<input
+					ref={importInputRef}
+					type="file"
+					accept=".zip,application/zip,application/x-zip-compressed"
+					hidden
+					onChange={handleImportFile}
+				/>
 			) : null}
 		</div>
 	);

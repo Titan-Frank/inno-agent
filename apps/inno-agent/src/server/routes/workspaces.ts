@@ -21,7 +21,7 @@ import { logger } from "../../logger.js";
 import type { RuntimePaths } from "../../runtime.js";
 import { ensureDir } from "../../storage/file-store.js";
 import { isWithin } from "../../utils/path-safety.js";
-import { TEMP_WORKSPACE_ID, type WorkspaceRegistry } from "../../workspace/workspace-registry.js";
+import { TEMP_WORKSPACE_ID, type WorkspaceMeta, type WorkspaceRegistry } from "../../workspace/workspace-registry.js";
 import {
 	canonicalTreeRoot,
 	contentDispositionAttachment,
@@ -47,6 +47,7 @@ export interface WorkspacesRouteContext {
 	paths: RuntimePaths;
 	installSkillZip: (fileName: string, data: Buffer, targetRoot?: string) => { name: string; filePath: string };
 	installSkillMarkdown: (fileName: string, data: Buffer, targetRoot?: string) => { name: string; filePath: string };
+	importWorkspaceZip: (fileName: string, data: Buffer, name?: string) => WorkspaceMeta;
 	scheduleSkillsReload: () => void;
 	sessionFileFromId: (sessionDir: string, id: string) => string | null;
 	releaseQueueFromQuestionBlockedTurn: (sessionId: string) => void;
@@ -306,6 +307,7 @@ export async function handleWorkspacesRoutes(
 		paths,
 		installSkillZip,
 		installSkillMarkdown,
+		importWorkspaceZip,
 		scheduleSkillsReload,
 		sessionFileFromId,
 		releaseQueueFromQuestionBlockedTurn,
@@ -741,6 +743,28 @@ export async function handleWorkspacesRoutes(
 		} catch (err) {
 			logger.error({ err }, "failed to create workspace");
 			json(res, 400, { error: err instanceof Error ? err.message : "Failed to create workspace" });
+		}
+		return true;
+	}
+
+	// Import a workspace from a zip archive (e.g. an exported preset workspace
+	// bundle): extracts the archive and seeds a fresh workspace with its files.
+	if (method === "POST" && url === "/api/workspaces/import") {
+		const body = (await readBody(req)) as Record<string, unknown>;
+		const fileName = typeof body.fileName === "string" ? body.fileName : "";
+		const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
+		const name = typeof body.name === "string" ? body.name : undefined;
+		if (!fileName || !dataBase64) { json(res, 400, { error: "Missing fileName or dataBase64" }); return true; }
+		if (extname(fileName).toLowerCase() !== ".zip") {
+			json(res, 400, { error: "Only .zip workspace archives are supported" });
+			return true;
+		}
+		try {
+			const ws = importWorkspaceZip(fileName, Buffer.from(dataBase64, "base64"), name);
+			json(res, 201, ws);
+		} catch (err) {
+			logger.error({ err }, "failed to import workspace archive");
+			json(res, 400, { error: err instanceof Error ? err.message : "Failed to import workspace archive" });
 		}
 		return true;
 	}
