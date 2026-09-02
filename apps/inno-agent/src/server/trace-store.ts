@@ -36,6 +36,42 @@ export function resetTraceStoreForTests(): void {
 	cache = null;
 }
 
+/** Delta event types carry their incremental payload in these fields. */
+const DELTA_FIELDS: Record<string, string> = {
+	text_delta: "delta",
+	thinking_delta: "delta",
+	tool_call_delta: "argsDelta",
+};
+
+/**
+ * Collapse runs of consecutive same-kind deltas into a single event before
+ * persistence. A multi-thousand-token turn would otherwise write one envelope
+ * per streamed chunk (hundreds of KB per turn into a single growing file).
+ * Reducers accumulate deltas by concatenation, so replay produces the exact
+ * same steps from the compacted sequence. The run keeps the first envelope's
+ * eventId/occurredAt so ordering is unchanged.
+ */
+function compactDeltaEvents(events: SessionTraceEvent[]): SessionTraceEvent[] {
+	const out: SessionTraceEvent[] = [];
+	for (const item of events) {
+		const type = item.event?.type as string | undefined;
+		const field = type ? DELTA_FIELDS[type] : undefined;
+		const prev = out[out.length - 1];
+		const prevField = prev?.event?.type ? DELTA_FIELDS[prev.event.type as string] : undefined;
+		if (
+			field && prev && prevField === field
+			&& (type !== "tool_call_delta" || prev.event?.toolCallId === item.event?.toolCallId)
+			&& typeof prev.event?.[prevField!] === "string"
+			&& typeof item.event?.[field] === "string"
+		) {
+			prev.event = { ...prev.event, [field]: (prev.event[prevField!] as string) + (item.event[field] as string) };
+			continue;
+		}
+		out.push({ ...item, event: { ...item.event } });
+	}
+	return out;
+}
+
 export function recordSessionTrace(
 	dataDir: string,
 	sessionId: string,
@@ -60,7 +96,7 @@ export function recordSessionTrace(
 		...(entry.assistantMessageId ? { assistantMessageId: entry.assistantMessageId } : {}),
 		...(entry.startedAt ? { startedAt: entry.startedAt } : {}),
 		...(entry.finishedAt ? { finishedAt: entry.finishedAt } : {}),
-		events: normalizedEvents,
+		events: compactDeltaEvents(normalizedEvents),
 	};
 	metadata[sessionId] = [
 		...(metadata[sessionId] ?? []).filter((item) => item.assistantIndex !== entry.assistantIndex),
