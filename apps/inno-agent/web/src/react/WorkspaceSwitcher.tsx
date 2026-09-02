@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, ChevronUp, Folder, FolderInput, Plus, Search, X, Ban, LoaderCircle } from "lucide-react";
 import type { WorkspaceMeta } from "../api/workspaces.js";
@@ -27,6 +28,18 @@ interface WorkspaceSwitcherProps {
 	onImport?: (file: File) => void;
 }
 
+type WorkspaceMenuPlacement = "above" | "below";
+
+interface WorkspaceMenuPosition {
+	left: number;
+	top: number;
+	maxHeight: number;
+	placement: WorkspaceMenuPlacement;
+}
+
+const WORKSPACE_MENU_MARGIN = 8;
+const WORKSPACE_MENU_MAX_HEIGHT = 390;
+
 /**
  * Compact workspace context selector shared by the welcome view and active
  * conversations. It deliberately owns only the popover UI; session binding
@@ -45,6 +58,8 @@ export function WorkspaceSwitcher({
 }: WorkspaceSwitcherProps) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement | null>(null);
+	const triggerRef = useRef<HTMLButtonElement | null>(null);
+	const menuRef = useRef<HTMLDivElement | null>(null);
 	const searchRef = useRef<HTMLInputElement | null>(null);
 	const createInputRef = useRef<HTMLInputElement | null>(null);
 	const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -52,6 +67,12 @@ export function WorkspaceSwitcher({
 	const [query, setQuery] = useState("");
 	const [creating, setCreating] = useState(false);
 	const [draftName, setDraftName] = useState(newWorkspaceName);
+	const [menuPosition, setMenuPosition] = useState<WorkspaceMenuPosition>({
+		left: WORKSPACE_MENU_MARGIN,
+		top: WORKSPACE_MENU_MARGIN,
+		maxHeight: WORKSPACE_MENU_MAX_HEIGHT,
+		placement: "above",
+	});
 
 	const selectedWorkspace = useMemo(
 		() => (selectedWorkspaceId ? workspaces.find((workspace) => workspace.id === selectedWorkspaceId) : undefined),
@@ -78,7 +99,9 @@ export function WorkspaceSwitcher({
 	useEffect(() => {
 		if (!open) return;
 		const closeOnPointerDown = (event: PointerEvent) => {
-			if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+			const target = event.target as Node;
+			if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+			setOpen(false);
 		};
 		const closeOnEscape = (event: KeyboardEvent) => {
 			if (event.key === "Escape") {
@@ -93,6 +116,59 @@ export function WorkspaceSwitcher({
 			window.removeEventListener("keydown", closeOnEscape);
 		};
 	}, [open]);
+
+	const repositionMenu = useCallback(() => {
+		if (!open) return;
+		const trigger = triggerRef.current;
+		const menu = menuRef.current;
+		if (!trigger || !menu || typeof window === "undefined") return;
+
+		const triggerRect = trigger.getBoundingClientRect();
+		const aboveSpace = Math.max(0, triggerRect.top - WORKSPACE_MENU_MARGIN);
+		const belowSpace = Math.max(0, window.innerHeight - triggerRect.bottom - WORKSPACE_MENU_MARGIN);
+		const placement: WorkspaceMenuPlacement = aboveSpace >= belowSpace ? "above" : "below";
+		const availableSpace = placement === "above" ? aboveSpace : belowSpace;
+		const maxHeight = Math.max(1, Math.min(WORKSPACE_MENU_MAX_HEIGHT, availableSpace));
+
+		// Apply the available height before measuring so the first layout already
+		// reserves a scrollable list instead of painting past the viewport.
+		menu.style.maxHeight = `${maxHeight}px`;
+		const menuRect = menu.getBoundingClientRect();
+		const width = Math.min(menuRect.width || 300, Math.max(1, window.innerWidth - WORKSPACE_MENU_MARGIN * 2));
+		const height = Math.min(menuRect.height || maxHeight, maxHeight);
+		const maxLeft = Math.max(WORKSPACE_MENU_MARGIN, window.innerWidth - width - WORKSPACE_MENU_MARGIN);
+		const left = Math.max(WORKSPACE_MENU_MARGIN, Math.min(triggerRect.left, maxLeft));
+		const preferredTop = placement === "above"
+			? triggerRect.top - height - WORKSPACE_MENU_MARGIN
+			: triggerRect.bottom + WORKSPACE_MENU_MARGIN;
+		const maxTop = Math.max(WORKSPACE_MENU_MARGIN, window.innerHeight - height - WORKSPACE_MENU_MARGIN);
+		const top = Math.max(WORKSPACE_MENU_MARGIN, Math.min(preferredTop, maxTop));
+
+		setMenuPosition((previous) => (
+			previous.left === left
+				&& previous.top === top
+				&& previous.maxHeight === maxHeight
+				&& previous.placement === placement
+				? previous
+				: { left, top, maxHeight, placement }
+		));
+	}, [open]);
+
+	useLayoutEffect(() => {
+		if (!open) return;
+		repositionMenu();
+		const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(repositionMenu);
+		for (const target of [triggerRef.current, menuRef.current]) {
+			if (target) resizeObserver?.observe(target);
+		}
+		window.addEventListener("resize", repositionMenu);
+		document.addEventListener("scroll", repositionMenu, true);
+		return () => {
+			resizeObserver?.disconnect();
+			window.removeEventListener("resize", repositionMenu);
+			document.removeEventListener("scroll", repositionMenu, true);
+		};
+	}, [creating, open, repositionMenu, visibleWorkspaces.length]);
 
 	useEffect(() => {
 		if (!open) {
@@ -141,6 +217,7 @@ export function WorkspaceSwitcher({
 		<div ref={rootRef} className={`inno-workspace-switcher ${className}`}>
 			<button
 				type="button"
+				ref={triggerRef}
 				className="inno-workspace-switcher-trigger"
 				disabled={disabled || busy}
 				aria-haspopup="menu"
@@ -155,8 +232,23 @@ export function WorkspaceSwitcher({
 				{busy ? <LoaderCircle size={13} className="inno-workspace-switcher-spinner" aria-hidden="true" /> : open ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
 			</button>
 
-			{open ? (
-				<PopoverSurface className="inno-workspace-switcher-menu" role="menu" aria-label={t("workspace.switch")}>
+			{open && typeof document !== "undefined" ? createPortal(
+				<PopoverSurface
+					ref={menuRef}
+					className="inno-workspace-switcher-menu"
+					role="menu"
+					aria-label={t("workspace.switch")}
+					style={{
+						position: "fixed",
+						left: menuPosition.left,
+						top: menuPosition.top,
+						right: "auto",
+						bottom: "auto",
+						maxHeight: menuPosition.maxHeight,
+						zIndex: 100,
+						transformOrigin: menuPosition.placement === "above" ? "bottom left" : "top left",
+					}}
+				>
 					{creating ? (
 						<div className="inno-workspace-create-form">
 							<div className="inno-workspace-menu-heading">{t("workspace.newWorkspace")}</div>
@@ -267,7 +359,8 @@ export function WorkspaceSwitcher({
 							</button>
 						</>
 					)}
-				</PopoverSurface>
+				</PopoverSurface>,
+				document.body,
 			) : null}
 			{onImport ? (
 				<input

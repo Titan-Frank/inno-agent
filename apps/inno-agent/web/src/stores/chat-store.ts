@@ -1,11 +1,13 @@
 import { EventEmitter } from "./event-emitter.js";
 import { streamChat, abortChat, getChatStatus, streamSessionEvents, submitChatQuestion, formatQuestionnaireAsPrompt } from "../api/chat.js";
 import type { InlineImage } from "../api/chat.js";
-import type { ChatAttachments, ChatMessage, ChatStreamEvent, ChatToolRecord, PendingQuestion, QuestionnaireResult, StreamEventEnvelope, StreamSnapshot, WorkspaceFileChange } from "../types/chat.js";
+import type { ChatAttachments, ChatMessage, ChatStreamEvent, ChatToolRecord, ChatTraceStep, PendingQuestion, QuestionnaireResult, StreamEventEnvelope, StreamSnapshot, WorkspaceFileChange } from "../types/chat.js";
 import { notebookStore } from "./notebook-store.js";
 import { appStore } from "./app-store.js";
 import { workspaceStore, type StreamingWorkspacePreview } from "./workspace-store.js";
 import { ensureWindowForPanel } from "./window-expansion.js";
+import { applyChatTraceEvent, finalizeTraceSteps, traceStepsFromEvents, traceTerminalState } from "../utils/chat-trace.js";
+import { skillMessageFromContent } from "../react/chat/skill-message-collapse.js";
 
 function hasAttachmentFiles(attachments?: ChatAttachments): boolean {
 	return Boolean(attachments && (attachments.bindings.some((binding) => binding.files.length > 0) || attachments.loose.length > 0));
@@ -68,6 +70,10 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 	isLoadingHistory = false;
 	streamingText = "";
 	streamingThinking = "";
+	/** Ordered logical process rows for the in-flight PI turn. */
+	streamingTrace: ChatTraceStep[] = [];
+	streamingStartedAt: string | null = null;
+	streamingFinishedAt: string | null = null;
 	streamingTarget: StreamingTarget = "chat";
 	streamingActivity = "";
 	streamingActivityDetail = "";
@@ -131,6 +137,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 			complete: false,
 		}];
 		this.resetTransientStreamState();
+		this.streamingStartedAt = new Date().toISOString();
 		this.isSending = true;
 		this.setStreamingActivity("正在分析请求");
 		this.wikiInvalidated = false;
@@ -234,6 +241,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		}
 		this.currentSessionContext = sessionId;
 		this.resetTransientStreamState();
+		this.streamingStartedAt = stream.startedAt ?? stream.createdAt;
 		this.isSending = true;
 		this.streamingActivity = "正在恢复生成";
 		const controller = new AbortController();
@@ -358,7 +366,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		if (owner.turnId !== envelope.turnId || envelope.eventId <= owner.lastAppliedEventId) return;
 		owner.lastAppliedEventId = envelope.eventId;
 		if (envelope.event.type === "stream_state" && envelope.event.status === "running") owner.phase = "streaming";
-		this._handleStreamEvent(envelope.event, owner);
+		this._handleStreamEvent(envelope.event, owner, envelope.occurredAt);
 		if (!["done", "error", "aborted"].includes(envelope.event.type)) return;
 		await this.handleTerminal(owner, envelope.event as TerminalChatStreamEvent);
 	}
@@ -387,7 +395,34 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				const countMatches = finalMessageCount !== undefined && session.messageCount >= finalMessageCount;
 				const revisionMatches = Boolean(finalRevision) && session.sessionRevision === finalRevision;
 				if (countMatches || revisionMatches) {
-					this.messages = session.messages.map((message) => ({ ...message, complete: true, transient: false }));
+					const history = this.withTraceMessages(session.messages);
+					// Showcase replay and older servers do not return the new sidecar
+					// fields. Keep the just-rendered live trace attached to the newest
+					// canonical assistant message so the timeline does not disappear at
+					// the done -> history swap boundary.
+					let assistantIndex = -1;
+					for (let index = history.length - 1; index >= 0; index -= 1) {
+						if (history[index]?.role === "assistant") {
+							assistantIndex = index;
+							break;
+						}
+					}
+					const canonicalTrace = assistantIndex >= 0 ? history[assistantIndex] : undefined;
+					const hasCanonicalTrace = Boolean(
+						canonicalTrace?.traceEvents?.length
+						|| canonicalTrace?.trace?.some((step) => step.kind !== "skill"),
+					);
+					if (this.streamingTrace.length && !hasCanonicalTrace) {
+						if (assistantIndex >= 0) {
+							history[assistantIndex] = {
+								...history[assistantIndex]!,
+								trace: finalizeTraceSteps(this.streamingTrace),
+								traceStartedAt: this.streamingStartedAt ?? undefined,
+								traceFinishedAt: this.streamingFinishedAt ?? new Date().toISOString(),
+							};
+						}
+					}
+					this.messages = history.map((message) => ({ ...message, complete: true, transient: false }));
 					this.emit("change", undefined);
 					return true;
 				}
@@ -399,6 +434,51 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		return false;
 	}
 
+	private withTraceMessages(messages: ChatMessage[]): ChatMessage[] {
+		const tracedMessages = messages.map((message) => {
+			if (message.role !== "assistant" || message.trace || !message.traceEvents?.length) return message;
+			const terminalState = traceTerminalState(message.traceEvents, message.stopReason, message.error);
+			const traceSteps = traceStepsFromEvents(message.traceEvents);
+			return {
+				...message,
+				trace: terminalState?.status === "unknown" ? traceSteps : finalizeTraceSteps(traceSteps),
+			};
+		});
+
+		// Skill user messages are intentionally hidden in the conversation. If a
+		// cold-start history predates trace sidecars (or the sidecar is missing),
+		// keep the skill invocation visible in the assistant timeline instead of
+		// losing both the skill row and the answer that follows it.
+		return tracedMessages.map((message, index) => {
+			if (message.role !== "assistant") return message;
+
+			const skillMessage = skillMessageFromContent(tracedMessages[index - 1]?.content ?? "");
+			if (!skillMessage) return message;
+
+			const hasSkillStep = message.trace?.some(
+				(step) => step.kind === "skill" && step.skillName === skillMessage.skillName,
+			);
+			if (hasSkillStep) return message;
+
+			const skillStep: ChatTraceStep = {
+				id: `skill:restored:${index}:${skillMessage.skillName}`,
+				kind: "skill",
+				status: "completed",
+				title: `已展开技能 · ${skillMessage.skillName}`,
+				titleKey: "chat.trace.steps.skillExpanded",
+				titleParams: { skillName: skillMessage.skillName },
+				skillName: skillMessage.skillName,
+				...(skillMessage.args ? { skillArgs: skillMessage.args } : {}),
+				skillState: "expanded",
+			};
+
+			return {
+				...message,
+				trace: [skillStep, ...(message.trace ?? [])],
+			};
+		});
+	}
+
 	private materializeTransientTurn(owner: ActiveStreamOwner, error: string): void {
 		if (!this.owns(owner)) return;
 		this.messages = [...this.messages, {
@@ -407,6 +487,9 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 			timestamp: Date.now(),
 			thinking: this.streamingThinking || undefined,
 			tools: this.completedTools.length ? this.completedTools : undefined,
+			trace: this.streamingTrace.length ? finalizeTraceSteps(this.streamingTrace) : undefined,
+			traceStartedAt: this.streamingStartedAt ?? undefined,
+			traceFinishedAt: this.streamingFinishedAt ?? new Date().toISOString(),
 			error,
 			turnId: owner.turnId ?? undefined,
 			transient: true,
@@ -436,7 +519,14 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		void import("./sessions-store.js").then((module) => module.sessionsStore.refreshUntilTopic(owner.sessionId));
 	}
 
-	private _handleStreamEvent(event: ChatStreamEvent, owner: ActiveStreamOwner) {
+	private _handleStreamEvent(event: ChatStreamEvent, owner: ActiveStreamOwner, occurredAt?: string) {
+		this.streamingTrace = applyChatTraceEvent(this.streamingTrace, event, occurredAt);
+		if (event.type === "stream_state" && event.status === "running" && occurredAt) {
+			this.streamingStartedAt = occurredAt;
+		}
+		if (["done", "error", "aborted"].includes(event.type)) {
+			this.streamingFinishedAt = occurredAt ?? new Date().toISOString();
+		}
 		switch (event.type) {
 			case "stream_state":
 				this.setStreamingActivity(event.status === "queued" ? "等待执行" : "正在分析请求");
@@ -451,23 +541,61 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				this.streamingThinking += event.delta;
 				this.scheduleStreamChange();
 				break;
+			case "tool_call_start":
 			case "tool_call_delta":
-				this.maybePrepareFileToolPreview(event.toolCallId, event.toolName, event.args, event.argsDelta);
+			case "tool_call_end":
+				this.maybePrepareFileToolPreview(
+					event.toolCallId,
+					event.toolName,
+					event.args,
+					"argsDelta" in event ? event.argsDelta : undefined,
+				);
+				// The trace row is created from the assistant's tool-call events,
+				// before the tool has finished generating its arguments or emitted
+				// the question event. Publish the start immediately so the row stays
+				// above the question card for the whole interaction.
+				if (event.type === "tool_call_delta") this.scheduleStreamChange();
+				else this.flushStreamChange();
 				break;
 			case "tool_start":
 				this.flushStreamChange();
 				this.maybeStartFileToolPreview(event.toolCallId, event.toolName, event.args);
-				this.activeTools = [...this.activeTools.filter((tool) => tool.toolCallId !== event.toolCallId), {
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
+					this.activeTools = [...this.activeTools.filter((tool) => tool.toolCallId !== event.toolCallId), {
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
 					// Questionnaire options sit one level deeper than the generic tool
 					// payload compactor keeps. Preserve this small, bounded payload so
 					// the completed card can render every option immediately.
 					args: event.toolName === "ask_user_question" ? event.args : compactToolPayload(event.args),
 					contentOffset: this.streamingText.length,
 				}];
-				this.emit("change", undefined);
+					this.emit("change", undefined);
+					break;
+			case "tool_update": {
+				if (event.args !== undefined) {
+					this.maybePrepareFileToolPreview(event.toolCallId, event.toolName, event.args);
+				}
+				const existingTool = this.activeTools.find((tool) => tool.toolCallId === event.toolCallId);
+				const updatedTool: ChatToolRecord = {
+					...(existingTool ?? {
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						args: undefined,
+						contentOffset: this.streamingText.length,
+					}),
+					toolName: event.toolName || existingTool?.toolName || "tool",
+					...(event.args !== undefined
+						? { args: event.toolName === "ask_user_question" ? event.args : compactToolPayload(event.args) }
+						: {}),
+					...(event.partialResult !== undefined ? { partialResult: compactToolPayload(event.partialResult) } : {}),
+				};
+				this.activeTools = [
+					...this.activeTools.filter((tool) => tool.toolCallId !== event.toolCallId),
+					updatedTool,
+				];
+				this.scheduleStreamChange();
 				break;
+			}
 			case "tool_end":
 				this.flushStreamChange();
 				this.maybeFinishFileToolPreview(event.toolCallId, event.toolName, event.result, event.isError, owner);
@@ -562,6 +690,9 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 		this.resetStreamTimers();
 		this.streamingText = "";
 		this.streamingThinking = "";
+		this.streamingTrace = [];
+		this.streamingStartedAt = null;
+		this.streamingFinishedAt = null;
 		this.streamingTarget = "chat";
 		this.streamingActivity = "";
 		this.streamingActivityDetail = "";
@@ -789,7 +920,7 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 
 	loadHistory(messages: ChatMessage[], sessionId?: string) {
 		this.isLoadingHistory = false;
-		this.messages = messages;
+		this.messages = this.withTraceMessages(messages);
 		this.isSending = false;
 		this.canReconnect = false;
 		this.currentSessionContext = sessionId ?? null;

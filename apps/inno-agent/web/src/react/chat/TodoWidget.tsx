@@ -51,7 +51,16 @@ export function extractTodoTasks(chat: {
 	completedTools: ChatToolRecord[];
 }): TodoTaskItem[] | null {
 	let latest: TodoTaskItem[] | null = null;
-	for (const message of chat.messages) {
+	// A new user message starts a new turn. Do not carry the previous turn's
+	// snapshot into the composer while the next request is being prepared.
+	const lastUserMessageIndex = chat.messages.reduce(
+		(lastIndex, message, index) => message.role === "user" ? index : lastIndex,
+		-1,
+	);
+	const currentTurnMessages = lastUserMessageIndex >= 0
+		? chat.messages.slice(lastUserMessageIndex)
+		: chat.messages;
+	for (const message of currentTurnMessages) {
 		for (const tool of message.tools ?? []) {
 			const tasks = tasksFromToolRecord(tool);
 			if (tasks) latest = tasks;
@@ -127,8 +136,8 @@ export function TodoWidget({ tasks }: { tasks: TodoTaskItem[] }) {
 					>
 						<div className="max-h-56 overflow-y-auto px-3 py-2">
 							{visible.map((task) => (
-								<div key={task.id} className="flex items-start gap-2 py-1.5">
-									<span className="mt-0.5"><TaskStatusIcon task={task} /></span>
+								<div key={task.id} className="flex items-center gap-2 py-1.5">
+									<span className="shrink-0"><TaskStatusIcon task={task} /></span>
 									<div className="min-w-0 flex-1">
 										<span
 											className={`break-words text-[13px] leading-snug ${

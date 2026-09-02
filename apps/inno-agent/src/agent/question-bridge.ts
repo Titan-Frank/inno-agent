@@ -68,7 +68,7 @@ export class QuestionBridge {
 		this.binding = binding;
 	}
 
-	ask(params: unknown): Promise<QuestionBridgeResult> {
+	ask(params: unknown, toolCallId?: string): Promise<QuestionBridgeResult> {
 		const binding = this.binding;
 		if (!binding) return Promise.resolve({ answers: [], cancelled: true, error: "no_ui" });
 		if (this.pending) this.resolvePending({ answers: [], cancelled: true, error: "superseded" }, false);
@@ -87,7 +87,12 @@ export class QuestionBridge {
 				this.resolvePending({ answers: [], cancelled: true, error: "timeout" }, true);
 			}, binding.timeoutMs);
 			this.pending = { questionId, sessionId: binding.sessionId, turnId: binding.turnId, params, resolve, timer };
-			binding.emit({ type: "question", questionId, params });
+			binding.emit({
+				type: "question",
+				questionId,
+				params,
+				...(toolCallId ? { toolCallId } : {}),
+			});
 		});
 	}
 

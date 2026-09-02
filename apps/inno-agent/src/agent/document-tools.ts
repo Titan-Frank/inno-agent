@@ -29,11 +29,21 @@ export function createDocumentTools(): ToolDefinition[] {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
 			const typed = params as {
 				filePath: string;
 				includePageDetails?: boolean;
 				includeScreenshots?: boolean;
+			};
+			const reportProgress = (text: string, phase: string): void => {
+				try {
+					onUpdate?.({
+						content: [{ type: "text" as const, text }],
+						details: { phase, filePath: typed.filePath },
+					});
+				} catch {
+					// Progress reporting is best-effort and must never fail parsing.
+				}
 			};
 
 			// The tool context is session-scoped. The process environment points at
@@ -45,6 +55,7 @@ export function createDocumentTools(): ToolDefinition[] {
 				: resolve(workspaceDir, typed.filePath);
 
 			// Check file existence before attempting parse
+			reportProgress("正在检查文件", "checking");
 			if (!existsSync(resolvedPath)) {
 				return {
 					content: [{ type: "text" as const, text: `文件不存在: ${typed.filePath}` }],
@@ -55,7 +66,9 @@ export function createDocumentTools(): ToolDefinition[] {
 			// Parse document
 			let parsed;
 			try {
+				reportProgress("正在解析文档", "parsing");
 				parsed = await parseDocument(resolvedPath);
+				reportProgress(`已读取 ${parsed.pageCount} 页，正在整理内容`, "parsed");
 			} catch (err) {
 				logger.warn({ err, filePath: resolvedPath }, "parse_document tool: document parsing failed");
 				const msg = err instanceof DocumentParseError
@@ -92,6 +105,7 @@ export function createDocumentTools(): ToolDefinition[] {
 			// Screenshots
 			if (typed.includeScreenshots) {
 				try {
+					reportProgress("正在生成页面截图", "screenshots");
 					const screenshots = await screenshotDocument(resolvedPath);
 					for (const shot of screenshots) {
 						content.push({

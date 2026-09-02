@@ -6,8 +6,9 @@ describe("QuestionBridge", () => {
 		const bridge = new QuestionBridge();
 		const events: Array<Record<string, unknown>> = [];
 		bridge.bindTurn({ sessionId: "s1", turnId: "t1", emit: (event) => events.push(event), timeoutMs: 10_000 });
-		const answerPromise = bridge.ask({ questions: [] });
+		const answerPromise = bridge.ask({ questions: [] }, "tool-1");
 		const questionId = events[0].questionId as string;
+		expect(events[0]).toMatchObject({ type: "question", toolCallId: "tool-1" });
 
 		expect(bridge.respond({ sessionId: "wrong", turnId: "t1", questionId, result: { answers: [], cancelled: false } })).toBe("scope_mismatch");
 		expect(bridge.respond({ sessionId: "s1", turnId: "t1", questionId, result: { answers: [], cancelled: false } })).toBe("accepted");

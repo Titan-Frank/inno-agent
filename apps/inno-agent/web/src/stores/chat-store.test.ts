@@ -153,6 +153,33 @@ describe("ChatStore stream ownership", () => {
 		});
 	});
 
+	it("publishes an ask-user-question row as soon as tool-call generation begins", async () => {
+		let release!: () => void;
+		const toolCallFinished = new Promise<void>((resolve) => { release = resolve; });
+		let sawPreparingRow = false;
+		mocks.streamChat.mockImplementation(async function* () {
+			yield envelope(1, { type: "stream_state", status: "running" });
+			yield envelope(2, { type: "tool_call_start", toolCallId: "question-1", toolName: "ask_user_question" });
+			await toolCallFinished;
+			yield envelope(3, { type: "aborted", message: "Stopped", persisted: false });
+		});
+
+		const store = new ChatStoreImpl();
+		const unsubscribe = store.on("change", () => {
+			if (store.streamingTrace.some((step) => step.toolCallId === "question-1" && step.status === "preparing")) {
+				sawPreparingRow = true;
+			}
+		});
+		const sending = store.send("hello");
+		try {
+			await vi.waitFor(() => expect(sawPreparingRow).toBe(true));
+		} finally {
+			release();
+			unsubscribe();
+		}
+		await sending;
+	});
+
 	it("keeps opening the streaming preview when native window expansion is unavailable", async () => {
 		mocks.appStore.workspaceWidth = 520;
 		mocks.appStore.workspaceMode = "collapsed";
@@ -398,6 +425,43 @@ describe("ChatStore stream ownership", () => {
 			{ role: "assistant", content: "36 / (9 - 3) * 2 = ?", timestamp: 1, entryId: "question" },
 		]);
 		expect(store.pendingQuestion).toBeNull();
+	});
+
+	it("restores a hidden skill row from expanded cold-start history", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{
+				role: "user",
+				content: '<skill name="lesson-plan" location="/tmp/skills/lesson-plan/SKILL.md">\nbody\n</skill>\n\n给初二学生讲一次函数',
+				timestamp: 1,
+			},
+			{ role: "assistant", content: "下面是一次函数的讲解。", timestamp: 2 },
+		], "session.jsonl");
+
+		expect(store.messages[1]).toMatchObject({
+			role: "assistant",
+			content: "下面是一次函数的讲解。",
+		});
+		expect(store.messages[1]?.trace).toEqual([
+			expect.objectContaining({
+				kind: "skill",
+				skillName: "lesson-plan",
+				skillArgs: "给初二学生讲一次函数",
+				skillState: "expanded",
+			}),
+		]);
+	});
+
+	it("restores a hidden skill row from a compact cold-start command", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{ role: "user", content: "/skill:lesson-plan 给初二学生讲一次函数", timestamp: 1 },
+			{ role: "assistant", content: "下面是一次函数的讲解。", timestamp: 2 },
+		], "session.jsonl");
+
+		expect(store.messages[1]?.trace).toEqual([
+			expect.objectContaining({ kind: "skill", skillName: "lesson-plan", skillArgs: "给初二学生讲一次函数" }),
+		]);
 	});
 
 	it("rechecks isSending after the async session-store import", async () => {

@@ -1,6 +1,5 @@
 import { useCallback, useMemo, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
-import { motion } from "motion/react";
-import { Sparkles } from "lucide-react";
+import { ArrowDown, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentRef, ChatMessage, ChatToolRecord, PendingQuestion } from "../../types/chat.js";
 import { workspaceFileUrl } from "../../api/workspace.js";
@@ -8,19 +7,24 @@ import { workspaceStore } from "../../stores/workspace-store.js";
 import { buildConversationTurns, ConversationMinimap } from "../ConversationMinimap.js";
 import { useStoreSnapshot } from "../hooks.js";
 import { Spinner } from "../ui/Spinner.js";
-import { QuestionDialog } from "../QuestionDialog.js";
-import { ErrorBlock, MessageBubble } from "./MessageBubble.js";
-import { CompletedToolRecords, StreamingBubbles } from "./StreamingBubbles.js";
+import { MessageBubble } from "./MessageBubble.js";
+import { StreamingBubbles } from "./StreamingBubbles.js";
 import { TodoWidget, extractTodoTasks } from "./TodoWidget.js";
+import { answeredQuestionnaireFromTool } from "../../utils/questionnaire.js";
+import type { AnsweredQuestionnaireView } from "../../utils/questionnaire.js";
+
+function traceContainsAssistantText(message: ChatMessage): boolean {
+	if (message.trace?.some((step) => (step.kind === "progress" || step.kind === "answer") && Boolean(step.text?.trim()))) return true;
+	return Boolean(message.traceEvents?.some((record) => (
+		record.event.type === "text_delta" && Boolean(record.event.delta.trim())
+	)));
+}
 
 interface ChatConversationProps {
 	chat: {
 		messages: ChatMessage[];
 		isSending: boolean;
 		isLoadingHistory: boolean;
-		streamingActivity: string;
-		streamingActivityDetail: string;
-		streamingError: string;
 		activeTools: ChatToolRecord[];
 		completedTools: ChatToolRecord[];
 		pendingQuestion: PendingQuestion | null;
@@ -31,6 +35,8 @@ interface ChatConversationProps {
 	onTouchStart: () => void;
 	onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 	onPauseAutoScroll: () => void;
+	showLatestButton: boolean;
+	onJumpToLatest: () => void;
 	questionHint: ReactNode;
 	busyBlocker: ReactNode;
 	smartToast: ReactNode;
@@ -51,6 +57,8 @@ export function ChatConversation({
 	onTouchStart,
 	onPointerDown,
 	onPauseAutoScroll,
+	showLatestButton,
+	onJumpToLatest,
 	questionHint,
 	busyBlocker,
 	smartToast,
@@ -63,10 +71,51 @@ export function ChatConversation({
 	wsError,
 }: ChatConversationProps) {
 	const { t } = useTranslation();
+	const conversationTurns = useMemo(() => buildConversationTurns(chat.messages), [chat.messages]);
 	const turnIndexByStartMessage = useMemo(
-		() => new Map(buildConversationTurns(chat.messages).map((turn) => [turn.startMessageIndex, turn.index])),
-		[chat.messages],
+		() => new Map(conversationTurns.map((turn) => [turn.startMessageIndex, turn.index])),
+		[conversationTurns],
 	);
+	const lastAssistantMessageIndexes = useMemo(() => {
+		const indexes = new Set<number>();
+		for (const turn of conversationTurns) {
+			for (let index = turn.endMessageIndex; index >= turn.startMessageIndex; index -= 1) {
+				if (chat.messages[index]?.role === "assistant") {
+					indexes.add(index);
+					break;
+				}
+			}
+		}
+		return indexes;
+	}, [chat.messages, conversationTurns]);
+	const activeTurnStartMessage = chat.isSending ? conversationTurns.at(-1)?.startMessageIndex : undefined;
+	const traceTurnPresentation = useMemo(() => {
+		const coveredAssistantIndexes = new Set<number>();
+		const actionOwnerIndexes = new Set<number>();
+		const questionnairesByOwner = new Map<number, AnsweredQuestionnaireView[]>();
+		for (const turn of conversationTurns) {
+			const assistantIndexes: number[] = [];
+			for (let index = turn.startMessageIndex; index <= turn.endMessageIndex; index += 1) {
+				if (chat.messages[index]?.role === "assistant") assistantIndexes.push(index);
+			}
+			const traceCandidates = assistantIndexes.filter((index) => {
+				const message = chat.messages[index];
+				return Boolean(message?.trace?.length || message?.traceEvents?.length) && traceContainsAssistantText(message);
+			});
+			const ownerIndex = traceCandidates.find((index) => Boolean(chat.messages[index]?.traceEvents?.length)) ?? traceCandidates.at(-1);
+			if (ownerIndex === undefined) continue;
+			actionOwnerIndexes.add(ownerIndex);
+			for (const index of assistantIndexes) {
+				if (index !== ownerIndex) coveredAssistantIndexes.add(index);
+			}
+			const questionnaires = assistantIndexes.flatMap((index) => (chat.messages[index]?.tools ?? []).flatMap((tool) => {
+				const questionnaire = answeredQuestionnaireFromTool(tool);
+				return questionnaire ? [{ tool, questionnaire }] : [];
+			}));
+			if (questionnaires.length) questionnairesByOwner.set(ownerIndex, questionnaires);
+		}
+		return { coveredAssistantIndexes, actionOwnerIndexes, questionnairesByOwner };
+	}, [chat.messages, conversationTurns]);
 	const todoTasks = useMemo(
 		() => extractTodoTasks(chat),
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,6 +160,15 @@ export function ChatConversation({
 							const multiChannel = channels.size > 1;
 							return chat.messages.map((message, index) => {
 								const turnIndex = turnIndexByStartMessage.get(index);
+								if (message.role === "assistant" && traceTurnPresentation.coveredAssistantIndexes.has(index)) return null;
+								// The canonical assistant record can arrive just before the
+								// terminal stream event. Keep the live trace as the only
+								// visible representation until the turn is finalized, so the
+								// trace does not briefly duplicate or change its geometry.
+								if (chat.isSending && index === chat.messages.length - 1 && message.role === "assistant") return null;
+								const isActiveTurnAssistant = activeTurnStartMessage !== undefined && index >= activeTurnStartMessage && message.role === "assistant";
+								const isTurnActionOwner = lastAssistantMessageIndexes.has(index) || traceTurnPresentation.actionOwnerIndexes.has(index);
+								const showActions = message.role === "user" || (isTurnActionOwner && !isActiveTurnAssistant);
 								return (
 									<div key={`${message.timestamp}-${index}`} data-conversation-turn={turnIndex}>
 										<MessageBubble
@@ -119,8 +177,10 @@ export function ChatConversation({
 											resolveAttachmentUrl={resolveAttachmentUrl}
 											onOpenAttachment={onOpenAttachment}
 											onOpenSkill={onOpenSkill}
-											onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
+												onEdit={chat.isSending || chat.pendingQuestion ? undefined : onEditMessage}
 											showRetry={canRetry && index === chat.messages.length - 1}
+											showActions={showActions}
+											answeredQuestionnaires={traceTurnPresentation.questionnairesByOwner.get(index)}
 											onRetry={onRetry}
 										/>
 									</div>
@@ -128,54 +188,41 @@ export function ChatConversation({
 							});
 						})()}
 
-						{chat.isSending && chat.streamingActivity ? (
-							<motion.div className="flex justify-start" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
-								<div className="inno-message min-w-0 max-w-[78%] rounded-lg border border-[var(--inno-border)] bg-[var(--inno-surface)] px-3 py-2 text-[13px] text-[var(--inno-text-muted)] shadow-sm">
-									<div className="flex min-w-0 items-center gap-2">
-										<span className="inno-stream-status-dot is-streaming shrink-0" />
-										<Sparkles size={14} className="shrink-0 text-[var(--inno-accent)]" />
-										<span className="min-w-0 font-medium text-[var(--inno-text)]">{chat.streamingActivity}</span>
-										{chat.streamingActivityDetail ? <span className="min-w-0 truncate text-xs text-[var(--inno-text-subtle)]">{chat.streamingActivityDetail}</span> : null}
-									</div>
-								</div>
-							</motion.div>
-						) : null}
-
-						{chat.activeTools.length > 0 ? (
-							<motion.div className="flex justify-start" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
-								<div className="inno-message min-w-0 max-w-[78%] overflow-hidden rounded-lg border border-[var(--inno-accent-soft)] bg-[var(--inno-accent-soft)] px-3 py-2 text-[13px]">
-									{chat.activeTools.map((tool) => (
-										<div key={tool.toolCallId} className="flex min-w-0 items-center gap-2 text-[var(--inno-text-muted)]">
-											<Spinner size={12} className="shrink-0" />
-											<span className="min-w-0 break-words font-mono text-xs [overflow-wrap:anywhere]">{tool.toolName}</span>
-										</div>
-									))}
-								</div>
-							</motion.div>
-						) : null}
-
-						{chat.completedTools.length > 0 ? <CompletedToolRecords tools={chat.completedTools} /> : null}
-						<StreamingBubbles />
-
-						{chat.streamingError ? (
-							<motion.div className="flex justify-start" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
-								<div className="inno-message max-w-[78%]"><ErrorBlock error={chat.streamingError} /></div>
-							</motion.div>
-						) : null}
-
-						{chat.pendingQuestion ? <QuestionDialog pending={chat.pendingQuestion} /> : null}
+						<StreamingBubbles onOpenSkill={onOpenSkill} />
 					</div>
 				</div>
 				<ConversationMinimap messages={chat.messages} scrollContainerRef={scrollRef} onNavigateStart={onPauseAutoScroll} />
-			</div>
-
-			<div className="shrink-0 border-t border-[var(--inno-border)] bg-[var(--inno-surface)] p-3">
-				<div className="mx-auto max-w-3xl">
-					{questionHint}
-					{busyBlocker}
-					{todoTasks ? <TodoWidget tasks={todoTasks} /> : null}
-					{wsError ? <p className="mb-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
-					{composer}
+				<div className="inno-conversation-composer-layer">
+					{showLatestButton ? (
+						<div className="inno-latest-row">
+							<button
+								type="button"
+								className="inno-latest-button"
+								aria-label={t("chat.trace.jumpToLatest", "回到最新位置")}
+								onClick={onJumpToLatest}
+							>
+								<ArrowDown size={15} aria-hidden="true" />
+							</button>
+						</div>
+					) : null}
+					<div className="inno-conversation-composer-content mx-auto max-w-3xl">
+						{questionHint || busyBlocker ? (
+							<div className="inno-conversation-status-wrap">
+								<div className="inno-conversation-composer-mask" aria-hidden="true" />
+								<div className="inno-conversation-status-content">
+									{questionHint}
+									{busyBlocker}
+								</div>
+								<div className="inno-conversation-status-gap-mask" aria-hidden="true" />
+							</div>
+						) : null}
+						{todoTasks ? <TodoWidget tasks={todoTasks} /> : null}
+						{wsError ? <p className="mb-2 text-xs text-[var(--inno-danger)]">{wsError}</p> : null}
+						<div className="inno-conversation-composer-wrap">
+							<div className="inno-conversation-composer-mask" aria-hidden="true" />
+							{composer}
+						</div>
+					</div>
 				</div>
 			</div>
 		</section>

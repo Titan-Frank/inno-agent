@@ -15,6 +15,9 @@ export interface SessionMessageSummary {
 	entryId?: string;
 	parentEntryId?: string | null;
 	thinking?: string;
+	/** PI's final reason for ending the assistant message. Kept so cold-start
+	 * history can classify legacy traces whose sidecar predates terminal events. */
+	stopReason?: string;
 	tools?: Array<{
 		toolCallId: string;
 		toolName: string;
@@ -23,11 +26,22 @@ export interface SessionMessageSummary {
 		result?: unknown;
 		isError?: boolean;
 	}>;
+	/** Normalized PI stream records restored from the UI-only trace sidecar. */
+	traceEvents?: SessionTraceEvent[];
+	traceStartedAt?: string;
+	traceFinishedAt?: string;
 	channel?: SessionChannel;
 	images?: Array<{ previewUrl: string; mimeType: string }>;
 	/** Structured chat attachments (bubble bindings + loose files) merged in
 	 * from the attachments sidecar; not stored in the session JSONL itself. */
 	attachments?: ChatAttachments;
+}
+
+export interface SessionTraceEvent {
+	eventId?: number;
+	traceId?: string;
+	occurredAt?: string;
+	event: Record<string, unknown>;
 }
 
 export type SessionChannel = "cli" | "web" | "feishu" | "qq" | "wechat" | "scheduler" | "unknown";
