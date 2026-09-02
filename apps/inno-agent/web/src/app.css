@@ -1531,10 +1531,13 @@ inno-workspace-panel textarea {
 	left: 0;
 	z-index: 50;
 	display: flex;
-	width: min(292px, calc(100vw - 24px));
-	max-height: min(390px, calc(100vh - 24px));
+	width: min(300px, calc(100vw - 16px));
+	min-width: min(280px, calc(100vw - 16px));
+	max-height: min(390px, calc(100dvh - 16px));
+	min-height: 0;
 	flex-direction: column;
 	gap: 6px;
+	overflow: hidden;
 	padding: 7px;
 	transform-origin: bottom left;
 	animation: inno-workspace-menu-in var(--inno-dur-fast) var(--inno-ease-out) both;
@@ -1553,6 +1556,7 @@ inno-workspace-panel textarea {
 
 .inno-workspace-search {
 	display: flex;
+	flex: 0 0 auto;
 	height: 32px;
 	align-items: center;
 	gap: 7px;
@@ -1618,6 +1622,8 @@ inno-workspace-panel textarea {
 }
 
 .inno-workspace-options {
+	min-height: 0;
+	flex: 1 1 auto;
 	max-height: 224px;
 	overflow-y: auto;
 }
@@ -1625,6 +1631,7 @@ inno-workspace-panel textarea {
 .inno-workspace-option,
 .inno-workspace-action {
 	display: flex;
+	flex: 0 0 auto;
 	width: 100%;
 	min-width: 0;
 	align-items: center;
@@ -1689,6 +1696,7 @@ inno-workspace-panel textarea {
 }
 
 .inno-workspace-menu-divider {
+	flex: 0 0 auto;
 	height: 1px;
 	margin: 1px 2px;
 	background: var(--inno-border);
@@ -1708,6 +1716,8 @@ inno-workspace-panel textarea {
 
 .inno-workspace-create-form {
 	display: flex;
+	min-height: 0;
+	overflow-y: auto;
 	flex-direction: column;
 	gap: 8px;
 	padding: 3px 2px 1px;
