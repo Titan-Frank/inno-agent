@@ -224,6 +224,13 @@ inno-app-shell {
 
 .inno-conversation-composer-content {
 	width: calc(100% - 2rem);
+	/* Keep the column itself transparent to pointer events so the gaps between
+	   status strip / todo widget / composer do not swallow wheel scrolling over
+	   the conversation lane; only the interactive children receive events. */
+	pointer-events: none;
+}
+
+.inno-conversation-composer-content > * {
 	pointer-events: auto;
 }
 
