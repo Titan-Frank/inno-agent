@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -17,6 +17,7 @@ import {
 import type { ChatTraceStep, ChatTraceStepKind, ChatTraceStepStatus } from "../../types/chat.js";
 import type { AnsweredQuestionnaireView } from "../../utils/questionnaire.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
+import { splitStreamingMarkdown } from "../../utils/markdown-blocks.js";
 import { MarkdownArtifact } from "../MarkdownArtifact.js";
 import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
 import {
@@ -414,6 +415,49 @@ function TraceBody({ content }: { content: string }) {
 	);
 }
 
+/** Closed streaming blocks are parsed once and never re-rendered. */
+const StableTraceMarkdown = memo(function StableTraceMarkdown({ content }: { content: string }) {
+	return <MarkdownArtifact content={content} />;
+});
+
+/** Live variant of TraceBody for the active streaming turn. Without these
+ * guards every stream flush reparses and re-highlights the whole document: an
+ * unclosed code fence then alternates between paragraph and code rendering,
+ * which bounces the row height and reads as visible jitter. Split off closed
+ * blocks so only the tail reparses, and pin the container to its tallest
+ * observed height so transient reparses cannot shrink it. */
+function LiveTraceBody({ content }: { content: string }) {
+	const trimmed = content.trim();
+	const normalized = useMemo(() => normalizeMarkdownMath(trimmed), [trimmed]);
+	const { blocks, tail } = useMemo(() => splitStreamingMarkdown(normalized), [normalized]);
+
+	const heightWatermarkRef = useRef(0);
+	const bodyObserverRef = useRef<ResizeObserver | null>(null);
+	const bodyRef = useCallback((el: HTMLDivElement | null) => {
+		bodyObserverRef.current?.disconnect();
+		bodyObserverRef.current = null;
+		if (!el) return;
+		heightWatermarkRef.current = 0;
+		el.style.minHeight = "";
+		const observer = new ResizeObserver(() => {
+			const height = el.offsetHeight;
+			if (height > heightWatermarkRef.current) heightWatermarkRef.current = height;
+			const minHeight = `${heightWatermarkRef.current}px`;
+			if (el.style.minHeight !== minHeight) el.style.minHeight = minHeight;
+		});
+		observer.observe(el);
+		bodyObserverRef.current = observer;
+	}, []);
+
+	if (!trimmed) return null;
+	return (
+		<div ref={bodyRef} className="inno-trace-body">
+			{blocks.map((block, index) => <StableTraceMarkdown key={index} content={block} />)}
+			{tail ? <MarkdownArtifact content={tail} /> : null}
+		</div>
+	);
+}
+
 function pendingQuestionTraceStep(questionId: string): ChatTraceStep {
 	return {
 		id: `tool:ask_user_question:${questionId}`,
@@ -524,7 +568,8 @@ export function AgentTraceTimeline({
 			<div className={showText ? "inno-trace-flow" : "inno-trace-list"} role="list">
 				{flowSteps.map((step, index) => {
 					if (isTextKind(step.kind)) {
-						return <TraceBody key={`trace-body:${index}:${step.id}`} content={step.text ?? ""} />;
+						const Body = isSending ? LiveTraceBody : TraceBody;
+						return <Body key={`trace-body:${index}:${step.id}`} content={step.text ?? ""} />;
 					}
 					const rowId = `trace-row:${index}:${step.id}`;
 					const questionnaire = showText && step.kind === "tool" && step.toolCallId

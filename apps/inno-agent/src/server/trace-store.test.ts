@@ -88,4 +88,45 @@ describe("session UI trace sidecar", () => {
 		];
 		expect(mergeSessionTraces(dataDir, "session-1", messages)[0]?.traceEvents).toHaveLength(1);
 	});
+
+	it("compacts consecutive delta runs into single events before persisting", () => {
+		recordSessionTrace(dataDir, "session-1", {
+			assistantIndex: 0,
+			events: [
+				envelope(1, { type: "thinking_start" }),
+				envelope(2, { type: "thinking_delta", delta: "th" }),
+				envelope(3, { type: "thinking_delta", delta: "inking" }),
+				envelope(4, { type: "thinking_end" }),
+				envelope(5, { type: "text_start" }),
+				envelope(6, { type: "text_delta", delta: "an" }),
+				envelope(7, { type: "text_delta", delta: "swer" }),
+				envelope(8, { type: "tool_call_delta", toolCallId: "call-1", argsDelta: "{\"pa" }),
+				envelope(9, { type: "tool_call_delta", toolCallId: "call-2", argsDelta: "{\"x" }),
+				envelope(10, { type: "tool_call_delta", toolCallId: "call-1", argsDelta: "th\"}" }),
+			],
+		});
+
+		const messages: SessionMessageSummary[] = [{ role: "assistant", content: "answer", timestamp: 1 }];
+		const events = mergeSessionTraces(dataDir, "session-1", messages)[0]?.traceEvents ?? [];
+		// Runs merge by kind (and by toolCallId for tool_call_delta); boundaries stay.
+		expect(events.map((item) => item.event.type)).toEqual([
+			"thinking_start",
+			"thinking_delta",
+			"thinking_end",
+			"text_start",
+			"text_delta",
+			"tool_call_delta",
+			"tool_call_delta",
+			"tool_call_delta",
+		]);
+		expect(events[1]?.event.delta).toBe("thinking");
+		expect(events[4]?.event.delta).toBe("answer");
+		// call-2 interrupts the call-1 run, so the two call-1 deltas must not merge.
+		expect(events[5]?.event.argsDelta).toBe("{\"pa");
+		expect(events[6]?.event.argsDelta).toBe("{\"x");
+		expect(events[7]?.event.argsDelta).toBe("th\"}");
+		// The merged run keeps the first envelope's id and timestamp.
+		expect(events[1]?.eventId).toBe(2);
+		expect(events[4]?.occurredAt).toBe("2026-09-01T00:00:06.000Z");
+	});
 });
