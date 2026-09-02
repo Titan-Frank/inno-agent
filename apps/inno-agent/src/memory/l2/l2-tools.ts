@@ -103,8 +103,19 @@ export function createL2Tools(
 			sessionId: Type.Optional(Type.String({ description: "关联的会话 ID" })),
 			force: Type.Optional(Type.Boolean({ description: "为 true 时跳过重复检查，强制归档" })),
 		}),
-			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			async execute(_toolCallId, params, signal, onUpdate, ctx) {
 				if (isEnabled && !isEnabled()) return l2DisabledResult();
+				const reportProgress = (text: string, phase: string): void => {
+					try {
+						onUpdate?.({
+							content: [{ type: "text" as const, text }],
+							details: { phase },
+						});
+					} catch {
+						// Progress reporting is best-effort and must never fail archiving.
+					}
+				};
+				reportProgress("等待归档队列", "queued");
 				return enqueueArchive(l2DataDir, async () => {
 				throwIfAborted(signal);
 			ensureL2Directories(l2DataDir);
@@ -112,6 +123,7 @@ export function createL2Tools(
 
 			const sourceType = params.sourceType as RawSourceType;
 			const isFileType = sourceType === "pdf" || sourceType === "word" || sourceType === "image";
+			reportProgress("正在准备归档", "preparing");
 
 			// Resolve content: either from params.content or by parsing a file
 			let content: string;
@@ -126,7 +138,9 @@ export function createL2Tools(
 
 				let parsed;
 				try {
+					reportProgress("正在解析文件", "parsing");
 					parsed = await parseDocument(resolvedFilePath);
+					reportProgress(`已提取 ${parsed.pageCount} 页，正在生成摘要`, "parsed");
 				} catch (err) {
 					logger.warn({ err, filePath: resolvedFilePath }, "l2_archive: failed to parse document");
 					const msg = err instanceof DocumentParseError ? err.message : String(err);
@@ -141,6 +155,7 @@ export function createL2Tools(
 			} else if (params.content) {
 				// Text-based: use content directly
 				content = params.content;
+				reportProgress("正在准备文本内容", "prepared");
 			} else {
 				return {
 					content: [{ type: "text" as const, text: "参数错误：必须提供 content（文本内容）或 filePath（文件路径）。" }],
@@ -164,8 +179,9 @@ export function createL2Tools(
 					&& existing?.wikiPages.length
 					&& existing.wikiPages.every((pagePath) => fileExists(join(l2DataDir, pagePath))),
 				);
-					if (!params.force && existing?.status === "indexed" && completedArtifactsExist) {
-						return {
+				if (!params.force && existing?.status === "indexed" && completedArtifactsExist) {
+					reportProgress("内容已归档，正在返回结果", "completed");
+					return {
 						content: [
 							{
 								type: "text" as const,
@@ -243,6 +259,7 @@ export function createL2Tools(
 					let generationSourceContext = extractedContent;
 					const analysisCheckpointPath = join(l2DataDir, "ingest-progress", `${entry.id}-${entry.contentHash}.json`);
 					if (ctx.model) {
+						reportProgress("正在生成摘要", "summarizing");
 						const summary = await summarizeContent(
 							ctx.model,
 							ctx.modelRegistry,
@@ -265,6 +282,7 @@ export function createL2Tools(
 						generationSourceContext = summary.sourceContext;
 					}
 					wikiPagePath = getSourcePagePath(entry, promptSourceIdentity);
+					if (ctx.model) reportProgress("正在生成 Wiki 页面", "generating");
 					const rich = ctx.model
 						? await generateRichWikiPages(
 							l2DataDir,
@@ -290,6 +308,7 @@ export function createL2Tools(
 						ingestWarnings = rich.warnings;
 						reviewCount = rich.reviews;
 					}
+					reportProgress("正在保存 Wiki 页面", "writing");
 					if (!rich) {
 						createSourcePage(l2DataDir, entry, summaryBody, extractedPath, promptSourceIdentity);
 					}
@@ -342,6 +361,7 @@ export function createL2Tools(
 							logger.warn({ err, source: params.title }, "l2_archive: failed to append ingest log");
 						}
 				}
+				reportProgress("正在更新 Wiki 索引", "indexing");
 				try {
 					updateIndexAfterIngest(l2DataDir, entry.wikiPages);
 				} catch (err) {
@@ -374,8 +394,9 @@ export function createL2Tools(
 					// Retrieval is downstream of the same completeness gate as
 					// The reference flow does not index partial writes. A
 					// single retrieval-index failure is non-critical after the page
-					// set has passed completeness and must not make the source retry.
-						let retrievalIndexFailed = false;
+				// set has passed completeness and must not make the source retry.
+				reportProgress("正在同步检索索引", "retrieving");
+					let retrievalIndexFailed = false;
 						for (const wikiPath of entry.wikiPages) {
 							try {
 								await l2Memory.indexPageByPath(wikiPath);
@@ -399,8 +420,9 @@ export function createL2Tools(
 					entry.updatedAt = new Date().toISOString();
 					upsertManifest(l2DataDir, entry);
 					throw err;
-				}
+					}
 
+				reportProgress("归档完成", "completed");
 				return {
 					content: [
 						{

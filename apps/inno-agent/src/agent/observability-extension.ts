@@ -65,11 +65,11 @@ function summarizeArgs(toolName: string, args: unknown): string {
       case "bash":
         return typeof a.command === "string" ? a.command : safeStringify(args);
       case "read":
-        return typeof a.file_path === "string" ? a.file_path : safeStringify(args);
+        return typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : safeStringify(args);
       case "write":
-        return typeof a.file_path === "string" ? a.file_path : safeStringify(args);
+        return typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : safeStringify(args);
       case "edit":
-        return typeof a.file_path === "string" ? a.file_path : safeStringify(args);
+        return typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : safeStringify(args);
       case "grep":
         return typeof a.pattern === "string" ? `pattern="${a.pattern}"` : safeStringify(args);
       case "find":

@@ -1005,9 +1005,11 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 				pendingAssistant = null;
 			}
 		};
-		const ensureAssistant = (timestamp: number): SessionMessageSummary => {
+		const ensureAssistant = (timestamp: number, entryId?: string): SessionMessageSummary => {
 			if (!pendingAssistant) {
-				pendingAssistant = { role: "assistant", content: "", timestamp };
+				pendingAssistant = { role: "assistant", content: "", timestamp, entryId };
+			} else if (entryId) {
+				pendingAssistant.entryId = entryId;
 			}
 			return pendingAssistant;
 		};
@@ -1080,7 +1082,7 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 			}
 
 			if (role === "assistant") {
-				const pending = ensureAssistant(ts);
+				const pending = ensureAssistant(ts, typeof entry.id === "string" ? entry.id : undefined);
 				if (entryChannel && !pending.channel) pending.channel = entryChannel;
 				const content = message.content;
 				if (Array.isArray(content)) {
@@ -1112,6 +1114,7 @@ function parseSessionFile(filePath: string): { summary: SessionSummary; messages
 					pending.content = pending.content ? `${pending.content}\n${content}` : content;
 				}
 				pending.timestamp = ts;
+				if (typeof message.stopReason === "string") pending.stopReason = message.stopReason;
 				// If this assistant entry ended the turn (stopReason "stop"), finalize.
 				if (typeof message.stopReason === "string" && message.stopReason !== "toolUse") {
 					finalizeAssistant();

@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import {
 	abortPromptForTurnToken,
 	getCurrentSessionId,
+	getLoadedSkills,
 	persistCancelledQueuedTurn,
 	persistPendingUserTurn,
 	runPromptInSession,
@@ -11,6 +12,7 @@ import {
 	runPromptStreamingInSession,
 	type PromptRunOutcome,
 } from "../../agent/pi-runner.js";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { expandInnoSlashCommand } from "../../agent/inno-extension.js";
 import { questionBridge, type QuestionBridgeResult } from "../../agent/question-bridge.js";
 import {
@@ -30,6 +32,7 @@ import {
 } from "../attachments.js";
 import { recordSessionAttachments } from "../attachments-store.js";
 import { recordSessionAgentCommand } from "../agent-command-store.js";
+import { recordSessionTrace } from "../trace-store.js";
 import { WORKSPACE_IGNORES } from "../file-helpers.js";
 import { json, matchRoute, readBody } from "../http-helpers.js";
 import type {
@@ -62,31 +65,89 @@ export interface ChatRouteContext {
 // Helpers moved verbatim from server.ts (P2 route split)
 // ---------------------------------------------------------------------------
 
+function phaseForPiEvent(type: string): "start" | "update" | "end" | undefined {
+	if (type.endsWith("_start")) return "start";
+	if (type.endsWith("_end")) return "end";
+	if (type.endsWith("_update")) return "update";
+	return undefined;
+}
+
+function piEventSummary(event: any): string | undefined {
+	if (!event || typeof event !== "object") return undefined;
+	if (typeof event.errorMessage === "string") return event.errorMessage;
+	if (typeof event.message === "string") return event.message;
+	if (typeof event.reason === "string") return event.reason;
+	if (typeof event.toolName === "string") return event.toolName;
+	if (typeof event.stopReason === "string") return `stopReason: ${event.stopReason}`;
+	if (typeof event.status === "string") return event.status;
+	return undefined;
+}
+
+function piEventDetail(event: any): Record<string, unknown> | undefined {
+	if (!event || typeof event !== "object") return undefined;
+	const detail: Record<string, unknown> = {};
+	for (const key of [
+		"attempt", "maxAttempts", "delayMs", "errorMessage", "finalError", "stopReason",
+		"toolCallId", "toolName", "reason", "status", "command", "cwd", "output",
+		"entryId", "parentId", "filePath", "compactionId",
+	]) {
+		if (event[key] !== undefined) detail[key] = event[key];
+	}
+	return Object.keys(detail).length > 0 ? detail : undefined;
+}
+
+function systemEventFromPi(event: any, eventType = typeof event?.type === "string" ? event.type : "pi_event"): unknown {
+	const attempt = typeof event?.attempt === "number" ? event.attempt : undefined;
+	return {
+		type: "system_event",
+		eventType,
+		phase: phaseForPiEvent(eventType),
+		summary: piEventSummary(event),
+		detail: piEventDetail(event),
+		...(attempt !== undefined ? { attempt } : {}),
+		...(typeof event?.success === "boolean" ? { success: event.success } : {}),
+	};
+}
+
 function piEventToSseEvent(event: any): unknown | null {
+	if (!event || typeof event.type !== "string") return null;
 	switch (event.type) {
 		case "message_update": {
 			const ev = event.assistantMessageEvent;
-			if (ev.type === "text_delta") return { type: "text_delta", delta: ev.delta };
-			if (ev.type === "thinking_delta") return { type: "thinking_delta", delta: ev.delta };
+			if (!ev || typeof ev.type !== "string") return systemEventFromPi(event, "message_update");
+			if (ev.type === "text_start") return { type: "text_start", contentIndex: ev.contentIndex };
+			if (ev.type === "text_delta") return { type: "text_delta", delta: ev.delta, contentIndex: ev.contentIndex };
+			if (ev.type === "text_end") return { type: "text_end", contentIndex: ev.contentIndex };
+			if (ev.type === "thinking_start") return { type: "thinking_start", contentIndex: ev.contentIndex };
+			if (ev.type === "thinking_delta") return { type: "thinking_delta", delta: ev.delta, contentIndex: ev.contentIndex };
+			if (ev.type === "thinking_end") return { type: "thinking_end", contentIndex: ev.contentIndex };
 			if (ev.type === "toolcall_start" || ev.type === "toolcall_delta" || ev.type === "toolcall_end") {
 				return toolCallStreamEventFromAssistantEvent(ev);
 			}
-			if (ev.type === "error") return null;
-			return null;
+			if (ev.type === "error") return { type: "error", message: ev.error?.errorMessage || "LLM API error", code: "pi_message_error", persisted: false };
+			return systemEventFromPi(ev, `message_update:${ev.type}`);
 		}
 		case "message_end": {
 			const msg = event.message;
 			if (msg && typeof msg === "object" && "stopReason" in msg && msg.stopReason === "error") {
-				return null;
+				return { type: "error", message: msg.errorMessage || "The model request failed.", code: "pi_message_error", persisted: false };
 			}
-			return null;
+			return systemEventFromPi(msg ?? event, "message_end");
 		}
 		case "tool_execution_start":
 			return { type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName, args: event.args };
+		case "tool_execution_update":
+			return {
+				type: "tool_update",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: event.args,
+				partialResult: event.partialResult,
+			};
 		case "tool_execution_end":
 			return { type: "tool_end", toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError };
-		default:
-			return null;
+      default:
+        return systemEventFromPi(event);
 	}
 }
 
@@ -101,9 +162,10 @@ function toolCallStreamEventFromAssistantEvent(ev: any): unknown | null {
 		? ev.toolCall?.arguments ?? block.arguments
 		: undefined;
 	return {
-		type: "tool_call_delta",
+		type: ev.type === "toolcall_start" ? "tool_call_start" : ev.type === "toolcall_end" ? "tool_call_end" : "tool_call_delta",
 		toolCallId,
 		toolName,
+		contentIndex: ev.contentIndex,
 		...(args !== undefined ? { args } : {}),
 		...(ev.type === "toolcall_delta" && typeof ev.delta === "string" ? { argsDelta: ev.delta } : {}),
 	};
@@ -183,6 +245,79 @@ function recordAgentCommandIfPresent(dataDir: string, sessionId: string, prompt:
 		commandContent: prompt,
 		expandedContent,
 	});
+}
+
+interface TraceSkillInfo {
+	name: string;
+	description?: string;
+	path?: string;
+	source?: string;
+}
+
+function traceSkillInfo(value: unknown, sourceFallback?: string): TraceSkillInfo | null {
+	if (!value || typeof value !== "object") return null;
+	const skill = value as Record<string, unknown>;
+	const sourceInfo = skill.sourceInfo && typeof skill.sourceInfo === "object"
+		? skill.sourceInfo as Record<string, unknown>
+		: undefined;
+	if (typeof skill.name !== "string" || !skill.name) return null;
+	return {
+		name: skill.name,
+		description: typeof skill.description === "string" ? skill.description : undefined,
+		path: typeof skill.filePath === "string"
+			? skill.filePath
+			: typeof skill.path === "string"
+				? skill.path
+				: typeof skill.location === "string" ? skill.location : undefined,
+		source: typeof skill.source === "string"
+			? skill.source
+			: typeof sourceInfo?.source === "string" ? sourceInfo.source : sourceFallback,
+	};
+}
+
+function loadedSkillsForTrace(workspaceRoot: string): TraceSkillInfo[] {
+	const skills: TraceSkillInfo[] = [];
+	try {
+		const loaded = getLoadedSkills().skills;
+		if (Array.isArray(loaded)) {
+			for (const skill of loaded) {
+				const info = traceSkillInfo(skill, "global");
+				if (info) skills.push(info);
+			}
+		}
+	} catch {
+		// Skill diagnostics are optional UI metadata and must not block a turn.
+	}
+	try {
+		const privateSkillsDir = join(workspaceRoot, ".skills");
+		if (existsSync(privateSkillsDir)) {
+			const privateSkills = loadSkillsFromDir({ dir: privateSkillsDir, source: "workspace" }).skills;
+			for (const skill of privateSkills) {
+				const info = traceSkillInfo(skill, "workspace");
+				if (info) skills.push(info);
+			}
+		}
+	} catch {
+		// Private skill discovery is best-effort, matching prompt construction.
+	}
+	const byName = new Map<string, TraceSkillInfo>();
+	for (const skill of skills) byName.set(skill.name, skill);
+	return Array.from(byName.values());
+}
+
+function explicitSkillEvent(prompt: string, skills: TraceSkillInfo[]): unknown | null {
+	const match = prompt.trim().match(/^\/skill:([^\s]+)(?:\s+([\s\S]+))?$/);
+	if (!match) return null;
+	const skillName = match[1]!;
+	const loaded = skills.find((skill) => skill.name === skillName);
+	return {
+		type: "skill_invoked",
+		skillName,
+		args: match[2]?.trim() || undefined,
+		source: loaded?.source,
+		path: loaded?.path,
+		description: loaded?.description,
+	};
 }
 
 function readSessionBaseline(
@@ -688,13 +823,17 @@ export async function handleChatRoutes(
 					}
 					break;
 				}
-				case "tool_execution_start":
-					logger.info(
-						{ toolName: event.toolName, toolCallId: event.toolCallId },
-						"tool call started: %s", event.toolName,
-					);
-					break;
-				case "tool_execution_end":
+					case "tool_execution_start":
+						logger.info(
+							{ toolName: event.toolName, toolCallId: event.toolCallId },
+							"tool call started: %s", event.toolName,
+						);
+						break;
+					case "tool_execution_update":
+						// Partial tool output is forwarded to the stream registry below.
+						// Do not report these normal progress events as unhandled.
+						break;
+					case "tool_execution_end":
 					workspaceChangeMonitor?.noteToolEnd(event.toolCallId, event.toolName);
 					if (event.isError) {
 						const errText = Array.isArray(event.result?.content)
@@ -728,7 +867,13 @@ export async function handleChatRoutes(
 
 			// Convert to an SSE event and publish to broadcaster + live client.
 			const sseEvent = piEventToSseEvent(event);
-			if (sseEvent) streamRegistry.publishStreamEvent(state, sseEvent as { type: string });
+			if (sseEvent) {
+				const piEventType = event.type === "message_update" && event.assistantMessageEvent?.type
+					? event.assistantMessageEvent.type
+					: event.type;
+				const normalizedEvent = sseEvent as { type: string; [key: string]: unknown };
+				streamRegistry.publishStreamEvent(state, { ...normalizedEvent, piEventType });
+			}
 		};
 
 		promptStartTime = Date.now();
@@ -739,6 +884,14 @@ export async function handleChatRoutes(
 				isCancellationRequested: () => state.cancelRequested,
 				onStart: () => {
 					streamRegistry.publishStreamEvent(state, { type: "stream_state", status: "running" });
+					const traceSkills = loadedSkillsForTrace(streamWorkspaceRoot);
+					streamRegistry.publishStreamEvent(state, {
+						type: "skill_loaded",
+						count: traceSkills.length,
+						skills: traceSkills,
+					});
+					const skillEvent = explicitSkillEvent(prompt, traceSkills);
+					if (skillEvent) streamRegistry.publishStreamEvent(state, skillEvent as { type: string });
 					questionBridge.bindTurn({
 						sessionId: state.sessionId,
 						turnId: state.turnId,
@@ -766,13 +919,35 @@ export async function handleChatRoutes(
 					} else if (outcome.type === "completed") {
 						streamRegistry.finishTurn(state, "error", { type: "error", message: "Final chat history could not be confirmed.", code: "persistence_confirmation_failed" }, persistence);
 					} else if (outcome.type === "aborted") {
-						streamRegistry.finishTurn(state, "aborted", { type: "aborted", message: "Stopped by user" }, persistence);
+						const message = outcome.reason === "cancelled"
+							? "Stopped by user"
+							: `Prompt aborted: ${outcome.reason}`;
+						streamRegistry.finishTurn(state, "aborted", { type: "aborted", message }, persistence);
 					} else {
 						const message = outcome.error instanceof Error ? outcome.error.message : "Unknown error";
 						if (state.status === "queued") {
 							streamRegistry.finishTurn(state, "aborted", { type: "aborted", message: `Prompt failed before start: ${message}` }, persistence);
 						} else {
 							streamRegistry.finishTurn(state, "error", { type: "error", message }, persistence);
+						}
+					}
+					// Record the trace after the terminal event is published so historical
+					// messages can distinguish a normal completion from an abort or error.
+					if (persistence.persisted && state.history.length > 0) {
+						try {
+							const persistedMessages = parseSessionFile(targetSessionPath)?.messages ?? [];
+							const assistantMessage = persistedMessages[state.baselineMessageCount + 1];
+							recordSessionTrace(dataDir, state.sessionId, {
+								assistantIndex: state.baselineMessageCount + 1,
+								assistantMessageId: assistantMessage?.role === "assistant" ? assistantMessage.entryId : undefined,
+								startedAt: state.startedAt,
+								finishedAt: state.finishedAt ?? new Date().toISOString(),
+								events: state.history,
+							});
+						} catch (err) {
+							// Trace is observability metadata. Never turn a successful PI
+							// response into a failed chat turn because the sidecar is unwritable.
+							logger.warn({ err, sessionId: state.sessionId, turnId: state.turnId }, "chat trace sidecar write failed");
 						}
 					}
 				},

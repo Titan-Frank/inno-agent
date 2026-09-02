@@ -670,7 +670,7 @@ export function createInnoExtension(
 					}
 
 					// Web mode: delegate to QuestionBridge
-					const bridgeResult = await questionBridge.ask(typed);
+					const bridgeResult = await questionBridge.ask(typed, _toolCallId);
 					return buildQuestionnaireResponse(bridgeResult, typed);
 				},
 			} as Parameters<typeof pi.registerTool>[0]);

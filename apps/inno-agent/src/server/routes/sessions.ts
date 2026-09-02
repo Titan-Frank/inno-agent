@@ -34,6 +34,7 @@ import {
 	mergeSessionAttachments,
 } from "../attachments-store.js";
 import { clearSessionAgentCommands } from "../agent-command-store.js";
+import { clearSessionTraces, mergeSessionTraces } from "../trace-store.js";
 import { contentDispositionAttachment } from "../file-helpers.js";
 import { HttpError, json, matchRoute, readBody } from "../http-helpers.js";
 import {
@@ -395,7 +396,11 @@ export async function handleSessionsRoutes(
 		);
 		json(res, 200, {
 			...summary,
-			messages: mergeSessionAttachments(dataDir, sessionId, parsed.messages),
+				messages: mergeSessionTraces(
+					dataDir,
+					sessionId,
+					mergeSessionAttachments(dataDir, sessionId, parsed.messages),
+				),
 			messageCount: parsed.messages.length,
 			sessionRevision: sessionRevision(sessionPath),
 			// Attach any persisted pending question so the frontend can restore
@@ -678,8 +683,9 @@ export async function handleSessionsRoutes(
 				delete questionMeta[sessionId];
 				writeSessionQuestionMetadata(questionMeta);
 			}
-			clearSessionAttachments(dataDir, sessionId);
-			clearSessionAgentCommands(dataDir, sessionId);
+				clearSessionAttachments(dataDir, sessionId);
+				clearSessionAgentCommands(dataDir, sessionId);
+				clearSessionTraces(dataDir, sessionId);
 			workspaceRegistry.unbindSession(sessionId);
 			if (shouldDropTempWorkspace) {
 				workspaceRegistry.deleteWorkspace(boundWorkspaceId, { removeFiles: true });

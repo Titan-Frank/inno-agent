@@ -11,6 +11,9 @@ export interface StreamEventEnvelope {
 	sessionId: string;
 	turnId: string;
 	clientRequestId: string;
+	/** Stable per-turn trace identity used by the UI sidecar and reconnects. */
+	traceId: string;
+	occurredAt: string;
 	event: ChatStreamEvent;
 }
 
@@ -26,6 +29,8 @@ export interface ActiveStreamTool {
 	toolCallId: string;
 	toolName: string;
 	args?: unknown;
+	/** Latest partial result emitted while the tool is still running. */
+	partialResult?: unknown;
 	startedAt: string;
 }
 
@@ -123,6 +128,7 @@ function compactEvent(event: ChatStreamEvent): ChatStreamEvent {
 	if (typeof next.fullText === "string") next.fullText = compact(next.fullText, MAX_TEXT);
 	if ("args" in next) next.args = compact(next.args);
 	if ("result" in next) next.result = compact(next.result);
+	if ("partialResult" in next) next.partialResult = compact(next.partialResult, 16_000);
 	if ("params" in next) next.params = compact(next.params);
 	if (Array.isArray(next.changes)) {
 		const changes: unknown[] = [];
@@ -141,6 +147,8 @@ function compactEvent(event: ChatStreamEvent): ChatStreamEvent {
 	}
 	if ("preview" in next) next.preview = compact(next.preview);
 	if ("content" in next) next.content = compact(next.content);
+	if ("detail" in next) next.detail = compact(next.detail);
+	if ("skills" in next) next.skills = compact(next.skills);
 	return next;
 }
 
@@ -182,6 +190,31 @@ function reduceStreamState(state: SessionStreamState, event: ChatStreamEvent): v
 			startedAt: new Date().toISOString(),
 		};
 		state.activeTools = [...state.activeTools.filter((item) => item.toolCallId !== toolCallId), tool];
+		return;
+	}
+	if (event.type === "tool_update") {
+		const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+		if (!toolCallId) return;
+		const active = state.activeTools.find((item) => item.toolCallId === toolCallId);
+		if (active) {
+			state.activeTools = state.activeTools.map((item) => item.toolCallId === toolCallId
+				? {
+					...item,
+					...(typeof event.toolName === "string" && event.toolName ? { toolName: event.toolName } : {}),
+					...(event.args !== undefined ? { args: event.args } : {}),
+					...(event.partialResult !== undefined ? { partialResult: event.partialResult } : {}),
+				}
+				: item);
+		} else {
+			// Be tolerant of a reconnect that starts at an update event.
+			state.activeTools = [...state.activeTools, {
+				toolCallId,
+				toolName: typeof event.toolName === "string" && event.toolName ? event.toolName : "tool",
+				...(event.args !== undefined ? { args: event.args } : {}),
+				...(event.partialResult !== undefined ? { partialResult: event.partialResult } : {}),
+				startedAt: new Date().toISOString(),
+			}];
+		}
 		return;
 	}
 	if (event.type === "tool_end") {
@@ -286,6 +319,8 @@ export class StreamRegistry {
 			sessionId: state.sessionId,
 			turnId: state.turnId,
 			clientRequestId: state.clientRequestId,
+			traceId: state.turnId,
+			occurredAt: new Date().toISOString(),
 			event: compacted,
 		};
 		state.history.push(envelope);
@@ -320,6 +355,8 @@ export class StreamRegistry {
 			sessionId: state.sessionId,
 			turnId: state.turnId,
 			clientRequestId: state.clientRequestId,
+			traceId: state.turnId,
+			occurredAt: new Date().toISOString(),
 			event: terminalEvent,
 		};
 		state.history.push(envelope);

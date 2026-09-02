@@ -39,6 +39,21 @@ describe("StreamRegistry", () => {
 		expect(state.completedTools).toHaveLength(1);
 	});
 
+	it("keeps partial tool output on the active row until the final result arrives", () => {
+		const registry = new StreamRegistry();
+		const state = create(registry);
+		registry.publishStreamEvent(state, { type: "stream_state", status: "running" });
+		registry.publishStreamEvent(state, { type: "tool_start", toolCallId: "tool-1", toolName: "bash", args: { command: "printf ok" } });
+		const partialResult = { content: [{ type: "text", text: "ok" }], details: { phase: "running" } };
+		registry.publishStreamEvent(state, { type: "tool_update", toolCallId: "tool-1", toolName: "bash", args: { command: "printf ok" }, partialResult });
+
+		expect(state.activeTools[0]).toMatchObject({ toolName: "bash", partialResult });
+		expect(state.history.at(-1)?.event).toMatchObject({ type: "tool_update", partialResult });
+
+		registry.publishStreamEvent(state, { type: "tool_end", toolCallId: "tool-1", toolName: "bash", result: "ok", isError: false });
+		expect(state.completedTools[0]).toMatchObject({ toolName: "bash", partialResult, result: "ok" });
+	});
+
 	it("allows only the first terminal transition", () => {
 		const registry = new StreamRegistry();
 		const state = create(registry);
