@@ -751,6 +751,92 @@
 			"settingsDesc": "Open settings"
 		},
 		"loadingSession": "Loading session…",
+		"trace": {
+			"timeline": "Work process",
+			"working": "Working",
+			"completed": "Completed",
+			"jumpToLatest": "Back to latest",
+			"durationSeconds": "{{seconds}} sec",
+			"duration": "for {{duration}}",
+			"tool": "Tool",
+			"row": {
+				"expand": "Expand {{summary}}",
+				"collapse": "Collapse {{summary}}"
+			},
+			"thinking": {
+				"inProgress": "Thinking",
+				"completed": "Thinking complete"
+			},
+			"status": {
+				"preparing": "Preparing call",
+				"running": "Running",
+				"waiting": "Waiting for your answer",
+				"error": "Failed",
+				"completed": "Completed",
+				"active": "In progress"
+			},
+			"workStatus": {
+				"userPaused": "User paused",
+				"interrupted": "Interrupted for another reason",
+				"incomplete": "Incomplete · reason unknown"
+			},
+			"steps": {
+				"thinking": "Thinking",
+				"organizingReply": "Organizing reply",
+				"workspaceUpdated": "Workspace updated",
+				"waitingForAnswer": "Waiting for your answer",
+				"answerCancelled": "Answer cancelled",
+				"continueExecution": "Continuing",
+				"skillsPreloaded": "{{count}} skill(s) preloaded",
+				"skillLoaded": "Skill loaded · {{skillName}}",
+				"skillExpanded": "Skill expanded · {{skillName}}",
+				"requestFailed": "Request failed",
+				"stopped": "Stopped",
+				"reply": "Reply",
+				"progress": "Progress"
+			},
+			"details": {
+				"noThinkingText": "No thinking text",
+				"noProgressText": "No progress text",
+				"arguments": "Arguments",
+				"partialResult": "Live result",
+				"error": "Error",
+				"result": "Result",
+				"question": "Question",
+				"workspaceChanges": "Workspace changes",
+				"skill": "Skill",
+				"source": "Source",
+				"path": "Path",
+				"description": "Description",
+				"openSkillsPanel": "Open Skills panel",
+				"preloadedSkills": "Preloaded skills",
+				"piEvent": "PI event",
+				"attempt": "Attempt",
+				"details": "Details"
+			},
+			"workspaceChanges": {
+				"created": "Created",
+				"modified": "Modified",
+				"deleted": "Deleted"
+			},
+			"system": {
+				"beforeAgentStart": "Preparing Agent",
+				"agentStart": "Started working",
+				"agentEnd": "Finished working",
+				"turnStart": "Started this turn",
+				"turnEnd": "Turn finished",
+				"messageStart": "Started generating message",
+				"messageEnd": "Message generation complete",
+				"compactionStart": "Organizing context",
+				"compactionEnd": "Context organized",
+				"queueStart": "Entered execution queue",
+				"queueEnd": "Left execution queue",
+				"autoRetryStart": "Retrying automatically",
+				"autoRetryEnd": "Automatic retry finished",
+				"entryAppended": "Session event recorded",
+				"bashExecutionUpdate": "Terminal execution updated"
+			}
+		},
 		"emptySessionTitle": "No messages in this conversation",
 		"emptySessionHint": "Type a message below to start the conversation.",
 		"uploadFiles": "Upload files to workspace",

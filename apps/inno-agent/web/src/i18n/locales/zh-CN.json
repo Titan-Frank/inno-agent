@@ -751,6 +751,92 @@
 			"settingsDesc": "打开设置"
 		},
 		"loadingSession": "正在加载会话…",
+		"trace": {
+			"timeline": "工作过程",
+			"working": "工作中",
+			"completed": "已完成",
+			"jumpToLatest": "回到最新位置",
+			"durationSeconds": "{{seconds}} 秒",
+			"duration": "持续了 {{duration}}",
+			"tool": "工具",
+			"row": {
+				"expand": "展开{{summary}}",
+				"collapse": "收起{{summary}}"
+			},
+			"thinking": {
+				"inProgress": "思考中",
+				"completed": "思考完成"
+			},
+			"status": {
+				"preparing": "准备调用",
+				"running": "执行中",
+				"waiting": "等待你的回答",
+				"error": "失败",
+				"completed": "已完成",
+				"active": "进行中"
+			},
+			"workStatus": {
+				"userPaused": "用户主动暂停",
+				"interrupted": "因其他原因中断",
+				"incomplete": "未完成 · 原因未知"
+			},
+			"steps": {
+				"thinking": "思考",
+				"organizingReply": "正在组织回复",
+				"workspaceUpdated": "工作区已更新",
+				"waitingForAnswer": "等待你的回答",
+				"answerCancelled": "已取消回答",
+				"continueExecution": "继续执行",
+				"skillsPreloaded": "已预载 {{count}} 个技能",
+				"skillLoaded": "已载入技能 · {{skillName}}",
+				"skillExpanded": "已展开技能 · {{skillName}}",
+				"requestFailed": "请求失败",
+				"stopped": "已停止",
+				"reply": "回复",
+				"progress": "进度"
+			},
+			"details": {
+				"noThinkingText": "暂无思考文本",
+				"noProgressText": "暂无进度文本",
+				"arguments": "参数",
+				"partialResult": "实时结果",
+				"error": "错误",
+				"result": "结果",
+				"question": "提问",
+				"workspaceChanges": "工作区变化",
+				"skill": "技能",
+				"source": "来源",
+				"path": "路径",
+				"description": "说明",
+				"openSkillsPanel": "打开 Skills 面板",
+				"preloadedSkills": "已预载技能",
+				"piEvent": "PI 事件",
+				"attempt": "尝试",
+				"details": "详情"
+			},
+			"workspaceChanges": {
+				"created": "已创建",
+				"modified": "已修改",
+				"deleted": "已删除"
+			},
+			"system": {
+				"beforeAgentStart": "准备 Agent",
+				"agentStart": "开始工作",
+				"agentEnd": "结束工作",
+				"turnStart": "开始本轮任务",
+				"turnEnd": "本轮任务结束",
+				"messageStart": "开始生成消息",
+				"messageEnd": "消息生成完成",
+				"compactionStart": "正在整理上下文",
+				"compactionEnd": "上下文整理完成",
+				"queueStart": "进入执行队列",
+				"queueEnd": "离开执行队列",
+				"autoRetryStart": "正在自动重试",
+				"autoRetryEnd": "自动重试结束",
+				"entryAppended": "已记录会话事件",
+				"bashExecutionUpdate": "终端执行更新"
+			}
+		},
 		"emptySessionTitle": "此会话暂无消息",
 		"emptySessionHint": "在下方输入消息，开始新的对话。",
 		"uploadFiles": "上传文件到工作区",
