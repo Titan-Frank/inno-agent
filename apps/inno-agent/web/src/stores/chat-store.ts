@@ -665,6 +665,14 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 				this.streamingError = event.message ?? "Stopped by user";
 				this.emit("change", undefined);
 				break;
+			default:
+				// Trace-only events (system_event, skill_loaded, skill_invoked,
+				// text/thinking boundaries) still mutate streamingTrace via
+				// applyChatTraceEvent above — publish so the UI renders them even
+				// when no other event follows (e.g. auto_retry_start during a
+				// long provider stall).
+				this.scheduleStreamChange();
+				break;
 		}
 	}
 
