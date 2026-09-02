@@ -85,6 +85,20 @@ export function App() {
 	const setTab = useCallback((tab: RightPanelTab) => appStore.setRightPanelTab(tab), []);
 	const setWorkspaceMode = useCallback((mode: WorkspaceMode) => appStore.setWorkspaceMode(mode), []);
 	const setWorkspaceWidth = useCallback((width: number) => appStore.setWorkspaceWidth(width), []);
+	const openSidebar = useCallback(() => appStore.setSidebarCollapsed(false), []);
+	const openPresetPanels = useCallback(() => {
+		appStore.setRightPanelTab("preview");
+		appStore.setWorkspaceMode("half");
+	}, []);
+	const openRightPanel = useCallback((tab: Exclude<RightPanelTab, "preview">) => {
+		appStore.setRightPanelTab(tab);
+		appStore.setWorkspaceMode("quarter");
+	}, []);
+	const openPreviewFile = useCallback((minimumWidth: number) => {
+		appStore.setRightPanelTab("preview");
+		appStore.setWorkspaceWidth(Math.max(minimumWidth, appStore.workspaceWidth));
+		appStore.setWorkspaceMode("half");
+	}, []);
 
 	// Same viewport breakpoint behavior as the product shell: collapse the
 	// sidebar and workspace panel when the window narrows.
@@ -123,9 +137,13 @@ export function App() {
 			className={`app-layout app-layout--sidebar-${app.sidebarCollapsed ? "collapsed" : "expanded"} app-layout--workspace-${app.workspaceMode}`}
 			style={{ "--inno-workspace-width": `${app.workspaceWidth}px` } as React.CSSProperties}
 		>
-			<SessionSidebar collapsed={app.sidebarCollapsed} />
+			<SessionSidebar collapsed={app.sidebarCollapsed} onOpen={openSidebar} />
 			<div className="relative h-full min-h-0 min-w-0">
-				<ChatCenter />
+				<ChatCenter
+					onOpenPresetPanels={openPresetPanels}
+					onOpenRightPanel={openRightPanel}
+					onPreviewFile={openPreviewFile}
+				/>
 				<ReplayTransport />
 			</div>
 			<WorkspacePanel
@@ -135,6 +153,7 @@ export function App() {
 				onTabChange={setTab}
 				onModeChange={setWorkspaceMode}
 				onWidthChange={setWorkspaceWidth}
+				onPreviewFile={openPreviewFile}
 			/>
 		</div>
 	);

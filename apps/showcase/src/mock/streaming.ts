@@ -113,6 +113,8 @@ export function createTurnStream(options: TurnStreamOptions): Response {
 				sessionId,
 				turnId,
 				clientRequestId,
+				traceId: turnId,
+				occurredAt: new Date().toISOString(),
 				event,
 			};
 			try {
@@ -125,6 +127,8 @@ export function createTurnStream(options: TurnStreamOptions): Response {
 		emit({ type: "stream_state", status: "queued" });
 		await wait(QUEUED_WAIT_MS, isCancelled);
 		emit({ type: "stream_state", status: "running" });
+		emit({ type: "system_event", eventType: "agent_start", phase: "start", summary: "开始工作" });
+		emit({ type: "skill_loaded", count: 0, skills: [] });
 
 		let prevAt = doc.messages[turnStart]?.timestamp ?? 0;
 		for (let msgIdx = turnStart + 1; msgIdx < turnEnd && !cancelled; msgIdx++) {
@@ -135,23 +139,28 @@ export function createTurnStream(options: TurnStreamOptions): Response {
 				prevAt = Math.max(prevAt, segment.at);
 
 				if (segment.kind === "thinking") {
+					emit({ type: "thinking_start" });
 					for (let i = 0; i < segment.text.length && !cancelled; i += THINKING_CHUNK) {
 						emit({ type: "thinking_delta", delta: segment.text.slice(i, i + THINKING_CHUNK) });
 						await wait(TICK_MS, isCancelled);
 					}
+					emit({ type: "thinking_end" });
 					continue;
 				}
 				if (segment.kind === "text") {
+					emit({ type: "text_start" });
 					for (let i = 0; i < segment.text.length && !cancelled; i += TEXT_CHUNK) {
 						emit({ type: "text_delta", delta: segment.text.slice(i, i + TEXT_CHUNK) });
 						await wait(TICK_MS, isCancelled);
 					}
+					emit({ type: "text_end" });
 					continue;
 				}
 
 				// --- tool segment ---
 				// Stream args into the file preview first (drives the live
 				// "正在生成内容" workspace preview in the product UI).
+				emit({ type: "tool_call_start", toolCallId: segment.toolCallId, toolName: segment.toolName });
 				if (isFileWritingTool(segment.toolName)) {
 					const argsText = JSON.stringify(segment.args ?? {});
 					const slice = Math.max(1, Math.ceil(argsText.length / ARGS_CHUNKS));
@@ -165,6 +174,7 @@ export function createTurnStream(options: TurnStreamOptions): Response {
 						await wait(TICK_MS * 2, isCancelled);
 					}
 				}
+				emit({ type: "tool_call_end", toolCallId: segment.toolCallId, toolName: segment.toolName, args: segment.args });
 				emit({ type: "tool_start", toolCallId: segment.toolCallId, toolName: segment.toolName, args: segment.args });
 
 				let waited = 0;
@@ -200,6 +210,7 @@ export function createTurnStream(options: TurnStreamOptions): Response {
 				prevAt = Math.max(prevAt, segment.endAt);
 			}
 		}
+		emit({ type: "system_event", eventType: "agent_end", phase: "end", summary: "结束工作", success: true });
 
 		if (!cancelled) {
 			const fullText = doc.messages
