@@ -7,7 +7,17 @@ export interface ChatMessage {
 	entryId?: string;
 	parentEntryId?: string | null;
 	thinking?: string;
+	/** PI's persisted assistant termination reason, used for legacy trace replay. */
+	stopReason?: string;
 	tools?: ChatToolRecord[];
+	/** Ordered PI-derived process records. Older messages may only have the
+	 * aggregate thinking/tools fields above. */
+	trace?: ChatTraceStep[];
+	/** Raw normalized stream records persisted in the UI sidecar. Kept separate
+	 * from `trace` so the same reducer can rebuild live and historical rows. */
+	traceEvents?: ChatTraceEventRecord[];
+	traceStartedAt?: string;
+	traceFinishedAt?: string;
 	channel?: string;
 	images?: Array<{ previewUrl: string; mimeType: string }>;
 	/** Structured attachments sent with this user turn (keyword-bubble
@@ -50,6 +60,8 @@ export interface ChatToolRecord {
 	args: unknown;
 	/** Character offset in the assistant text at which the tool was called. */
 	contentOffset?: number;
+	/** Latest partial result while the tool is still running. */
+	partialResult?: unknown;
 	result?: unknown;
 	isError?: boolean;
 }
@@ -57,6 +69,49 @@ export interface ChatToolRecord {
 export interface WorkspaceFileChange {
 	path: string;
 	change: "created" | "modified" | "deleted";
+}
+
+export type ChatTraceStepKind = "thinking" | "progress" | "answer" | "tool" | "skill" | "system" | "error";
+export type ChatTraceStepStatus = "active" | "preparing" | "running" | "waiting" | "completed" | "error";
+
+/** One visible, expandable row in the PI process timeline. */
+export interface ChatTraceStep {
+	id: string;
+	kind: ChatTraceStepKind;
+	status: ChatTraceStepStatus;
+	title: string;
+	/** Locale key for generated UI titles. `title` remains the fallback/raw text. */
+	titleKey?: string;
+	titleParams?: Record<string, string | number>;
+	text?: string;
+	/** A short live summary separate from the full expandable payload. */
+	summary?: string;
+	toolCallId?: string;
+	toolName?: string;
+	args?: unknown;
+	argsText?: string;
+	/** Latest partial result emitted during tool execution. */
+	partialResult?: unknown;
+	result?: unknown;
+	isError?: boolean;
+	questionId?: string;
+	questionParams?: { questions: QuestionData[] };
+	skillName?: string;
+	skillArgs?: string;
+	skillSource?: string;
+	skillPath?: string;
+	skillDescription?: string;
+	skillState?: "loaded" | "expanded";
+	eventType?: string;
+	eventPhase?: "start" | "update" | "end";
+	eventDetail?: unknown;
+	workspaceChanges?: WorkspaceFileChange[];
+	attempt?: number;
+	contentIndex?: number;
+	preparationStartedAt?: number;
+	startedAt?: number;
+	endedAt?: number;
+	durationMs?: number;
 }
 
 // --- Question types ---
@@ -138,20 +193,45 @@ export interface StreamEventEnvelope {
 	sessionId: string;
 	turnId: string;
 	clientRequestId: string;
+	/** Stable UI trace identity for this PI turn; older servers may omit it. */
+	traceId?: string;
+	/** Server-side time at which the normalized PI event was published. */
+	occurredAt?: string;
 	event: ChatStreamEvent;
 }
 
 // Turn-scoped SSE event types
-export type ChatStreamEvent =
+export type ChatStreamEvent = (
 	| { type: "stream_state"; status: "queued" | "running" }
-	| { type: "text_delta"; delta: string }
-	| { type: "thinking_delta"; delta: string }
-	| { type: "tool_call_delta"; toolCallId: string; toolName: string; args?: unknown; argsDelta?: string }
-	| { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
-	| { type: "tool_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	| { type: "text_start"; contentIndex?: number }
+	| { type: "text_delta"; delta: string; contentIndex?: number }
+	| { type: "text_end"; contentIndex?: number }
+	| { type: "thinking_start"; contentIndex?: number }
+	| { type: "thinking_delta"; delta: string; contentIndex?: number }
+	| { type: "thinking_end"; contentIndex?: number }
+	| { type: "tool_call_start"; toolCallId: string; toolName: string; contentIndex?: number; args?: unknown }
+	| { type: "tool_call_delta"; toolCallId: string; toolName: string; contentIndex?: number; args?: unknown; argsDelta?: string }
+		| { type: "tool_call_end"; toolCallId: string; toolName: string; contentIndex?: number; args?: unknown }
+		| { type: "tool_start"; toolCallId: string; toolName: string; args?: unknown; contentIndex?: number }
+		| { type: "tool_update"; toolCallId: string; toolName: string; args?: unknown; partialResult?: unknown; contentIndex?: number }
+		| { type: "tool_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean; contentIndex?: number }
 	| { type: "workspace_change"; changes: WorkspaceFileChange[]; toolCallId?: string; toolName?: string; workspaceId?: string; truncated?: boolean }
-	| { type: "question"; questionId: string; params: { questions: QuestionData[] } }
+	| { type: "question"; questionId: string; params: { questions: QuestionData[] }; toolCallId?: string }
 	| { type: "question_resolved"; questionId: string; cancelled?: boolean; error?: string }
+	| { type: "skill_loaded"; count: number; skills?: Array<{ name: string; description?: string; path?: string; source?: string }> }
+	| { type: "skill_invoked"; skillName: string; args?: string; source?: string; path?: string; description?: string }
+	| { type: "system_event"; eventType: string; phase?: "start" | "update" | "end"; summary?: string; detail?: unknown; attempt?: number; success?: boolean }
 	| { type: "done"; fullText: string; persisted: true; finalMessageCount: number; finalSessionRevision: string }
 	| { type: "error"; message: string; code?: string; persisted: boolean; finalMessageCount?: number; finalSessionRevision?: string }
-	| { type: "aborted"; message?: string; persisted: boolean; finalMessageCount?: number; finalSessionRevision?: string };
+	| { type: "aborted"; message?: string; persisted: boolean; finalMessageCount?: number; finalSessionRevision?: string }
+) & {
+	/** Original PI event name before the server's UI normalization. */
+	piEventType?: string;
+};
+
+export interface ChatTraceEventRecord {
+	eventId?: number;
+	traceId?: string;
+	occurredAt?: string;
+	event: ChatStreamEvent;
+}

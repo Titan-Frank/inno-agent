@@ -400,6 +400,43 @@ describe("ChatStore stream ownership", () => {
 		expect(store.pendingQuestion).toBeNull();
 	});
 
+	it("restores a hidden skill row from expanded cold-start history", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{
+				role: "user",
+				content: '<skill name="lesson-plan" location="/tmp/skills/lesson-plan/SKILL.md">\nbody\n</skill>\n\n给初二学生讲一次函数',
+				timestamp: 1,
+			},
+			{ role: "assistant", content: "下面是一次函数的讲解。", timestamp: 2 },
+		], "session.jsonl");
+
+		expect(store.messages[1]).toMatchObject({
+			role: "assistant",
+			content: "下面是一次函数的讲解。",
+		});
+		expect(store.messages[1]?.trace).toEqual([
+			expect.objectContaining({
+				kind: "skill",
+				skillName: "lesson-plan",
+				skillArgs: "给初二学生讲一次函数",
+				skillState: "expanded",
+			}),
+		]);
+	});
+
+	it("restores a hidden skill row from a compact cold-start command", () => {
+		const store = new ChatStoreImpl();
+		store.loadHistory([
+			{ role: "user", content: "/skill:lesson-plan 给初二学生讲一次函数", timestamp: 1 },
+			{ role: "assistant", content: "下面是一次函数的讲解。", timestamp: 2 },
+		], "session.jsonl");
+
+		expect(store.messages[1]?.trace).toEqual([
+			expect.objectContaining({ kind: "skill", skillName: "lesson-plan", skillArgs: "给初二学生讲一次函数" }),
+		]);
+	});
+
 	it("rechecks isSending after the async session-store import", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => { release = resolve; });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { collapseSkillMessage } from "./skill-message-collapse.js";
+import {
+	collapseSkillMessage,
+	isSkillCommandMessage,
+	parseSkillCommandMessage,
+	skillMessageFromContent,
+} from "./skill-message-collapse.js";
 
 const ENVELOPE = (body: string) => `<skill name="lesson-plan" location="/tmp/skills/lesson-plan/SKILL.md">\nReferences are relative to /tmp/skills/lesson-plan.\n\n${body}\n</skill>`;
 
@@ -29,5 +34,17 @@ describe("collapseSkillMessage", () => {
 	it("returns null for an unclosed or malformed envelope", () => {
 		expect(collapseSkillMessage('<skill name="x" location="y">\nbody')).toBeNull();
 		expect(collapseSkillMessage('<skill name="x">body</skill>')).toBeNull();
+	});
+
+	it("parses compact commands for history recovery", () => {
+		expect(parseSkillCommandMessage("/skill:review-code fix the bug")).toEqual({
+			skillName: "review-code",
+			args: "fix the bug",
+		});
+		expect(skillMessageFromContent("/skill review-code")).toEqual({
+			skillName: "review-code",
+			args: "",
+		});
+		expect(isSkillCommandMessage("/skill review-code")).toBe(true);
 	});
 });
