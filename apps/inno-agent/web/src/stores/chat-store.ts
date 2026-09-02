@@ -550,6 +550,12 @@ export class ChatStoreImpl extends EventEmitter<ChatStoreEvents> {
 					event.args,
 					"argsDelta" in event ? event.argsDelta : undefined,
 				);
+				// The trace row is created from the assistant's tool-call events,
+				// before the tool has finished generating its arguments or emitted
+				// the question event. Publish the start immediately so the row stays
+				// above the question card for the whole interaction.
+				if (event.type === "tool_call_delta") this.scheduleStreamChange();
+				else this.flushStreamChange();
 				break;
 			case "tool_start":
 				this.flushStreamChange();

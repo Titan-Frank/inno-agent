@@ -153,6 +153,33 @@ describe("ChatStore stream ownership", () => {
 		});
 	});
 
+	it("publishes an ask-user-question row as soon as tool-call generation begins", async () => {
+		let release!: () => void;
+		const toolCallFinished = new Promise<void>((resolve) => { release = resolve; });
+		let sawPreparingRow = false;
+		mocks.streamChat.mockImplementation(async function* () {
+			yield envelope(1, { type: "stream_state", status: "running" });
+			yield envelope(2, { type: "tool_call_start", toolCallId: "question-1", toolName: "ask_user_question" });
+			await toolCallFinished;
+			yield envelope(3, { type: "aborted", message: "Stopped", persisted: false });
+		});
+
+		const store = new ChatStoreImpl();
+		const unsubscribe = store.on("change", () => {
+			if (store.streamingTrace.some((step) => step.toolCallId === "question-1" && step.status === "preparing")) {
+				sawPreparingRow = true;
+			}
+		});
+		const sending = store.send("hello");
+		try {
+			await vi.waitFor(() => expect(sawPreparingRow).toBe(true));
+		} finally {
+			release();
+			unsubscribe();
+		}
+		await sending;
+	});
+
 	it("keeps opening the streaming preview when native window expansion is unavailable", async () => {
 		mocks.appStore.workspaceWidth = 520;
 		mocks.appStore.workspaceMode = "collapsed";

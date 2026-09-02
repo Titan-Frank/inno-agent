@@ -267,6 +267,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	const workspaceTreeError = useStoreSnapshot(workspaceStore, () => workspaceStore.error);
 	const workspaceFiles = useMemo(() => workspaceTree ? flattenWorkspaceFiles(workspaceTree) : [], [workspaceTree]);
 	const isWelcome = sessions.isWelcome;
+	const hasConversationStatus = Boolean(chat.pendingQuestion || sessions.busyBlocker);
 	// Sidebar/workspace layout shifts (e.g. after desktop window expansion) move
 	// the composer by translation without resizing it, so neither window resize
 	// nor ResizeObserver fires. Track the layout values that shift the chat
@@ -496,12 +497,18 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginTop || "0")
 				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginBottom || "0")
 			: 0;
+		const composerContent = composer.closest<HTMLElement>(".inno-conversation-composer-content");
+		const overlayBeforeComposerHeight = composerContent
+			? Math.max(0, composerContent.getBoundingClientRect().height - composerHeight)
+			: 0;
 		const scroll = scrollRef.current;
 		if (scroll) {
 			// Attachments grow from the top of the composer. The center mask only
 			// accounts for half of that row, so add the other half to keep the
-			// conversation body moving up by the attachment's full height.
-			const nextBottomSpace = `${composerHeight / 2 + attachmentHeight / 2 + 12 + CONVERSATION_ACTION_ROW_RESERVE}px`;
+			// conversation body moving up by the attachment's full height. Status
+			// banners and the gap above the composer are also overlaid, so reserve
+			// the whole area before the composer to keep the last message visible.
+			const nextBottomSpace = `${composerHeight / 2 + attachmentHeight / 2 + 12 + CONVERSATION_ACTION_ROW_RESERVE + overlayBeforeComposerHeight}px`;
 			if (scroll.style.getPropertyValue("--inno-conversation-scroll-bottom-space") !== nextBottomSpace) {
 				scroll.style.setProperty("--inno-conversation-scroll-bottom-space", nextBottomSpace);
 				if (shouldStickToBottomRef.current) scroll.scrollTop = scroll.scrollHeight;
@@ -545,16 +552,18 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		const composer = el.closest<HTMLElement>(".inno-composer");
 		if (!composer) return;
 		if (typeof ResizeObserver === "undefined") return;
-		// Observe the whole composer: attachment rows and smart bubbles can
-		// change its height without changing the textarea width.
+		// Observe the composer and its overlay lane: attachment rows, smart
+		// bubbles, and status banners can change the covered area independently.
 		const observer = new ResizeObserver(() => resizeInput());
 		observer.observe(composer);
+		const composerContent = composer.closest<HTMLElement>(".inno-conversation-composer-content");
+		if (composerContent) observer.observe(composerContent);
 		return () => observer.disconnect();
 	}, [isWelcome, resizeInput]);
 
 	useEffect(() => {
 		resizeInput();
-	}, [isWelcome, inlineImages, pasteBlocks, uploads, resizeInput]);
+	}, [isWelcome, inlineImages, pasteBlocks, uploads, hasConversationStatus, resizeInput]);
 
 	const isComposingRef = useRef(false);
 

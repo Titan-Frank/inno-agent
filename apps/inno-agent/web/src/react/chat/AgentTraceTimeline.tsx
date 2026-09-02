@@ -42,7 +42,7 @@ export interface AgentTraceTimelineProps {
 	fallbackText?: string;
 	/** Completed question cards to anchor after their ask_user_question row. */
 	answeredQuestionnaires?: AnsweredQuestionnaireView[];
-	/** Live question card anchored before the trace row that puts the turn into waiting state. */
+	/** Live question card anchored after the trace row that represents the tool call. */
 	pendingQuestion?: {
 		questionId: string;
 		card: ReactNode;
@@ -414,6 +414,19 @@ function TraceBody({ content }: { content: string }) {
 	);
 }
 
+function pendingQuestionTraceStep(questionId: string): ChatTraceStep {
+	return {
+		id: `tool:ask_user_question:${questionId}`,
+		kind: "tool",
+		status: "waiting",
+		title: "等待你的回答",
+		titleKey: "chat.trace.steps.waitingForAnswer",
+		toolCallId: questionId,
+		toolName: "ask_user_question",
+		questionId,
+	};
+}
+
 export function AgentTraceTimeline({
 	steps,
 	isSending = false,
@@ -519,11 +532,6 @@ export function AgentTraceTimeline({
 						: undefined;
 					return (
 						<Fragment key={rowId}>
-							{pendingQuestionIndex === index ? (
-								<div className="inno-trace-questionnaire">
-									{pendingQuestion!.card}
-								</div>
-							) : null}
 							<TraceRow
 								step={step}
 								now={now}
@@ -533,6 +541,11 @@ export function AgentTraceTimeline({
 								t={t}
 								onOpenSkill={onOpenSkill}
 							/>
+							{pendingQuestionIndex === index ? (
+								<div className="inno-trace-questionnaire">
+									{pendingQuestion!.card}
+								</div>
+							) : null}
 							{questionnaire ? (
 								<div className="inno-trace-questionnaire">
 									<AnsweredQuestionCard questionnaire={questionnaire.questionnaire} />
@@ -542,9 +555,20 @@ export function AgentTraceTimeline({
 					);
 				})}
 				{pendingQuestion && pendingQuestionIndex < 0 ? (
-					<div className="inno-trace-questionnaire">
-						{pendingQuestion.card}
-					</div>
+					<>
+						<TraceRow
+							step={pendingQuestionTraceStep(pendingQuestion.questionId)}
+							now={now}
+							isCurrentLiveStep
+							expanded={false}
+							onToggle={() => undefined}
+							t={t}
+							onOpenSkill={onOpenSkill}
+						/>
+						<div className="inno-trace-questionnaire">
+							{pendingQuestion.card}
+						</div>
+					</>
 				) : null}
 				{showFallbackText ? (
 					<div className="inno-trace-fallback-body">

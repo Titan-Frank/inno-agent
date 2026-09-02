@@ -91,7 +91,7 @@ describe("AgentTraceTimeline", () => {
 		expect(rows[1]!.getAttribute("aria-expanded")).toBe("false");
 	});
 
-	it("anchors a pending question card before its waiting trace row", () => {
+	it("anchors a pending question card after its waiting trace row", () => {
 		render(
 			<AgentTraceTimeline
 				showText
@@ -119,8 +119,28 @@ describe("AgentTraceTimeline", () => {
 			if (child.classList.contains("inno-trace-body")) return "body";
 			if (child.classList.contains("inno-trace-questionnaire")) return "question";
 			return "trace";
-		})).toEqual(["trace", "question", "trace"]);
+		})).toEqual(["trace", "trace", "question"]);
 		expect(screen.getByTestId("pending-question-card").textContent).toBe("问题卡片");
+	});
+
+	it("keeps a pending question below an ask row while the trace is still being prepared", () => {
+		render(
+			<AgentTraceTimeline
+				showText
+				steps={[{ ...thinking, text: "正在生成问题" }]}
+				pendingQuestion={{
+					questionId: "q2",
+					card: <div data-testid="pending-question-card">问题卡片</div>,
+				}}
+			/>,
+		);
+
+		const flow = document.querySelector(".inno-trace-flow");
+		expect(flow).not.toBeNull();
+		expect(flow!.querySelectorAll(".inno-trace-row")).toHaveLength(2);
+		expect(flow!.querySelectorAll(".inno-trace-row").item(1).textContent).toContain("等待你的回答");
+		expect(Array.from(flow!.children).map((child) => child.classList.contains("inno-trace-questionnaire") ? "question" : "trace"))
+			.toEqual(["trace", "trace", "question"]);
 	});
 
 	it("shimmers only the active thinking title and keeps completed text stable", () => {
