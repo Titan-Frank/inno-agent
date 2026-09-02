@@ -274,7 +274,15 @@ function updateToolArgs(
 		: argsDelta
 			? `${current.argsText ?? ""}${argsDelta}`
 			: current.argsText;
-	const parsedArgs = args !== undefined ? args : parseJson(argsText);
+	// Tool args are JSON objects, so a document can only be complete once the
+	// accumulated text ends with a closing brace. Gating the parse attempt on
+	// that cheap check avoids an O(n²) JSON.parse churn on every delta while
+	// large tool arguments (e.g. file writes) stream in.
+	const parsedArgs = args !== undefined
+		? args
+		: argsText?.trimEnd().endsWith("}")
+			? parseJson(argsText)
+			: undefined;
 	next[ensured.index] = {
 		...current,
 		...(argsText !== undefined ? { argsText } : {}),
