@@ -17,17 +17,17 @@ function renderCommand(content: string, onOpenSkill?: (skillName: string) => voi
 }
 
 describe("sent Agent command bubbles", () => {
-	it("uses the same sent bubble surface as file references", () => {
+	it("renders a user-side skill command bubble immediately after sending", () => {
 		const chip = renderCommand("/skill:backwards-design-unit-planner");
 
-		expect(chip).not.toBeNull();
-		expect(chip?.classList.contains("inno-smart-ref-word")).toBe(true);
-		expect(chip?.classList.contains("inno-smart-agent-surface")).toBe(true);
 		expect(chip?.textContent).toContain("backwards-design-unit-planner");
-		expect(chip?.textContent).not.toContain("/skill:");
-		expect(chip?.querySelector(".inno-smart-agent-mark")?.getAttribute("width")).toBe("11");
-		expect(chip?.getAttribute("title")).toBeNull();
-		expect(chip?.parentElement?.classList.contains("inno-smart-agent-ref-content")).toBe(true);
+	});
+
+	it("renders persisted expanded skill messages as the same compact bubble", () => {
+		const chip = renderCommand('<skill name="backwards-design-unit-planner" location="/tmp/SKILL.md">\nbody\n</skill>\n\n请帮我规划课程');
+
+		expect(chip?.textContent).toContain("backwards-design-unit-planner");
+		expect(document.querySelector(".inno-smart-agent-ref-args")?.textContent).toBe("请帮我规划课程");
 	});
 
 	it("keeps native command hints on non-skill bubbles", () => {
@@ -37,26 +37,53 @@ describe("sent Agent command bubbles", () => {
 		expect(chip?.getAttribute("title")).toBe("查找并回顾以前的对话");
 	});
 
-	it("opens the skill detail panel when its sent bubble is clicked", () => {
+	it("opens the skill detail panel from the assistant timeline row", () => {
 		let openedSkill = "";
-		const chip = renderCommand("/skill:backwards-design-unit-planner", (skillName) => { openedSkill = skillName; });
+		render(
+			<MessageBubble
+				message={{
+					role: "assistant",
+					content: "",
+					timestamp: Date.now(),
+					trace: [{
+						id: "skill:planner",
+						kind: "skill",
+						status: "completed",
+						title: "已载入技能 · backwards-design-unit-planner",
+						skillName: "backwards-design-unit-planner",
+						skillState: "expanded",
+					}],
+				}}
+				onOpenSkill={(skillName) => { openedSkill = skillName; }}
+			/>,
+		);
 
-		expect(chip?.tagName).toBe("BUTTON");
-		if (chip) fireEvent.click(chip);
+		fireEvent.click(document.querySelector<HTMLElement>(".inno-trace-row-toggle")!);
+		fireEvent.click(document.querySelector<HTMLElement>(".inno-trace-open-skill")!);
 		expect(openedSkill).toBe("backwards-design-unit-planner");
 	});
 
-	it("keeps the original thinking details surface", () => {
+	it("renders legacy thinking as a timeline row", () => {
 		render(
 			<MessageBubble
 				message={{ role: "assistant", content: "", thinking: "Planning", timestamp: Date.now() }}
 			/>,
 		);
 
-		const details = document.querySelector<HTMLElement>("details");
-		expect(details).not.toBeNull();
-		expect(details?.className).toBe("mb-2 min-w-0 max-w-full overflow-hidden rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1.5 text-xs text-[var(--inno-text-muted)]");
-		expect(details?.querySelector("summary")?.className).toContain("font-medium");
-		expect(details?.querySelector("summary")?.textContent).toContain("Thinking & tool calls");
+		const row = document.querySelector<HTMLElement>(".inno-trace-row");
+		expect(row).not.toBeNull();
+		expect(row?.textContent).toContain("思考");
+		expect(document.querySelector("details")).toBeNull();
+	});
+
+	it("can hide actions on an intermediate assistant fragment", () => {
+		render(
+			<MessageBubble
+				message={{ role: "assistant", content: "前一段", timestamp: Date.now() }}
+				showActions={false}
+			/>,
+		);
+
+		expect(document.querySelector(".inno-message-actions")).toBeNull();
 	});
 });

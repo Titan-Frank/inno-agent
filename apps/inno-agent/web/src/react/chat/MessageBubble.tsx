@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { X, AlertTriangle, FileCode2, History, BookmarkPlus, BookOpen, Check, Copy, Pencil, RotateCcw, TerminalSquare } from "lucide-react";
-import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord } from "../../types/chat.js";
+import type { AttachmentBinding, AttachmentRef, ChatMessage, ChatToolRecord, ChatTraceStep } from "../../types/chat.js";
 import { normalizeMarkdownMath } from "../../utils/markdown-math.js";
 import { splitContentByBindings } from "../../utils/attachment-render.js";
 import { answeredQuestionnaireFromTool, buildAnsweredQuestionnaireTimeline } from "../../utils/questionnaire.js";
@@ -13,9 +13,11 @@ import { MarkdownArtifact } from "../MarkdownArtifact.js";
 import { AnsweredQuestionCard } from "./AnsweredQuestionCard.js";
 import { FileName } from "../FileName.js";
 import { FileTypeIcon } from "../FileTypeIcon.js";
-import { collapseSkillMessage } from "./skill-message-collapse.js";
+import { skillMessageFromContent } from "./skill-message-collapse.js";
 import { parseAgentCommandMessage, type AgentCommandMessage } from "./agent-command-message.js";
 import { PopoverSurface } from "../ui/PopoverSurface.js";
+import { AgentTraceTimeline } from "./AgentTraceTimeline.js";
+import { finalizeTraceSteps, hasVisibleTraceSteps, traceStepsFromEvents, traceStepsFromLegacy, traceTerminalState } from "../../utils/chat-trace.js";
 
 // Pure, props-driven chat rendering components. This module must NOT import
 // stores or the api/ layer — apps/showcase reuses it to replay recorded
@@ -23,6 +25,49 @@ import { PopoverSurface } from "../ui/PopoverSurface.js";
 
 const LONG_ASSISTANT_CHARS = 6000;
 const LONG_ASSISTANT_LINES = 140;
+
+type RecordedMessageStreamSegment =
+	| { kind: "thinking"; text: string }
+	| { kind: "text"; text: string }
+	| { kind: "tool"; toolCallId: string; toolName: string; args: unknown; result?: unknown; isError?: boolean };
+
+function traceStepsFromRecordedStream(message: ChatMessage): ChatTraceStep[] | undefined {
+	const segments = (message as ChatMessage & { stream?: RecordedMessageStreamSegment[] }).stream;
+	if (!segments?.length) return undefined;
+	return segments.map((segment, index) => {
+		if (segment.kind === "thinking") {
+			return {
+				id: `recorded:thinking:${index}`,
+				kind: "thinking",
+				status: "completed",
+				title: "思考",
+				titleKey: "chat.trace.steps.thinking",
+				text: segment.text,
+			} satisfies ChatTraceStep;
+		}
+		if (segment.kind === "text") {
+			return {
+				id: `recorded:text:${index}`,
+				kind: "answer",
+				status: "completed",
+				title: "回复",
+				titleKey: "chat.trace.steps.reply",
+				text: segment.text,
+			} satisfies ChatTraceStep;
+		}
+		return {
+			id: `recorded:tool:${segment.toolCallId}:${index}`,
+			kind: "tool",
+			status: segment.isError ? "error" : "completed",
+			title: segment.toolName,
+			toolCallId: segment.toolCallId,
+			toolName: segment.toolName,
+			args: segment.args,
+			result: segment.result,
+			isError: segment.isError,
+		} satisfies ChatTraceStep;
+	});
+}
 
 const CHANNEL_BADGE_CLASS: Record<string, string> = {
 	cli: "bg-[var(--inno-surface-muted)] text-[var(--inno-text-muted)]",
@@ -440,7 +485,7 @@ export function ToolRecordDetails({ tool, className }: { tool: ChatToolRecord; c
 	);
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onOpenSkill, onEdit, showRetry, onRetry }: {
+export const MessageBubble = memo(function MessageBubble({ message, showChannel, resolveAttachmentUrl, onOpenAttachment, onOpenSkill, onEdit, showRetry, showActions = true, answeredQuestionnaires: suppliedQuestionnaires, onRetry }: {
 	message: ChatMessage;
 	showChannel?: boolean;
 	/** Optional URL resolver for attachment chips (workspace raw link). Kept as
@@ -454,19 +499,39 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	onEdit?: (message: ChatMessage) => void;
 	/** Show the retry action in this message's action row. */
 	showRetry?: boolean;
+	/** Hide actions for assistant fragments that are not the last message in a turn. */
+	showActions?: boolean;
+	/** Optional whole-turn questionnaire views when a trace represents several assistant records. */
+	answeredQuestionnaires?: AnsweredQuestionnaireView[];
 	onRetry?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 	const [copied, setCopied] = useState(false);
 	const copyResetTimerRef = useRef<number | null>(null);
-	const answeredQuestionnaires = (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
+	const answeredQuestionnaires = suppliedQuestionnaires ?? (message.tools ?? []).flatMap((tool): AnsweredQuestionnaireView[] => {
 		const questionnaire = answeredQuestionnaireFromTool(tool);
 		return questionnaire ? [{ tool, questionnaire }] : [];
 	});
 	const hasAnsweredQuestionnaire = answeredQuestionnaires.length > 0;
-	const answeredToolCallIds = new Set(answeredQuestionnaires.map((view) => view.tool.toolCallId));
-	const regularTools = (message.tools ?? []).filter((tool) => !answeredToolCallIds.has(tool.toolCallId));
+	const terminalState = useMemo(
+		() => traceTerminalState(message.traceEvents, message.stopReason, message.error),
+		[message.error, message.stopReason, message.traceEvents],
+	);
+	const traceSteps = useMemo(() => {
+		if (message.trace?.length) return message.trace;
+		if (message.traceEvents?.length) {
+			const steps = traceStepsFromEvents(message.traceEvents);
+			return terminalState?.status === "unknown" ? steps : finalizeTraceSteps(steps);
+		}
+		const recordedStream = traceStepsFromRecordedStream(message);
+		if (recordedStream?.length) return recordedStream;
+		return traceStepsFromLegacy(message.content, message.thinking, message.tools);
+	}, [message.content, message.thinking, message.tools, message.trace, message.traceEvents, terminalState]);
+	// When process records exist, the trace renderer owns the whole assistant
+	// flow so text stays at its original position among thinking/tool rows.
+	const hasTraceTimeline = hasVisibleTraceSteps(traceSteps.filter((step) => step.kind !== "progress" && step.kind !== "answer"));
+	const hasTraceError = traceSteps.some((step) => step.kind === "error");
 	const messageTime = formatMessageTime(message.timestamp);
 
 	useEffect(() => () => {
@@ -489,7 +554,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 	};
 
 	if (message.role === "user") {
-		const skillMessage = collapseSkillMessage(message.content);
+		const skillMessage = skillMessageFromContent(message.content);
 		const agentCommandMessage = skillMessage
 			? { command: `skill:${skillMessage.skillName}`, args: skillMessage.args }
 			: parseAgentCommandMessage(message.content);
@@ -588,33 +653,33 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.25, ease: "easeOut" }}
 		>
-			<div className={`inno-message inno-assistant-message group relative min-w-0 ${hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} overflow-visible px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
+			<div className={`inno-message inno-assistant-message group relative min-w-0 ${hasTraceTimeline ? "inno-trace-assistant-message" : hasAnsweredQuestionnaire ? "w-full max-w-[76%]" : "max-w-[78%]"} ${showActions ? "" : "inno-assistant-message--no-actions"} overflow-visible px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--inno-text)]`}>
 				{showChannel && message.channel ? (
 					<div className="mb-1"><ChannelBadge channel={message.channel} /></div>
 				) : null}
-				{message.thinking || regularTools.length ? (
-					<details className="mb-2 min-w-0 max-w-full overflow-hidden rounded-md border border-[var(--inno-border)] bg-[var(--inno-surface-muted)] px-2 py-1.5 text-xs text-[var(--inno-text-muted)]">
-						<summary className="cursor-pointer select-none break-words font-medium text-[var(--inno-text-muted)] [overflow-wrap:anywhere]">
-							Thinking & tool calls
-							{regularTools.length ? ` · ${regularTools.length}` : ""}
-						</summary>
-						{message.thinking ? <pre className="mt-2 max-h-44 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{message.thinking}</pre> : null}
-						{regularTools.length ? (
-							<div className="mt-2 grid min-w-0 max-w-full gap-1.5">
-								{regularTools.map((tool) => (
-									<ToolRecordDetails key={tool.toolCallId} tool={tool} className="min-w-0 max-w-full overflow-hidden rounded border border-[var(--inno-border)] bg-[var(--inno-surface)] px-2 py-1" />
-								))}
-							</div>
-						) : null}
-					</details>
-				) : null}
-				<AssistantTimelineContent content={message.content} questionnaires={answeredQuestionnaires} />
-				{message.error ? (
+				{hasTraceTimeline ? (
+					<div className="inno-trace-shell">
+						<AgentTraceTimeline
+							steps={traceSteps}
+							startedAt={message.traceStartedAt}
+							finishedAt={message.traceFinishedAt}
+							error={message.error}
+							terminalState={terminalState}
+							showText
+							fallbackText={message.content}
+							answeredQuestionnaires={answeredQuestionnaires}
+							onOpenSkill={onOpenSkill}
+						/>
+					</div>
+				) : (
+					<AssistantTimelineContent content={message.content} questionnaires={answeredQuestionnaires} />
+				)}
+				{message.error && !hasTraceError ? (
 					<div className={message.content.trim() ? "mt-2" : ""}>
 						<ErrorBlock error={message.error} />
 					</div>
 				) : null}
-				<div className="inno-message-actions">
+				{showActions ? <div className="inno-message-actions">
 					<button
 						type="button"
 						className="inno-message-action"
@@ -638,7 +703,7 @@ export const MessageBubble = memo(function MessageBubble({ message, showChannel,
 					{messageTime ? (
 						<time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time>
 					) : null}
-				</div>
+				</div> : null}
 			</div>
 		</motion.div>
 	);

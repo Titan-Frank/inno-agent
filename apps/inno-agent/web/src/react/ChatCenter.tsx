@@ -61,7 +61,7 @@ import type { EngineAttachmentItem } from "./chat/smart-input/engine.js";
 import type { KwRange } from "./chat/smart-input/rules.js";
 import { useSmartInput } from "./chat/smart-input/useSmartInput.js";
 import { SmartInputOverlay, type SmartPanelState } from "./chat/smart-input/SmartInputOverlay.js";
-import { collapseSkillMessage } from "./chat/skill-message-collapse.js";
+import { skillMessageFromContent } from "./chat/skill-message-collapse.js";
 import { parseAgentCommandMessage } from "./chat/agent-command-message.js";
 
 type PresetRefreshStatus = "success" | "error";
@@ -99,6 +99,8 @@ function rememberWsChoice(mode: WsMode, existingId: string): void {
 
 const SMART_FILE_PREVIEW_WIDTH = 560;
 const SMART_HOVER_OPEN_MS = 250;
+// Keep the copy/time action row below the last message above the composer mask.
+const CONVERSATION_ACTION_ROW_RESERVE = 40;
 
 function pendingUploadsFromRefs(refs: AttachmentRef[]): PendingUpload[] {
 	const seen = new Set<string>();
@@ -124,6 +126,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const shouldStickToBottomRef = useRef(true);
 	const userScrollGestureRef = useRef(false);
+	const [showLatestButton, setShowLatestButton] = useState(false);
 	const pasteBlockIdRef = useRef(0);
 	const [uploads, setUploads] = useState<PendingUpload[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
@@ -231,9 +234,6 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		messages: chatStore.messages,
 		isSending: chatStore.isSending,
 		isLoadingHistory: chatStore.isLoadingHistory,
-		streamingActivity: chatStore.streamingActivity,
-		streamingActivityDetail: chatStore.streamingActivityDetail,
-		streamingError: chatStore.streamingError,
 		canReconnect: chatStore.canReconnect,
 		activeTools: chatStore.activeTools,
 		completedTools: chatStore.completedTools,
@@ -443,6 +443,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 
 	useEffect(() => {
 		shouldStickToBottomRef.current = true;
+		setShowLatestButton(false);
 		editTargetRef.current = null;
 	}, [sessions.currentSessionId]);
 
@@ -460,35 +461,57 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		if (distanceFromBottom < 96) {
 			shouldStickToBottomRef.current = true;
 			userScrollGestureRef.current = false;
+			setShowLatestButton(false);
 			return;
 		}
 		if (!userScrollGestureRef.current) return;
 		userScrollGestureRef.current = false;
 		shouldStickToBottomRef.current = false;
+		setShowLatestButton(true);
 	}, []);
 	const pauseAutoScroll = useCallback(() => {
 		shouldStickToBottomRef.current = false;
+		setShowLatestButton(true);
+	}, []);
+	const jumpToLatest = useCallback(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		shouldStickToBottomRef.current = true;
+		userScrollGestureRef.current = false;
+		setShowLatestButton(false);
+		el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
 	}, []);
 
 	const resizeInput = useCallback(() => {
 		const el = inputRef.current;
 		if (!el) return;
 		const minHeight = resizeComposerTextarea(el);
-		const welcomeLayout = welcomeLayoutRef.current;
-		if (!welcomeLayout) return;
 		const composer = el.closest<HTMLElement>(".inno-composer");
 		if (!composer) return;
 		const textareaHeight = el.getBoundingClientRect().height;
 		const composerHeight = composer.getBoundingClientRect().height;
-		// The attachment row is an independent, variable-height block above the
-		// textarea. Exclude it from the baseline so adding/removing a file cannot
-		// leave a stale welcome-page offset behind when a bubble is rebuilt.
 		const attachmentRow = composer.querySelector<HTMLElement>(".inno-composer-attachments");
 		const attachmentHeight = attachmentRow
 			? attachmentRow.getBoundingClientRect().height
 				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginTop || "0")
 				+ Number.parseFloat(window.getComputedStyle(attachmentRow).marginBottom || "0")
 			: 0;
+		const scroll = scrollRef.current;
+		if (scroll) {
+			// Attachments grow from the top of the composer. The center mask only
+			// accounts for half of that row, so add the other half to keep the
+			// conversation body moving up by the attachment's full height.
+			const nextBottomSpace = `${composerHeight / 2 + attachmentHeight / 2 + 12 + CONVERSATION_ACTION_ROW_RESERVE}px`;
+			if (scroll.style.getPropertyValue("--inno-conversation-scroll-bottom-space") !== nextBottomSpace) {
+				scroll.style.setProperty("--inno-conversation-scroll-bottom-space", nextBottomSpace);
+				if (shouldStickToBottomRef.current) scroll.scrollTop = scroll.scrollHeight;
+			}
+		}
+		const welcomeLayout = welcomeLayoutRef.current;
+		if (!welcomeLayout) return;
+		// The attachment row is an independent, variable-height block above the
+		// textarea. Exclude it from the baseline so adding/removing a file cannot
+		// leave a stale welcome-page offset behind when a bubble is rebuilt.
 		const baseComposerHeight = composerHeight - textareaHeight - attachmentHeight + minHeight;
 		const composerGrowth = Math.max(0, composerHeight - baseComposerHeight);
 		welcomeLayout.style.setProperty("--inno-welcome-composer-half-growth", `${composerGrowth / 2}px`);
@@ -530,8 +553,8 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	}, [isWelcome, resizeInput]);
 
 	useEffect(() => {
-		if (isWelcome) resizeInput();
-	}, [isWelcome, inlineImages, pasteBlocks, resizeInput]);
+		resizeInput();
+	}, [isWelcome, inlineImages, pasteBlocks, uploads, resizeInput]);
 
 	const isComposingRef = useRef(false);
 
@@ -1068,7 +1091,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 		const bindingFiles = attachments?.bindings.flatMap((binding) => binding.files) ?? [];
 		const hasAttachments = bindingFiles.length > 0 || Boolean(attachments?.loose.length);
 		if (!content && !hasAttachments) return;
-		const collapsedSkill = collapseSkillMessage(content);
+		const collapsedSkill = skillMessageFromContent(content);
 		const command = collapsedSkill
 			? { command: `skill:${collapsedSkill.skillName}`, args: collapsedSkill.args }
 			: parseAgentCommandMessage(content);
@@ -1434,7 +1457,7 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 	) : null;
 
 	const questionHint = chat.pendingQuestion ? <QuestionHint scrollRef={scrollRef} /> : null;
-	const busyBlocker = <BusyBlocker busyBlocker={sessions.busyBlocker} />;
+	const busyBlocker = sessions.busyBlocker ? <BusyBlocker busyBlocker={sessions.busyBlocker} /> : null;
 	const smartToastNode = smartToast ? (
 		<div className={`inno-smart-toast ${smartToast.error ? "is-error" : ""}`} role="status">{smartToast.message}</div>
 	) : null;
@@ -1508,6 +1531,8 @@ export function ChatCenter({ onOpenPresetPanels, onOpenRightPanel, onPreviewFile
 			onTouchStart={markUserScrollGesture}
 			onPointerDown={handleScrollerPointerDown}
 			onPauseAutoScroll={pauseAutoScroll}
+			showLatestButton={showLatestButton}
+			onJumpToLatest={jumpToLatest}
 			questionHint={questionHint}
 			busyBlocker={busyBlocker}
 			smartToast={smartToastNode}
